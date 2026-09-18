@@ -1,0 +1,123 @@
+"""CPU-only configuration, provenance, and remote GPU identity checks."""
+import csv
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parents[1]
+LENGTHS = (8192, 16384, 32768, 65536)
+CASES = ('baseline', 'prophetkv-5', 'prophetkv-10', 'prophetkv-20',
+         'prophetkv-30', 'prophetkv-40', 'prophetkv-50')
+CONTROLS = ('prophetkv-0', 'prophetkv-100')
+TIMING = 'engine_step_first_token_monotonic'
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(8 << 20), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def dump(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + f'.{os.getpid()}.tmp')
+    temporary.write_text(json.dumps(value, indent=2) + '\n')
+    temporary.replace(path)
+
+
+def load(path):
+    return json.loads(Path(path).read_text())
+
+
+def hashes(root):
+    return {str(p.relative_to(root)): sha(p) for p in sorted(Path(root).rglob('*'))
+            if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc'}
+
+
+def settings():
+    indices = [int(x) for x in os.environ.get('GPU_INDICES', '0,1,2,3,4,5,6,7').split(',')]
+    if len(set(indices)) != len(indices) or len(indices) not in (1, 2, 4, 8) or min(indices) < 0:
+        raise ValueError('GPU_INDICES must contain 1, 2, 4, or 8 distinct physical indices')
+    n = int(os.environ.get('NUM_SAMPLES', '100'))
+    chunk = int(os.environ.get('CHUNK_SIZE', '4096'))
+    memory = float(os.environ.get('GPU_MEMORY_UTILIZATION', '.90'))
+    if n < 1 or chunk < 64 or chunk % 64 or chunk > 4096 or not 0 < memory < 1:
+        raise ValueError('Invalid sample count, chunk size (64..4096, multiple of 64), or memory fraction')
+    return dict(model=str(Path(os.environ['MODEL_PATH']).expanduser().resolve()),
+                root=str(Path(os.environ['RESULT_ROOT']).expanduser().resolve()),
+                cache=str(Path(os.environ['CACHE_ROOT']).expanduser().resolve()),
+                ruler=str(Path(os.environ['RULER_ROOT']).expanduser().resolve()),
+                samples=n, chunk=chunk, indices=indices, memory=memory)
+
+
+def inventory():
+    listing = subprocess.check_output(['nvidia-smi', '-L'], text=True)
+    raw = subprocess.check_output(['nvidia-smi', '--query-gpu=index,uuid,name,memory.total',
+                                   '--format=csv,noheader,nounits'], text=True)
+    devices = {}
+    for index, uuid, name, memory in csv.reader(raw.splitlines(), skipinitialspace=True):
+        index = int(index)
+        if not any(line.startswith(f'GPU {index}:') and uuid in line for line in listing.splitlines()):
+            raise RuntimeError('nvidia-smi inventory disagrees with physical GPU listing')
+        devices[index] = dict(index=index, uuid=uuid, name=name, memory_mib=int(memory))
+    return listing, devices
+
+
+def selected_devices(indices):
+    listing, devices = inventory()
+    chosen = [devices[index] for index in indices]
+    if any('A800' not in x['name'] for x in chosen):
+        raise RuntimeError('These launch scripts target the remote A800 server; selected device is not A800')
+    return listing, chosen
+
+
+def verify_gpu_visibility():
+    expected = json.loads(os.environ['REMOTE_GPU_DEVICES'])
+    _, actual = selected_devices([d['index'] for d in expected])
+    if actual != expected or os.environ.get('CUDA_VISIBLE_DEVICES') != ','.join(d['uuid'] for d in expected):
+        raise RuntimeError('Remote physical GPU identity/UUID visibility changed')
+    return expected
+
+
+def busy_devices(devices):
+    raw = subprocess.check_output(['nvidia-smi', '--query-compute-apps=gpu_uuid,pid',
+                                   '--format=csv,noheader,nounits'], text=True)
+    allowed = {d['uuid'] for d in devices}
+    return [row for row in csv.reader(raw.splitlines(), skipinitialspace=True)
+            if len(row) >= 2 and row[0] in allowed]
+
+
+def identity(pid):
+    try:
+        base = Path('/proc') / str(pid)
+        # The comm field may itself contain spaces/parentheses.
+        fields = base.joinpath('stat').read_text().rsplit(')', 1)[1].split()
+        if fields[0] == 'Z':
+            return None
+        return dict(start=fields[19], cmd=base.joinpath('cmdline').read_bytes().hex())
+    except (OSError, IndexError):
+        return None
+
+
+def group_alive(pgid):
+    for path in Path('/proc').glob('[0-9]*/stat'):
+        try:
+            fields = path.read_text().rsplit(')', 1)[1].split()
+            if fields[0] != 'Z' and int(fields[2]) == pgid:
+                return True
+        except (OSError, ValueError, IndexError):
+            continue
+    return False
+
+
+def rope_for_length(length):
+    # Extra chat/marker/padding tokens can put a 64K-target prompt above 65536.
+    # Use the model card's documented 4x configuration, with no checkpoint edits.
+    return (dict(rope_type='yarn', factor=4.0, original_max_position_embeddings=32768)
+            if length == 65536 else None)

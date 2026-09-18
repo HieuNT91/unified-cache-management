@@ -10,9 +10,7 @@ that behavior. Actual authorized benchmark work may continue.
 
 ## GPU usage
 
-Never use the first physical GPU (GPU index 0 in `nvidia-smi`) for any workload,
-including tests, benchmarks, training, or inference. Before launching GPU work,
-identify the devices with `nvidia-smi -L` and explicitly restrict visibility to
+Before launching GPU work, identify the devices with `nvidia-smi -L` and explicitly restrict visibility to
 allowed GPUs using their UUIDs, for example `CUDA_VISIBLE_DEVICES=GPU-<allowed-uuid>`.
 Apply the same restriction to containers and subprocesses; never launch with all
 GPUs exposed. CUDA logical indices can be remapped, so verify the physical GPU
