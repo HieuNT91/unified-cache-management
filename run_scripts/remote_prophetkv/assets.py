@@ -1,5 +1,6 @@
 """Optional CPU-only RULER corpus setup; never downloads models or packages."""
 import os
+import json
 from pathlib import Path
 import runpy
 import shutil
@@ -42,6 +43,34 @@ def main():
                 shutil.copy2(Path(temporary) / 'PaulGrahamEssays.json', target)
             finally:
                 os.chdir(previous)
+    sources = {
+        'squad.json': ['https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v2.0.json'],
+        'hotpotqa.json': [
+            'http://curtis.ml.cmu.edu/datasets/hotpot/hotpot_dev_distractor_v1.json',
+            'https://huggingface.co/datasets/namlh2004/hotpotqa/resolve/7e54db4656209750ff487f6fdf8e39a66dba136b/hotpot_dev_distractor_v1.json'],
+    }
+    for name, urls in sources.items():
+        destination = directory / name
+        if destination.exists():
+            continue
+        error = None
+        for url in urls:
+            try:
+                with fetch(url) as response:
+                    data = response.read()
+                parsed = json.loads(data)
+                if name == 'squad.json':
+                    assert parsed['data']
+                else:
+                    assert isinstance(parsed, list) and parsed and 'question' in parsed[0]
+                temporary = destination.with_suffix('.json.tmp')
+                temporary.write_bytes(data)
+                temporary.replace(destination)
+                break
+            except Exception as exc:
+                error = exc
+        else:
+            raise RuntimeError(f'Unable to prepare {name}: {error}')
     import nltk
     try:
         nltk.sent_tokenize('Check sentence tokenizer.')

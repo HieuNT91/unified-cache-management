@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import subprocess
+import runpy
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -16,11 +18,88 @@ from common import dump, load, sha
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_four_job_partition_has_no_missing_or_duplicate_units(self):
+        units = common.scope_for_job('all')
+        self.assertEqual(len(units), 16)
+        self.assertEqual(len(set(units)), 16)
+        self.assertEqual({task for length, task in units if length == 65536}, set(common.TASKS))
+        self.assertEqual({(length, task) for length, task in units if length != 65536},
+                         {(n, 'niah_multivalue') for n in (8192, 16384, 32768)})
+        self.assertTrue(all(len(scope) == 4 for scope in common.JOBS.values()))
+
+    def test_job_shell_commands_assign_disjoint_pairs_and_paths(self):
+        scripts = Path(__file__).resolve().parents[1]
+        roots, caches, devices = set(), set(), set()
+        with tempfile.TemporaryDirectory(prefix='remote jobs ') as temporary:
+            env = os.environ.copy()
+            env.update(PYTHON_BIN=sys.executable, MODEL_PATH='/model with spaces',
+                       RESULT_ROOT=temporary + '/results', CACHE_ROOT=temporary + '/cache', NUM_SAMPLES='100')
+            for job in range(4):
+                plan = json.loads(subprocess.check_output(['bash', str(scripts / f'job_{job}.sh'), 'plan'], env=env))
+                cfg = plan['settings']
+                self.assertEqual(plan['tensor_parallel_size'], 2)
+                self.assertEqual(plan['requests'], 2800)
+                self.assertEqual(cfg['indices'], [job * 2, job * 2 + 1])
+                self.assertEqual(cfg['model'], '/model with spaces')
+                self.assertFalse(devices.intersection(cfg['indices']))
+                devices.update(cfg['indices'])
+                roots.add(cfg['root'])
+                caches.add(cfg['cache'])
+            self.assertEqual(len(roots), 4)
+            self.assertEqual(len(caches), 4)
+            self.assertEqual(devices, set(range(8)))
+            self.assertEqual(list(Path(temporary).iterdir()), [])  # plan is read-only
+
+    def test_exactly_two_gpus_required(self):
+        for value in ('0', '0,0', '0,1,2,3', '0,1,2,3,4,5,6,7'):
+            with patch.dict(os.environ, {'GPU_INDICES': value}):
+                with self.assertRaisesRegex(ValueError, 'exactly two'):
+                    common.settings()
+
+    def test_all_official_task_generators_and_query_spans(self):
+        import yaml
+        ruler = common.REPO / 'benchmarks/vendor/RULER'
+        definitions = yaml.safe_load((ruler / 'scripts/synthetic.yaml').read_text())
+        constants = runpy.run_path(str(ruler / 'scripts/data/synthetic/constants.py'))['TASKS']
+        cfg = dict(ruler=str(ruler), model='/model with spaces', samples=100)
+        for task in common.TASKS:
+            with self.subTest(task=task):
+                source = Path('/results') / '65536' / task / 'validation.jsonl'
+                cmd = suite.generator_command(cfg, 65536, task, source, definitions, constants)
+                self.assertTrue(Path(cmd[1]).is_file())
+                self.assertEqual(cmd[cmd.index('--tokens_to_generate') + 1], '128')
+                self.assertEqual(cmd[cmd.index('--num_samples') + 1], '100')
+                self.assertEqual(cmd[cmd.index('--save_name') + 1], task)
+                for key, value in definitions[task]['args'].items():
+                    self.assertEqual(cmd[cmd.index('--' + key) + 1], str(value))
+                base = constants[definitions[task]['task']]
+                content = base['template'].format(context='haystack', query='my needle', type_needle_v='numbers')
+                # NIAH generators place the answer prefix in input; others save it separately.
+                if task.startswith('niah_'):
+                    content += base['answer_prefix'].format(query='my needle', type_needle_v='numbers')
+                begin, question = suite.query_span(content, task)
+                self.assertEqual(content[begin:begin + len(question)], question)
+                self.assertNotIn('haystack', question)
+                self.assertNotIn(' The special magic', question)
+                if task == 'fwe':
+                    self.assertTrue(question.startswith('What are the three'))
+                # Few-shot examples must not displace the final query.
+                prefix = '\nQuestion: example\nWhat example?\n'
+                b2, q2 = suite.query_span(prefix + content, task)
+                self.assertEqual(q2, question)
+                self.assertEqual(b2, begin + len(prefix))
+
+    def test_official_qa_scoring_accepts_any_reference(self):
+        from cacheblend_ruler import score_prediction
+        self.assertEqual(score_prediction('qa_1', 'The answer is Paris.', ['Paris', 'City of Paris']), 1)
+        self.assertEqual(score_prediction('qa_2', 'The answer is Paris.', ['Paris', 'City of Paris']), 1)
+        self.assertEqual(score_prediction('niah_multivalue', '12\x0013', ['12', '13', '14', '15']), .5)
+
     def test_requested_scope_and_rope(self):
         self.assertEqual(common.LENGTHS, (8192, 16384, 32768, 65536))
         self.assertEqual(common.CASES, ('baseline', 'prophetkv-5', 'prophetkv-10',
                          'prophetkv-20', 'prophetkv-30', 'prophetkv-40', 'prophetkv-50'))
-        self.assertEqual(100 * len(common.LENGTHS) * len(common.CASES), 2800)
+        self.assertEqual(100 * len(common.scope_for_job('all')) * len(common.CASES), 11200)
         self.assertIsNone(common.rope_for_length(32768))
         self.assertEqual(common.rope_for_length(65536)['factor'], 4)
 
@@ -28,14 +107,14 @@ class ProtocolTests(unittest.TestCase):
         import worker
         sample = dict(tokens=66048, context_target=65536, token_ids=[7] * 128,
                       boundaries=[0, 64, 128])
-        p = dict(model='/model', tensor_parallel_size=8, gpu_memory_utilization=.90,
+        p = dict(model='/model', tensor_parallel_size=2, gpu_memory_utilization=.90,
                  rope_scaling_64k=common.rope_for_length(65536))
         modules = {'vllm': SimpleNamespace(LLM=lambda **kwargs: kwargs),
                    'vllm.config': SimpleNamespace(KVTransferConfig=lambda **kwargs: kwargs)}
         with patch.dict(sys.modules, modules):
             for case in common.CASES:
                 cfg = worker.build(SimpleNamespace(case=case, cache_dir=Path('/cache'), smoke=False), sample, p)
-                self.assertEqual(cfg['tensor_parallel_size'], 8)
+                self.assertEqual(cfg['tensor_parallel_size'], 2)
                 self.assertFalse(cfg['enable_prefix_caching'])
                 self.assertEqual(cfg['rope_scaling'], p['rope_scaling_64k'])
                 self.assertGreaterEqual(cfg['max_model_len'], sample['tokens'] + 128)
@@ -164,7 +243,7 @@ class ValidationTests(unittest.TestCase):
         ids = [8] * 63 + [0] + [9] * 63 + [0] + [10] * 256
         self.sample = dict(id='sample', dataset='ruler', label='niah_multivalue', token_ids=ids,
                            prompt_sha256=prompt_digest(ids), boundaries=[0, 64, 128, 384], tokens=len(ids),
-                           fresh_suffix_tokens=256, query=dict(positions=[370]), source_metadata=dict(references=['123']))
+                           fresh_suffix_tokens=256, context_target=8192, query=dict(positions=[370]), source_metadata=dict(references=['123']))
         self.input_path = self.root / 'input.json'
         dump(self.input_path, self.sample)
         self.meta = self.sample | dict(input_path=str(self.input_path), input_sha256=sha(self.input_path))
@@ -177,7 +256,7 @@ class ValidationTests(unittest.TestCase):
         layers = [dict(kind='layer_counts', layer=f'model.layers.{i}.self_attn.attn',
                        projection_tokens=288, attention_tokens=288, ffn_tokens=288) for i in range(2)]
         self.diag = [w | dict(diagnostics=copy.deepcopy([selection, *layers])) for w in self.imports]
-        self.record = dict(sample_id='sample', case='prophetkv-50', input_sha256=sha(self.input_path),
+        self.record = dict(sample_id='sample', case='prophetkv-50', label='niah_multivalue', context_target=8192, input_sha256=sha(self.input_path),
                            prompt_sha256=self.sample['prompt_sha256'], protocol_sha256=sha(self.root / 'protocol.json'),
                            prompt_tokens=384, max_output_tokens=128, smoke=False, timing_source=common.TIMING,
                            cache_unchanged=True, online_mask_reused=False, gpu_devices=self.devices,
@@ -230,12 +309,12 @@ class ValidationTests(unittest.TestCase):
 
     def test_partial_report_uses_paired_mean_speedup(self):
         import csv
-        p = self.p | dict(samples=[dict(id='a', context_target=8192), dict(id='b', context_target=8192)],
-                         measured_requests=14, samples_per_length=2)
+        p = self.p | dict(samples=[dict(id='a', context_target=8192, label='niah_multivalue'), dict(id='b', context_target=8192, label='niah_multivalue')],
+                         measured_requests=14, samples_per_task_length=2, scope=[dict(length=8192, task='niah_multivalue')])
         for name, baseline, method in [('a', 2., 1.), ('b', 8., 2.)]:
             for case, ttft in [('baseline', baseline), ('prophetkv-50', method)]:
                 dump(self.root / 'records' / name / f'{case}.json', dict(sample_id=name, case=case,
-                     context_target=8192, ttft_seconds=ttft, generation_seconds=ttft+1, prompt_tokens=8000,
+                     context_target=8192, label='niah_multivalue', ttft_seconds=ttft, generation_seconds=ttft+1, prompt_tokens=8000,
                      output_tokens=128, score=.5, finish_reason='length'))
         with patch('suite.valid', side_effect=lambda root, p, meta, case, path: path.exists()):
             suite.report(self.root, p)

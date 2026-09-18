@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 
-from common import (HERE, REPO, LENGTHS, CASES, CONTROLS, TIMING, sha, dump,
+from common import (HERE, REPO, LENGTHS, TASKS, JOBS, CASES, CONTROLS, TIMING, sha, dump,
                     load, hashes, settings, selected_devices, busy_devices,
                     identity, group_alive, rope_for_length)
 from cacheblend_ruler import cacheblend_prompt, prompt_digest
@@ -80,8 +80,13 @@ def preflight(cfg):
     if 'ucm' not in qwen.lower() or 'ucm' not in runner.lower():
         raise RuntimeError('vLLM is missing the UCM/Qwen3 hooks; an unpatched pip vLLM is insufficient')
     ruler = Path(cfg['ruler'])
-    for name in ['scripts/data/synthetic/niah.py', 'scripts/data/synthetic/constants.py',
-                 'scripts/data/synthetic/json/PaulGrahamEssays.json']:
+    required = ['scripts/synthetic.yaml', 'scripts/data/synthetic/constants.py',
+                'scripts/data/synthetic/json/PaulGrahamEssays.json']
+    tasks = {unit['task'] for unit in cfg['scope']}
+    if 'qa_1' in tasks: required.append('scripts/data/synthetic/json/squad.json')
+    if 'qa_2' in tasks: required.append('scripts/data/synthetic/json/hotpotqa.json')
+    if 'cwe' in tasks: required.append('scripts/data/synthetic/json/english_words.json')
+    for name in required:
         if not (ruler / name).is_file():
             raise ValueError(f'Missing RULER asset: {ruler / name}. See run_scripts/README.md')
     from transformers import AutoTokenizer
@@ -97,19 +102,52 @@ def preflight(cfg):
     import nltk
     import wonderwords  # noqa: F401: fail before a lengthy preparation
     nltk.sent_tokenize('This is the RULER tokenizer check.')
+    import yaml
+    definitions = yaml.safe_load((ruler / 'scripts/synthetic.yaml').read_text())
+    for task in tasks:
+        if not (ruler / 'scripts/data/synthetic' / (definitions[task]['task'] + '.py')).is_file():
+            raise ValueError(f'Missing RULER generator for {task}')
     listing, devices = selected_devices(cfg['indices'])
+    # Lower bound only; eager activations/allocator overhead need further space.
+    max_target = max(unit['length'] for unit in cfg['scope'])
+    weight_bytes = sum(path.stat().st_size for path in weights) / len(devices)
+    kv_bytes = max_target * 64 * 8 * 128 * 4 / len(devices)
+    if any((weight_bytes + kv_bytes) > d['memory_mib'] * 2**20 * cfg['memory'] for d in devices):
+        raise RuntimeError('TP=2 weights plus KV exceed the configured memory budget; 64K BF16 needs A800 80GB-class capacity')
     print(listing, end='', flush=True)
     print(json.dumps(dict(runtime=runtime, gpu_devices=devices,
-                          tensor_parallel_size=len(devices), measured_requests=4 * cfg['samples'] * 7), indent=2), flush=True)
+                          tensor_parallel_size=len(devices), measured_requests=len(cfg['scope']) * cfg['samples'] * len(CASES)), indent=2), flush=True)
     return runtime, ucm, vllm, devices, tokenizer
 
 
-def encode(tokenizer, row, cfg, length, ordinal):
+def query_span(content, task):
+    if task.startswith('niah_'):
+        begin = content.rfind('\nWhat ') + 1
+        if begin == 0:
+            raise ValueError('RULER NIAH question not found')
+        question = content[begin:].split(' The special magic', 1)[0]
+    else:
+        marker = '\nQuestion:'
+        start = content.rfind(marker)
+        if start < 0:
+            raise ValueError(f'RULER question not found for {task}')
+        begin = start + len(marker)
+        while begin < len(content) and content[begin].isspace():
+            begin += 1
+        question = content[begin:]
+        # fwe includes output instructions immediately before its actual question.
+        if task == 'fwe':
+            skip = question.index('What are the three most frequently appeared')
+            begin += skip
+            question = question[skip:]
+    if not question.strip():
+        raise ValueError('Empty RULER question')
+    return begin, question
+
+
+def encode(tokenizer, row, cfg, length, ordinal, task='niah_multivalue'):
     content = row['input']
-    begin = content.rfind('\nWhat ') + 1
-    if begin == 0:
-        raise ValueError('RULER NIAH question not found')
-    question = content[begin:].split(' The special magic', 1)[0]
+    begin, question = query_span(content, task)
     text = tokenizer.apply_chat_template([dict(role='user', content=content)], tokenize=False,
                                         add_generation_prompt=True, enable_thinking=False)
     text += row.get('answer_prefix', '')
@@ -128,13 +166,27 @@ def encode(tokenizer, row, cfg, length, ordinal):
     boundaries.append(len(tokens))
     if len(chunks) < 2 or tokens[-suffix:] != ids[-suffix:]:
         raise ValueError('Expected at least two intact context chunks and an unchanged suffix')
-    return dict(id=f'niah_multivalue-{length}-{ordinal:04d}', dataset='ruler', label='niah_multivalue',
+    return dict(id=f'{task}-{length}-{ordinal:04d}', dataset='ruler', label=task,
                 context_target=length, source_row=ordinal, source_index=row.get('index'),
                 chunk_size=cfg['chunk'], original_tokens=len(ids), tokens=len(tokens),
                 token_ids=tokens, boundaries=boundaries, fresh_suffix_tokens=suffix,
                 prompt_sha256=prompt_digest(tokens), thinking_enabled=False,
                 source_metadata=dict(references=row['outputs']),
                 query=dict(text=question, positions=[i + len(tokens) - len(ids) for i in query]))
+
+
+def generator_command(cfg, length, task, source, definitions, constants):
+    definition = definitions[task]
+    base = constants[definition['task']]
+    command = [sys.executable, str(Path(cfg['ruler']) / 'scripts/data/synthetic' / (definition['task'] + '.py')),
+               '--save_dir', str(source.parent.parent), '--save_name', task,
+               '--subset', 'validation', '--tokenizer_path', cfg['model'], '--tokenizer_type', 'hf',
+               '--max_seq_length', str(length), '--tokens_to_generate', '128',
+               '--num_samples', str(cfg['samples']), '--random_seed', '42',
+               '--template', base['template'] + base.get('answer_prefix', '')]
+    for key, value in definition['args'].items():
+        command += ['--' + key, str(value)]
+    return command
 
 
 def prepare(cfg, root):
@@ -147,21 +199,17 @@ def prepare(cfg, root):
     samples = []
     datasets = {}
     ruler = Path(cfg['ruler'])
-    constants = runpy.run_path(str(ruler / 'scripts/data/synthetic/constants.py'))['TASKS']['niah']
-    template = constants['template'] + constants['answer_prefix']
-    for length in LENGTHS:
-        source = root / f'datasets/{length}/niah_multivalue/validation.jsonl'
+    constants = runpy.run_path(str(ruler / 'scripts/data/synthetic/constants.py'))['TASKS']
+    import yaml
+    definitions = yaml.safe_load((ruler / 'scripts/synthetic.yaml').read_text())
+    for unit in cfg['scope']:
+        length, task = unit['length'], unit['task']
+        source = root / f'datasets/{length}/{task}/validation.jsonl'
         if not source.exists():
-            command = [sys.executable, str(ruler / 'scripts/data/synthetic/niah.py'),
-                       '--save_dir', str(source.parent.parent), '--save_name', 'niah_multivalue',
-                       '--subset', 'validation', '--tokenizer_path', cfg['model'], '--tokenizer_type', 'hf',
-                       '--max_seq_length', str(length), '--tokens_to_generate', '128',
-                       '--num_samples', str(cfg['samples']), '--random_seed', '42', '--template', template,
-                       '--type_haystack', 'essay', '--type_needle_k', 'words', '--type_needle_v', 'numbers',
-                       '--num_needle_k', '1', '--num_needle_v', '4', '--num_needle_q', '1']
-            log_path = root / f'logs/prepare-{length}.log'
+            command = generator_command(cfg, length, task, source, definitions, constants)
+            log_path = root / f'logs/prepare-{length}-{task}.log'
             log_path.parent.mkdir(exist_ok=True)
-            print(f'Generating {length}: {log_path}', flush=True)
+            print(f'Generating {length}/{task}: {log_path}', flush=True)
             with log_path.open('w') as log:
                 subprocess.run(command, env=cpu_env(), cwd='/tmp', stdout=log, stderr=subprocess.STDOUT, check=True)
         rows = [json.loads(line) for line in source.read_text().splitlines() if line.strip()]
@@ -169,7 +217,7 @@ def prepare(cfg, root):
             raise ValueError(f'Expected {cfg["samples"]} rows in {source}, got {len(rows)}')
         datasets[str(source)] = sha(source)
         for ordinal, row in enumerate(rows):
-            sample = encode(tokenizer, row, cfg, length, ordinal)
+            sample = encode(tokenizer, row, cfg, length, ordinal, task)
             path = root / 'samples' / f'{sample["id"]}.json'
             sample['source_path'] = str(source)
             sample['source_metadata']['source_sha256'] = datasets[str(source)]
@@ -177,7 +225,7 @@ def prepare(cfg, root):
             load_sample(path)
             samples.append({k: v for k, v in sample.items() if k != 'token_ids'} |
                            dict(input_path=str(path), input_sha256=sha(path)))
-        print(f'Frozen {length}: {len(rows)} prompts', flush=True)
+        print(f'Frozen {length}/{task}: {len(rows)} prompts', flush=True)
     private = root / 'private_ucm/ucm'
     if private.exists():
         shutil.rmtree(private)
@@ -202,10 +250,13 @@ def prepare(cfg, root):
                     model=cfg['model'], model_hashes=model_hashes, runtime_versions=runtime,
                     runtime_hashes=runtime_hashes, source_hashes=hashes(HERE),
                     private_ucm_hashes=hashes(private), ruler_hashes=hashes(ruler / 'scripts/data'),
+                    ruler_task_definitions=definitions,
+                    ruler_task_config_sha256=sha(ruler / 'scripts/synthetic.yaml'),
                     gpu_devices=devices, tensor_parallel_size=len(devices), num_layers=64,
                     gpu_memory_utilization=cfg['memory'], max_output_tokens=128, thinking_enabled=False,
                     decoding=dict(temperature=0, top_p=1, seed=0), dtype='bfloat16', eager=True,
-                    cases=list(CASES), lengths=list(LENGTHS), samples_per_length=cfg['samples'],
+                    cases=list(CASES), lengths=sorted({u['length'] for u in cfg['scope']}),
+                    scope=cfg['scope'], samples_per_task_length=cfg['samples'], dataset_output_reserve=128,
                     samples=samples, dataset_hashes=datasets, measured_requests=len(samples) * len(CASES),
                     rope_scaling_64k=rope_for_length(65536), rope_scaling_other_lengths=None,
                     prompt_layout='native non-thinking chat, numbered block-padded chunks, fresh query suffix >=256',
@@ -250,7 +301,8 @@ def validate(root, p, meta, case, path, smoke=False):
         raise ValueError(f'Worker failed: {path.with_suffix(".log")}')
     expected = dict(sample_id=meta['id'], case=case, input_sha256=meta['input_sha256'],
                     prompt_sha256=meta['prompt_sha256'], protocol_sha256=sha(root / 'protocol.json'),
-                    prompt_tokens=meta['tokens'], max_output_tokens=16 if smoke else 128, smoke=smoke,
+                    prompt_tokens=meta['tokens'], label=meta['label'], context_target=meta['context_target'],
+                    max_output_tokens=16 if smoke else 128, smoke=smoke,
                     timing_source=TIMING, cache_unchanged=True, online_mask_reused=False,
                     gpu_devices=p['gpu_devices'], tensor_parallel_size=p['tensor_parallel_size'])
     if any(r.get(k) != v for k, v in expected.items()):
@@ -343,11 +395,13 @@ def valid(root, p, meta, case, path, smoke=False):
 
 
 def progress(root, p, state, **extra):
-    counts = {str(length): {case: sum((root / 'records' / m['id'] / f'{case}.validated.json').exists()
-                                   for m in p['samples'] if m['context_target'] == length)
-                          for case in CASES} for length in LENGTHS}
+    counts = {f"{u['length']}/{u['task']}": {
+        case: sum((root / 'records' / m['id'] / f'{case}.validated.json').exists()
+                  for m in p['samples'] if m['context_target'] == u['length'] and m['label'] == u['task'])
+        for case in CASES} for u in p['scope']}
     dump(root / 'progress.json', dict(state=state, validated=sum(sum(c.values()) for c in counts.values()),
-         target=p['measured_requests'], by_length=counts, updated_at=time.time(), **extra))
+         target=p['measured_requests'], by_task_length=counts, updated_at=time.time(), **extra))
+
 
 
 def terminate(child):
@@ -465,8 +519,8 @@ def launch(cfg, root, p, meta, case, path, smoke=False):
         accept(root, p, meta, case, path, smoke)
 
 
-def valid_gate(root, p, length):
-    gate = root / 'smoke' / str(length)
+def valid_gate(root, p, length, task):
+    gate = root / 'smoke' / str(length) / task
     if (gate / 'validation.json').exists():
         receipt = load(gate / 'validation.json')
         if not receipt['complete'] or receipt['protocol_sha256'] != sha(root / 'protocol.json'):
@@ -478,11 +532,11 @@ def valid_gate(root, p, length):
     return False
 
 
-def smoke_gate(cfg, root, p, length):
-    gate = root / 'smoke' / str(length)
-    if valid_gate(root, p, length):
+def smoke_gate(cfg, root, p, length, task):
+    gate = root / 'smoke' / str(length) / task
+    if valid_gate(root, p, length, task):
         return
-    meta = max((m for m in p['samples'] if m['context_target'] == length), key=lambda x: x['tokens'])
+    meta = max((m for m in p['samples'] if m['context_target'] == length and m['label'] == task), key=lambda x: x['tokens'])
     cleanup(cfg, root)
     for case in ('reference', 'populate', *CASES, *CONTROLS):
         path = gate / f'{case}.json'
@@ -506,7 +560,7 @@ def smoke_gate(cfg, root, p, length):
     artifacts = {str(path): sha(path) for path in gate.iterdir() if path.is_file()}
     dump(gate / 'validation.json', dict(complete=True, sample_id=meta['id'], protocol_sha256=sha(root / 'protocol.json'),
          comparisons=comparisons, artifacts=artifacts, smoke_output_tokens=16, measured=False))
-    print(f'SMOKE_GATE_PASSED {length}', flush=True)
+    print(f'SMOKE_GATE_PASSED {length}/{task}', flush=True)
 
 
 def run(cfg, root, args):
@@ -521,13 +575,17 @@ def run(cfg, root, args):
          pgid=os.getpgrp(), sid=os.getsid(0), command=sys.argv, started_at=time.time(), state='running'))
     p = verify(cfg, root)
     try:
-        lengths = [args.length] if args.length else list(LENGTHS)
-        for length in lengths:
-            progress(root, p, 'smoke', context_target=length)
-            smoke_gate(cfg, root, p, length)
+        units = [u for u in p['scope'] if (args.length is None or u['length'] == args.length)
+                 and (args.task is None or u['task'] == args.task)]
+        if not units:
+            raise ValueError('Requested task/length is not assigned to this job')
+        for unit in units:
+            length, task = unit['length'], unit['task']
+            progress(root, p, 'smoke', context_target=length, task=task)
+            smoke_gate(cfg, root, p, length, task)
             if args.command == 'smoke':
                 continue
-            for meta in (m for m in p['samples'] if m['context_target'] == length):
+            for meta in (m for m in p['samples'] if m['context_target'] == length and m['label'] == task):
                 # Rotate percentage order across prompts; baseline always measures full prefill.
                 methods = list(CASES[1:])
                 offset = meta['source_row'] % len(methods)
@@ -572,13 +630,14 @@ def report(root, p):
     directory.mkdir(exist_ok=True)
     (directory / 'raw_records.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
     comparison = []
-    for length in LENGTHS:
-        baseline = {r['sample_id']: r for r in rows if r['context_target'] == length and r['case'] == 'baseline'}
+    for unit in p['scope']:
+        length, task = unit['length'], unit['task']
+        baseline = {r['sample_id']: r for r in rows if r['context_target'] == length and r['label'] == task and r['case'] == 'baseline'}
         for case in CASES:
-            subset = [r for r in rows if r['context_target'] == length and r['case'] == case]
+            subset = [r for r in rows if r['context_target'] == length and r['label'] == task and r['case'] == case]
             paired = [r for r in subset if r['sample_id'] in baseline]
             avg = lambda key: statistics.mean(r[key] for r in subset) if subset else ''
-            comparison.append(dict(context_target=length, method=case, samples=len(subset),
+            comparison.append(dict(context_target=length, task=task, method=case, samples=len(subset),
                 accuracy_percent=100 * avg('score') if subset else '', mean_ttft_seconds=avg('ttft_seconds'),
                 mean_generation_seconds=avg('generation_seconds'), mean_output_tokens=avg('output_tokens'),
                 mean_prompt_tokens=avg('prompt_tokens'), length_limited=sum(r['finish_reason'] == 'length' for r in subset),
@@ -592,7 +651,7 @@ def report(root, p):
     dump(directory / 'cache_build_costs.json', costs)
     (directory / 'REPORT.md').write_text(
         f'# Qwen3-32B ProphetKV UCM/vLLM port\n\nValidated {len(rows)}/{p["measured_requests"]} requests. '
-        f'{p["samples_per_length"]} independent prompts per length; one timing per prompt/method.\n\n'
+        f'{p["samples_per_task_length"]} independent prompts per task/length; one timing per prompt/method.\n\n'
         'See comparison.csv for official RULER reference-substring accuracy (percent), TTFT, total generation time, '
         'length-limited outputs, and paired TTFT speedup. Speedup is mean paired baseline TTFT / mean paired method TTFT; >1 is faster.\n\n'
         'Targets 8K/16K/32K/64K are dataset targets, not exact token counts. Raw records give actual lengths. '
@@ -607,8 +666,9 @@ def report(root, p):
         'This is the local ProphetKV UCM/vLLM port, not a claim of an upstream pipeline reproduction.\n')
     complete = len(rows) == p['measured_requests']
     if complete:
-        for length in LENGTHS:
-            if not valid_gate(root, p, length):
+        for unit in p['scope']:
+            length, task = unit['length'], unit['task']
+            if not valid_gate(root, p, length, task):
                 raise ValueError('Missing smoke gate')
         dump(directory / 'validation.json', dict(complete=True, validated=len(rows), target=p['measured_requests'],
              protocol_sha256=sha(root / 'protocol.json'),
@@ -637,6 +697,8 @@ def detach(cfg, root, args):
         command += ['--length', str(args.length)]
     if args.method:
         command += ['--method', args.method]
+    if args.task:
+        command += ['--task', args.task]
     with (root / 'supervisor.log').open('a') as log:
         child = subprocess.Popen(command, cwd='/tmp', env=cpu_env(), stdin=subprocess.DEVNULL,
                                  stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -659,15 +721,23 @@ def detach(cfg, root, args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('plan', 'preflight', 'prepare', 'smoke', 'run', 'detach', 'status', 'stop', 'report', 'logs'))
+    parser.add_argument('command', choices=('jobs', 'plan', 'preflight', 'prepare', 'smoke', 'run', 'detach', 'status', 'stop', 'report', 'logs'))
     parser.add_argument('--length', type=int, choices=LENGTHS)
     parser.add_argument('--method', choices=CASES)
+    parser.add_argument('--task', choices=TASKS)
     args = parser.parse_args()
     cfg = settings()
     root = Path(cfg['root'])
-    if args.command == 'plan':
-        print(json.dumps(dict(settings=cfg, lengths=LENGTHS, methods=CASES,
-              requests=4 * cfg['samples'] * len(CASES), thinking=False, max_new_tokens=128,
+    if args.command == 'jobs':
+        print('Job | Physical GPUs | Task/length units | Measured requests | Detached command')
+        print('--- | --- | --- | --- | ---')
+        for job, units in JOBS.items():
+            description = '; '.join(f'{task}@{length // 1024}K' for length, task in units)
+            print(f'{job} | {int(job)*2},{int(job)*2+1} | {description} | '
+                  f'{len(units)*cfg["samples"]*len(CASES)} | bash run_scripts/job_{job}.sh detach')
+    elif args.command == 'plan':
+        print(json.dumps(dict(settings=cfg, scope=cfg['scope'], methods=CASES,
+              requests=len(cfg['scope']) * cfg['samples'] * len(CASES), thinking=False, max_new_tokens=128,
               tensor_parallel_size=len(cfg['indices'])), indent=2))
     elif args.command == 'status':
         live = live_supervisor(root)

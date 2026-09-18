@@ -1,227 +1,215 @@
-# Remote Qwen3-32B / ProphetKV / NIAH multivalue
+# Remote Qwen3-32B / ProphetKV / RULER — four TP=2 jobs
 
-Copy this **repository, including `run_scripts/`**, to the remote server. Run the
-commands below there. Nothing in these scripts submits work to the old server.
-The historical benchmark drivers and results are not changed or resumed.
+Copy the repository, including `run_scripts/`, to the remote 8-A800 server.
+Each job uses **exactly two GPUs**. Four detached jobs can run concurrently,
+with separate result directories, caches, locks, logs and resume state.
 
-## Experiment
+## Scope and job list
 
-| Setting | Value |
-|---|---|
-| Model | `Qwen/Qwen3-32B`, original BF16 checkpoint |
-| Chat | Native Qwen3 template with `enable_thinking=False` |
-| Generation | Greedy, maximum **128 new tokens**, one request at a time |
-| Task | RULER `niah_multivalue` |
-| Dataset targets | 8,192 / 16,384 / 32,768 / 65,536 tokens |
-| Methods | No cache; ProphetKV **5%, 10%, 20%, 30%, 40%, 50%** |
-| Samples | Configurable; default **100 per context length**, seed 42 |
-| Measured requests | Default **400 prompts × 7 = 2,800** |
-| GPUs | Remote physical GPUs 0–7, one **TP=8** engine |
-| Context chunks | 4,096 tokens, including numbering and padding |
-| Fresh suffix | At least 256 tokens; includes the complete query |
+All jobs use Qwen/Qwen3-32B BF16, native chat with `enable_thinking=False`,
+greedy generation, **128 maximum new tokens**, and **100 samples per task/length**.
+Each sample runs seven methods: **no cache, ProphetKV 5%, 10%, 20%, 30%, 40%, 50%**.
 
-100 samples is a configurable assumption, not the RULER default of 500. Set
-`NUM_SAMPLES=500` for 14,000 measurements, or `NUM_SAMPLES=5` for a small
-140-request trial. Use a different `RESULT_ROOT` for each scope.
+The earlier NIAH multivalue runs at 8K/16K/32K are retained. At 64K the scope
+now contains **all 13 RULER tasks**. There are 1,600 distinct prompts and
+**11,200 measured requests** (9,100 at 64K and 2,100 at shorter lengths).
 
-All methods use the same frozen token IDs, chat format, chunk markers, padding,
-and output budget. Actual prompt lengths are saved; the dataset target is not an
-exact input length. Percentages are the fraction of **eligible cached tokens to
-recompute**, excluding the exact first chunk and fresh suffix. They are not KV
-compression percentages or fractions of the whole prompt. This is the repository's
-**ProphetKV UCM/vLLM port**.
+| Job script | Physical GPUs | Shorter-length work | RULER 64K tasks | Requests |
+|---|---|---|---|---:|
+| `job_0.sh` | **0,1** | NIAH multivalue 8K | `niah_single_1`, `niah_single_2`, `niah_single_3` | 2,800 |
+| `job_1.sh` | **2,3** | NIAH multivalue 16K | `niah_multikey_1`, `niah_multikey_2`, `niah_multikey_3` | 2,800 |
+| `job_2.sh` | **4,5** | NIAH multivalue 32K | `niah_multivalue`, `niah_multiquery`, `vt` | 2,800 |
+| `job_3.sh` | **6,7** | — | `cwe`, `fwe`, `qa_1`, `qa_2` | 2,800 |
 
-The Qwen3-32B [model card](https://huggingface.co/Qwen/Qwen3-32B#processing-long-texts)
-documents YaRN for extended contexts. The 64K runs use its 4× configuration
-(`original_max_position_embeddings=32768`); shorter runs use original RoPE.
-4× leaves room for markers and generated tokens beyond the 65,536 target.
-All methods within a length use the same setting. Checkpoint files are never edited.
+Use `bash run_scripts/list_jobs.sh` for the current list, or
+`bash run_scripts/job_0.sh plan` for one job's exact settings and paths.
+Equal request counts do not imply equal wall-clock runtimes.
 
-## Configure once on the remote server
+## Configure on the remote server
 
-Edit `run_scripts/config.sh`, or export overrides in your remote shell:
+Edit `run_scripts/config.sh`, or export overrides:
 
 ```bash
 cd /path/to/unified-cache-management
 export PYTHON_BIN=/path/to/prepared/environment/bin/python
 export MODEL_PATH=/path/to/Qwen3-32B
+export RESULT_ROOT=/path/to/results/qwen3-32b-prophetkv-ruler-tp2
+export CACHE_ROOT=/path/to/local-nvme/prophetkv-ruler-tp2
 export NUM_SAMPLES=100
-export RESULT_ROOT=/path/to/results/qwen3-32b-prophetkv-niah100
-export CACHE_ROOT=/path/to/local-nvme/prophetkv-niah100
-# Optional, if your complete RULER checkout is elsewhere:
+# If your complete RULER checkout is elsewhere:
 export RULER_ROOT=/path/to/RULER
 ```
 
-`PYTHON_BIN` must refer to the prepared coupled runtime: UCM 0.3.0, patched
-vLLM 0.9.2 (including Qwen3 sparse hooks), PyTorch 2.7.0, Transformers 4.53.2.
-It also needs the RULER generator dependencies and NLTK sentence-tokenizer data.
-An ordinary unpatched vLLM installation does not implement the required hooks.
-The scripts check this and do not install or upgrade packages.
+`RESULT_ROOT` and `CACHE_ROOT` above are **parent directories**. The numbered
+job scripts automatically append `job-0`, `job-1`, `job-2`, or `job-3` and set
+the corresponding physical GPU pair. You do not need to set `GPU_INDICES`.
 
-`MODEL_PATH` is a **local complete checkpoint directory**, not a Hugging Face
-model ID; preparation and inference operate offline. `RULER_ROOT` defaults to
-`benchmarks/vendor/RULER`. Its
-`scripts/data/synthetic/json/PaulGrahamEssays.json` must already be populated.
-If needed, run `bash run_scripts/prepare_ruler_assets.sh` once; this optional
-command downloads RULER's essay corpus and missing NLTK data, but no model or packages.
-You can instead point `RULER_ROOT` at your already prepared checkout.
+The new default parent is `.results/qwen3-32b-prophetkv-ruler-tp2/`.
+Old TP=8 results remain intact. Previously prepared protocols cannot be resumed
+with these changed sources, task scopes or GPU assignments; prepare new job directories.
 
-Use a local SSD/NVMe for `CACHE_ROOT`. A 64K BF16 Qwen3-32B cache is roughly
-16 GiB across TP shards before overhead; allow at least 25 GiB of free cache
-space. Results need additional space for per-rank diagnostics and smoke tensor
-artifacts. Cache storage is bounded to one sample and removed after its engines exit.
+The runtime remains UCM 0.3.0, patched vLLM 0.9.2 with Qwen3 sparse hooks,
+PyTorch 2.7.0, Transformers 4.53.2. RULER dependencies include PyYAML,
+wonderwords and NLTK sentence-tokenizer data. These scripts do not install or
+upgrade packages. `MODEL_PATH` must be a complete local BF16 checkpoint with its
+original configuration and tokenizer. Inference and data generation work offline.
 
-## Launch the whole experiment
+**GPU memory:** TP=2 at 64K is intended for A800 **80GB** devices. The launcher
+checks a lower bound for weights plus KV against the configured memory budget;
+40GB cards do not have sufficient headroom for this BF16 configuration. Smoke
+checks establish whether the actual eager execution and audits fit on your server.
+
+`RULER_ROOT` defaults to `benchmarks/vendor/RULER`. Required assets are
+`PaulGrahamEssays.json`, `english_words.json`, `squad.json` (SQuAD dev-v2.0) and
+`hotpotqa.json` (HotpotQA dev distractor), under `scripts/data/synthetic/json/`.
+If missing, run this optional CPU-only setup **once before preparing jobs**:
 
 ```bash
-bash run_scripts/plan.sh          # No GPU initialization; print exact scope
-bash run_scripts/preflight.sh     # Read-only environment/model/GPU checks
-bash run_scripts/prepare.sh       # CPU: generate data, freeze prompts and sources
-bash run_scripts/detach.sh        # Start/resume; survives SSH logout
-bash run_scripts/status.sh        # Confirm supervisor_live: true after detach exits
+bash run_scripts/prepare_ruler_assets.sh
 ```
 
-`detach.sh` uses `nohup`, `/dev/null` stdin and a separate process session.
-`supervisor.log` is appended on resume. Only one supervisor may hold `run.lock`.
-GPUs are identified using `nvidia-smi -L`, frozen by UUID, and checked again
-before every engine launch and inside every rank. Busy selected GPUs are awaited.
-There are no idle placeholders or reservation jobs.
+It downloads the upstream corpus assets and missing NLTK data, using direct
+connections first and the inherited proxy as fallback. It does not download
+models or install packages. You can instead point at an already prepared RULER checkout.
 
-The runner automatically gates **each length** on the longest prepared prompt:
-all seven requested configurations, 0% and 100% controls, and an independent
-native exact-prefix reference. Smoke uses 16 output tokens and does **not** count
-as measured work. Cached smoke checks every layer and TP rank for writes,
-preserved KV, selection agreement and original-position causal attention. The
-100% control must match the native-prefix reference at all 64 layers.
+Allow at least 25 GiB of local cache disk space **per concurrent job** (100 GiB
+for four), plus results and smoke tensors. Temporary KV storage is bounded to one
+sample per job and removed only after its engine group exits.
 
-For interactive execution use `bash run_scripts/run_all.sh` instead of detaching.
-To run only qualification first: `bash run_scripts/smoke.sh`. Do not run these
-simultaneously with a detached supervisor.
+## Prepare and launch concurrently
 
-**Engine lifetime:** this launcher deliberately uses a fresh engine for each
-sample/method plus one cache-population engine per sample, approximately 3,200
-engine starts for the default measurement sweep, plus smoke/recovery. Loading a
-32B model that often adds substantial wall-clock time and disk traffic. This is
-not the historical persistent-engine scheduler. Loading and population are
-reported separately and excluded from TTFT. All eight GPUs participate in each
-engine; they are not eight simultaneous independent model replicas.
-
-## Run an individual length or method
+Prepare all four jobs (CPU work, done sequentially; includes preflight checks):
 
 ```bash
-bash run_scripts/run_8k.sh
-bash run_scripts/run_16k.sh
-bash run_scripts/run_32k.sh
-bash run_scripts/run_64k.sh
-
-# One context length and one method; the length's smoke gate still applies:
-bash run_scripts/run_one.sh 65536 baseline
-bash run_scripts/run_one.sh 65536 prophetkv-5
-bash run_scripts/run_one.sh 65536 prophetkv-10
-bash run_scripts/run_one.sh 65536 prophetkv-20
-bash run_scripts/run_one.sh 65536 prophetkv-30
-bash run_scripts/run_one.sh 65536 prophetkv-40
-bash run_scripts/run_one.sh 65536 prophetkv-50
-
-# Same selection, detached:
-bash run_scripts/detach.sh --length 65536 --method prophetkv-20
+bash run_scripts/list_jobs.sh
+bash run_scripts/prepare_jobs.sh
 ```
 
-These share the result directory and skip validated work. Run them sequentially,
-or simply use `detach.sh` for all lengths/methods. A run interrupted by an engine
-error stops with its log preserved; fix the cause and invoke the same command
-to resume. Unaccepted attempt files are archived. Changing prompts, checkpoint,
-runtime, runner source, sample count, chunk size, or GPU assignment requires a
-new result directory; incompatible results are never silently mixed.
-
-## Monitor and read logs
+Then execute all four commands in the same terminal. **No trailing `&` is needed**;
+each command detaches and returns while its job continues:
 
 ```bash
-bash run_scripts/status.sh
-bash run_scripts/logs.sh                     # Follow current/last engine log
+bash run_scripts/job_0.sh detach   # GPUs 0,1
+bash run_scripts/job_1.sh detach   # GPUs 2,3
+bash run_scripts/job_2.sh detach   # GPUs 4,5
+bash run_scripts/job_3.sh detach   # GPUs 6,7
+bash run_scripts/status_jobs.sh
+```
+
+Equivalent convenience command: `bash run_scripts/detach_jobs.sh`.
+After the launchers return, verify `supervisor_live: true` for each job.
+Each supervisor uses `nohup`, an independent session and `/dev/null` stdin,
+so jobs survive SSH logout. GPUs are verified with `nvidia-smi -L`, pinned by
+UUID, and restricted in every engine and TP rank. Busy GPUs are awaited.
+No dummy or reservation workloads run.
+
+Individual operations use the same job prefix:
+
+```bash
+bash run_scripts/job_0.sh preflight
+bash run_scripts/job_0.sh prepare
+bash run_scripts/job_0.sh smoke       # Qualification only
+bash run_scripts/job_0.sh run         # Foreground alternative to detach
+bash run_scripts/job_2.sh detach --length 65536 --task vt --method prophetkv-20
+```
+
+Do not start a second command that runs/prepares/reports the same job while its
+supervisor holds the job lock. All methods for a sample use the same GPU pair.
+Each task/length is gated on its longest prepared prompt: all seven measured
+configurations plus 0%/100% controls and a native exact-prefix reference.
+Smoke outputs have a 16-token budget and are excluded from the measurement count.
+Audits cover all 64 layers and both ranks, including tensor writes, preserved
+cached KV, global selection agreement and original-position causal attention.
+
+This runner still uses **fresh engines per sample/method**, plus one population
+engine per sample. Model loading adds substantial wall-clock time and shared-disk
+traffic; it is excluded from TTFT. Concurrent jobs can affect one another's
+CPU/disk performance, so record that concurrency when interpreting timings.
+
+The older `run_all.sh`, `run_8k.sh`, `run_16k.sh`, `run_32k.sh` and `run_64k.sh`
+remain sequential alternatives on one GPU pair and the unsuffixed result root.
+`run_64k.sh` now covers all 13 tasks. For the requested concurrent layout,
+use the numbered job scripts exclusively.
+
+## Monitor, stop and resume
+
+```bash
+bash run_scripts/status_jobs.sh
+bash run_scripts/job_2.sh status
+bash run_scripts/job_2.sh logs       # Current/last engine log; Ctrl-C exits viewer
 source run_scripts/config.sh
-tail -n 80 -F "$RESULT_ROOT/supervisor.log"   # Scheduling, gates, failures
+tail -n 80 -F "$RESULT_ROOT/job-2/supervisor.log"
 nvidia-smi
+
+bash run_scripts/job_2.sh stop       # Stop only this verified supervisor/engines
+bash run_scripts/job_2.sh status     # Confirm it exited
+bash run_scripts/job_2.sh detach     # Resume missing work
+# Or signal all four owned supervisors:
+bash run_scripts/stop_jobs.sh
 ```
 
-`logs.sh` follows the engine active when invoked. Re-run it when the method
-changes. Ctrl-C stops only the log viewer.
+`logs` follows the engine active when invoked; re-run it when the method changes.
+A stopped or failed job preserves accepted records. The same detach command
+resumes missing work and archives unaccepted attempts. Configuration/source
+changes require new output directories; incompatible records are not mixed.
+The watchdog stops owned engines on fatal logs or 1,800 seconds without logged
+progress (`WATCHDOG_SECONDS` is configurable). GPU allocation alone is not progress.
 
-| File or log message | Meaning |
+| File/message under each `job-N/` | Meaning |
 |---|---|
-| `progress.json` | Overall accepted count, target, per-length/per-method counts |
-| `supervisor.json` | Supervisor PID and identity; `status.sh` checks if it is actually live |
-| `active.json` | Current sample, method, engine process group and log path |
-| `logs/prepare-<length>.log` | RULER data-generation output |
-| `cache-builds/*.log` | Offline independent-chunk construction |
-| `cache_population chunk=X/Y` | Cache building; outside TTFT |
+| `progress.json` | Accepted count and per-task/per-length/per-method progress |
+| `supervisor.json` | Supervisor identity; `status` verifies whether it is live |
+| `active.json` | Sample, method, engine group and current log path |
+| `supervisor.log` | Scheduling, gate completion and failures |
+| `logs/prepare-<length>-<task>.log` | Dataset generation |
+| `cache-builds/*.log` | Offline chunk population, outside TTFT |
 | `MEASURE_BEGIN` / `MEASURE_END` | Boundaries of the timed request |
-| `engine_progress` | Engine still stepping; not a completed measurement |
-| `result ... score=... ttft=... total=...` | Request output and timing |
-| `WORKER_COMPLETE` | Worker shut down normally; validation follows |
-| `*.validated.json` | Record, log and diagnostics hashes after acceptance |
-| `SMOKE_GATE_PASSED` | Qualification for that context length passed |
-| `state: failed` or `Traceback` | Inspect indicated engine log; do not count incomplete output |
+| `result ... score=... ttft=... total=...` | Prediction score and request timings |
+| `WORKER_COMPLETE` | Normal worker shutdown; validation follows |
+| `*.validated.json` | Accepted record/log/diagnostic hashes |
+| `SMOKE_GATE_PASSED <length>/<task>` | Qualification passed for that task/length |
+| `state: failed` / `Traceback` | Inspect the indicated engine log |
 
-The watchdog stops an owned engine after 1,800 seconds without logged progress
-or on a fatal log. Set `WATCHDOG_SECONDS` higher before launching if remote model
-loading or initial kernel compilation legitimately needs longer. GPU allocation
-alone does not establish progress.
+## Read the results
 
-## Results and interpretation
+Each job produces its own final artifacts after all **2,800** requests validate:
 
-Default directory:
-`.results/qwen3-32b-prophetkv-niah-multivalue/` (or `$RESULT_ROOT`).
+- `$RESULT_ROOT/job-N/final/comparison.csv`: **main table**, one row per task,
+  context length and method; 28 rows per completed job.
+- `final/REPORT.md`: scope and metric definitions.
+- `final/raw_records.jsonl`: predictions, output token IDs, references, prompt
+  hashes, timings and GPU provenance.
+- `final/cache_build_costs.json`: offline population costs and resumed attempts.
+- `final/validation.json`: that job's completion certificate.
+- `records/<task>-<length>-<row>/<method>.{json,log,diagnostics.json}`:
+  individual measurements, engine logs and rank diagnostics.
+- `smoke/<length>/<task>/validation.json`: qualification receipt.
+- `protocol.json`, `prompt_manifest.json`: pinned configuration and prompt identities.
+- `cleanup.json`: owned engine exit and cache removal receipt.
 
-| Artifact | Contents |
-|---|---|
-| `final/comparison.csv` | **Main table:** one row per length and method |
-| `final/REPORT.md` | Scope and metric interpretation |
-| `final/raw_records.jsonl` | All predictions, output IDs, references, hashes, timings and provenance |
-| `final/cache_build_costs.json` | Offline population costs, including resumed attempts |
-| `final/validation.json` | Completion certificate: all required measurements validated |
-| `records/<sample-id>/<method>.json` | Individual raw measurement |
-| `records/<sample-id>/<method>.log` | Individual engine log |
-| `records/<sample-id>/<method>.diagnostics.json` | TP-rank scores, selected positions and layer counts |
-| `smoke/<length>/validation.json` | Per-length qualification receipt |
-| `protocol.json`, `prompt_manifest.json` | Frozen settings, hashes and actual input lengths |
-| `cleanup.json` | Owned engine exit and temporary cache cleanup receipt |
+There are four completion certificates; completion of one job does not imply
+completion of all 11,200 requests. For an incomplete stopped job, run
+`bash run_scripts/job_N.sh report` (substitute 0–3) to create `partial/` instead.
 
-`final/` is produced only after every requested measurement validates. For an
-incomplete stopped run, use `bash run_scripts/report.sh` to produce `partial/`.
-Reporting takes the same lock and must run after the supervisor exits.
+`accuracy_percent` uses local official RULER scoring: QA accepts any reference;
+other tasks score the fraction of reference strings found. `mean_ttft_seconds`
+measures submission to first token-bearing output, including online ProphetKV
+probing, transfers and selection. `ttft_speedup` is paired mean no-cache TTFT /
+paired mean method TTFT (>1 is faster); `paired_samples` records its denominator.
+`mean_generation_seconds` is separate, and `length_limited` counts outputs that
+reach the 128-token cap.
 
-In `comparison.csv`:
+Dataset generation uses the supplied RULER task parameters and reserves 128 output
+tokens for every task, matching the requested generation cap. All methods share
+the same frozen non-thinking chat and numbered, padded 4,096-token chunks.
+"64K" is a dataset target; actual prompt lengths are recorded. ProphetKV ratios
+select eligible cached tokens after the exact first chunk and before the fresh
+query suffix (at least 256 tokens), not fractions of the entire prompt.
+64K uses the [Qwen3-32B documented YaRN configuration](https://huggingface.co/Qwen/Qwen3-32B#processing-long-texts)
+with factor 4; shorter lengths retain original RoPE. This is the repository's
+ProphetKV UCM/vLLM port. Cache results use buffered local warm storage. Loading,
+population, readiness waits and warmup are excluded from TTFT and reported separately.
 
-- `accuracy_percent`: official RULER fraction of reference strings found in
-  the output, averaged over samples. Higher is better; this is not exact-match
-  answer accuracy.
-- `mean_ttft_seconds`: time from engine submission to its first token-bearing
-  output. Includes online ProphetKV probing, transfers and selection. Lower is better.
-- `ttft_speedup`: **mean paired no-cache TTFT / mean paired method TTFT**.
-  Above 1 is faster. `paired_samples` tells you how many matched prompts contribute.
-- `mean_generation_seconds`: total request generation latency, separate from TTFT.
-- `length_limited`: count of outputs reaching the 128-token cap; inspect raw
-  predictions and `finish_reason` when interpreting scores.
-
-Offline construction/readiness waits, loading and warmup are excluded from TTFT.
-The cache backend uses buffered local storage; these are warm-cache results,
-not a cold-disk measurement. One timing per prompt is one accuracy sample.
-
-## Stop, resume, and check the scripts
-
-```bash
-bash run_scripts/stop.sh          # SIGTERM only to the identity-verified supervisor
-bash run_scripts/status.sh        # Confirm supervisor_live: false and engines exited
-bash run_scripts/detach.sh        # Resume missing work using the same settings
-bash run_scripts/test_cpu.sh      # CPU unit tests; no inference
-```
-
-If the supervisor was forcibly killed and an engine group survived, the launcher
-refuses to restart or remove its cache. Inspect `active.json` and the process
-identity before taking manual action. It never kills unrelated GPU processes.
-
-Local validation covers CPU logic, TP score aggregation, YaRN delta rotation,
-shell syntax and command generation. **The 32B TP=8 GPU path has not been executed
-on your remote machine by this preparation task**; remote smoke gates are mandatory
-and a failure leaves measured work for that length unstarted.
+Run `bash run_scripts/test_cpu.sh` for CPU tests and shell syntax checks. Remote
+TP=2 GPU inference has not been executed by this script-editing task; mandatory
+smoke gates run on your server before measurements.
