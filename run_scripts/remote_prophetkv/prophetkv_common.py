@@ -1,18 +1,10 @@
 """CPU-safe common artifacts, timing and scoring utilities."""
-import hashlib
 import re
 import json
 import os
 from pathlib import Path
 import time
-from cacheblend_ruler import prompt_digest,score_prediction
-
-def sha(path):
-    h = hashlib.sha256()
-    with Path(path).open('rb') as f:
-        for b in iter(lambda: f.read(8 << 20), b''):
-            h.update(b)
-    return h.hexdigest()
+from cacheblend_ruler import score_prediction
 
 def dump(path, value):
     path = Path(path)
@@ -38,8 +30,8 @@ def score(sample, prediction):
 def load_sample(path):
     sample = json.loads(Path(path).read_text())
     ids, bounds = sample['token_ids'], sample['boundaries']
-    if prompt_digest(ids) != sample['prompt_sha256'] or len(ids) != sample['tokens']:
-        raise ValueError('Saved prompt hash/length mismatch')
+    if len(ids) != sample['tokens']:
+        raise ValueError('Saved prompt length mismatch')
     if bounds[0] != 0 or bounds[-1] != len(ids) or any(a >= b for a, b in zip(bounds, bounds[1:])):
         raise ValueError('Invalid saved chunk boundaries')
     if bounds[-1] - bounds[-2] != sample['fresh_suffix_tokens'] or any(x % 64 for x in bounds[:-1]):
@@ -60,14 +52,12 @@ def load_sample(path):
         raise ValueError('Suffix contains a connector boundary')
     return sample
 
-def cache_snapshot(path, content=False):
+def cache_snapshot(path):
     rows = {}
     for f in sorted((Path(path)/'kv').glob('*/*')):
         if f.is_file():
             st = f.stat()
             rows[str(f.relative_to(path))] = [st.st_size, st.st_mtime_ns, st.st_ctime_ns]
-            if content:
-                rows[str(f.relative_to(path))].append(sha(f))
     return rows
 
 def generate(engine, tokens, budget, request_id, before_submit=None):

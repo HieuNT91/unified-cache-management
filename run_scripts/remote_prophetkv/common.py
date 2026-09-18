@@ -1,6 +1,5 @@
 """CPU-only configuration, provenance, and remote GPU identity checks."""
 import csv
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,14 +24,6 @@ CONTROLS = ('prophetkv-0', 'prophetkv-100')
 TIMING = 'engine_step_first_token_monotonic'
 
 
-def sha(path):
-    h = hashlib.sha256()
-    with Path(path).open('rb') as stream:
-        for block in iter(lambda: stream.read(8 << 20), b''):
-            h.update(block)
-    return h.hexdigest()
-
-
 def dump(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -43,11 +34,6 @@ def dump(path, value):
 
 def load(path):
     return json.loads(Path(path).read_text())
-
-
-def hashes(root):
-    return {str(p.relative_to(root)): sha(p) for p in sorted(Path(root).rglob('*'))
-            if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc'}
 
 
 def settings():

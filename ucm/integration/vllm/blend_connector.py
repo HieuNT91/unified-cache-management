@@ -1,9 +1,10 @@
 import itertools
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, List, Self, Tuple
+from typing import TYPE_CHECKING, List, Tuple
 
 import torch
+from typing_extensions import Self
 from vllm.config import VllmConfig
 from vllm.distributed.kv_transfer.kv_connector.v1.base import (
     KVConnectorMetadata,

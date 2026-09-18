@@ -6,6 +6,9 @@ from .selection import context_importance, select, LayerAlignment
 
 def delta_rotation_table(table):
     """Remove only YaRN's common magnitude multiplier from delta rotations."""
+    if (not isinstance(table, torch.Tensor) or table.ndim != 2 or
+            not table.shape[0] or not table.shape[1] or table.shape[1] % 2):
+        raise RuntimeError('Expected an initialized two-dimensional RoPE cos/sin cache')
     amplitude = table[0, :table.shape[-1] // 2].float().mean()
     if not torch.isfinite(amplitude) or amplitude <= 0:
         raise RuntimeError('Invalid RoPE magnitude scale')
@@ -53,6 +56,10 @@ def setup(worker):
     # YaRN embeds a magnitude scale in Q/K. Delta rotation must not apply it
     # twice to keys that were already rotated during chunk construction.
     if not hasattr(connector, 'prophet_delta_normalized'):
+        # vLLM 0.9.2 does not always call the connector's model setup hook.
+        # Register the loaded model before deriving the separate delta table.
+        if getattr(connector, 'cos_sin_cache', None) is None:
+            connector.setup_model(worker.model_runner.model)
         connector.cos_sin_cache = delta_rotation_table(connector.cos_sin_cache)
         connector.prophet_delta_normalized = True
     if hasattr(connector,'prophet_aligned'):return {'installed':True}

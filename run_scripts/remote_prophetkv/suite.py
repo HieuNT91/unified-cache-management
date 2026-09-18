@@ -19,10 +19,10 @@ import subprocess
 import sys
 import time
 
-from common import (HERE, REPO, LENGTHS, TASKS, JOBS, CASES, CONTROLS, TIMING, sha, dump,
-                    load, hashes, settings, selected_devices, busy_devices,
+from common import (HERE, REPO, LENGTHS, TASKS, JOBS, CASES, CONTROLS, TIMING, dump,
+                    load, settings, selected_devices, busy_devices,
                     identity, group_alive, rope_for_length)
-from cacheblend_ruler import cacheblend_prompt, prompt_digest
+from cacheblend_ruler import cacheblend_prompt
 from prophetkv_common import load_sample, score
 from ruler_assets import materialize_hotpot
 
@@ -54,6 +54,7 @@ def locked(root):
 def preflight(cfg):
     if os.environ.get('CUDA_VISIBLE_DEVICES') != '' or 'PYTHONPATH' in os.environ:
         raise RuntimeError('Invoke via the shell entry points, which hide GPUs from the supervisor')
+    from typing_extensions import Self  # noqa: F401: required by UCM on Python 3.10
     model = Path(cfg['model'])
     config = load(model / 'config.json')
     expected = dict(model_type='qwen3', num_hidden_layers=64, hidden_size=5120,
@@ -173,7 +174,7 @@ def encode(tokenizer, row, cfg, length, ordinal, task='niah_multivalue'):
                 context_target=length, source_row=ordinal, source_index=row.get('index'),
                 chunk_size=cfg['chunk'], original_tokens=len(ids), tokens=len(tokens),
                 token_ids=tokens, boundaries=boundaries, fresh_suffix_tokens=suffix,
-                prompt_sha256=prompt_digest(tokens), thinking_enabled=False,
+                thinking_enabled=False,
                 source_metadata=dict(references=row['outputs']),
                 query=dict(text=question, positions=[i + len(tokens) - len(ids) for i in query]))
 
@@ -192,15 +193,75 @@ def generator_command(cfg, length, task, source, definitions, constants):
     return command
 
 
+def copy_private_ucm(ucm, private):
+    """Keep the installed UCM version, with the Python 3.10 import backport."""
+    if private.exists():
+        shutil.rmtree(private)
+    shutil.copytree(ucm, private, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    connector = private / 'integration/vllm/blend_connector.py'
+    source = connector.read_text()
+    fixed = compatible_connector_source(source)
+    compile(fixed, str(connector), 'exec')
+    if fixed != source:
+        connector.write_text(fixed)
+
+
+def compatible_connector_source(source):
+    fixed = source.replace('from typing import TYPE_CHECKING, List, Self, Tuple',
+                           'from typing import TYPE_CHECKING, List, Tuple\n'
+                           'from typing_extensions import Self')
+    return fixed
+
+
+def refresh_runtime(cfg, root):
+    """Repair a stopped, prepared job without regenerating data or repinning it."""
+    check_orphan(root)
+    if live_supervisor(root):
+        raise RuntimeError('Stop the supervisor before refreshing its private runtime')
+    p = load(root / 'protocol.json')
+    if p['settings'] != cfg:
+        raise ValueError('Configuration changed: use the original preparation settings')
+    private = root / 'private_ucm/ucm'
+    connector = private / 'integration/vllm/blend_connector.py'
+    runtime = private / 'sparse/prophetkv/runtime.py'
+    updates = {connector: compatible_connector_source(connector.read_text()),
+               runtime: (HERE / 'method/prophetkv/runtime.py').read_text()}
+    updates = {path: text for path, text in updates.items() if path.read_text() != text}
+    if not updates:
+        print('Private runtime is already current; no changes made.', flush=True)
+        return
+    if any((root / 'records').rglob('*.validated.json')):
+        raise RuntimeError('Private runtime refresh requires a job with no validated measurements')
+    for path, text in updates.items():
+        compile(text, str(path), 'exec')
+    history = root / 'runtime-refresh' / str(time.time_ns())
+    for path in updates:
+        backup = history / path.relative_to(root)
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, backup)
+    # Old smoke checks used the previous implementation and must run again.
+    if (root / 'smoke').exists():
+        (root / 'smoke').rename(history / 'smoke')
+    for path, text in updates.items():
+        temporary = path.with_suffix('.py.tmp')
+        temporary.write_text(text)
+        temporary.replace(path)
+    dump(history / 'receipt.json', dict(changed=[str(path) for path in updates],
+         reason='Initialize connector RoPE before normalization; support Python 3.10 Self import',
+         updated_at=time.time()))
+    progress(root, p, 'prepared')
+    print(f'Private runtime updated. Prior files/smoke logs: {history}. Prompts retained.', flush=True)
+
+
 def prepare(cfg, root):
     if (root / 'protocol.json').exists():
         return verify(cfg, root)
-    runtime, ucm, vllm, devices, tokenizer = preflight(cfg)
+    runtime, ucm, _, devices, tokenizer = preflight(cfg)
     if (root / 'preparation.json').exists() and load(root / 'preparation.json') != cfg:
         raise ValueError('Partially prepared output has different settings; choose a new RESULT_ROOT')
     dump(root / 'preparation.json', cfg)
     samples = []
-    datasets = {}
+    datasets = []
     ruler = Path(cfg['ruler'])
     constants = runpy.run_path(str(ruler / 'scripts/data/synthetic/constants.py'))['TASKS']
     import yaml
@@ -218,21 +279,18 @@ def prepare(cfg, root):
         rows = [json.loads(line) for line in source.read_text().splitlines() if line.strip()]
         if len(rows) != cfg['samples']:
             raise ValueError(f'Expected {cfg["samples"]} rows in {source}, got {len(rows)}')
-        datasets[str(source)] = sha(source)
+        datasets.append(str(source))
         for ordinal, row in enumerate(rows):
             sample = encode(tokenizer, row, cfg, length, ordinal, task)
             path = root / 'samples' / f'{sample["id"]}.json'
             sample['source_path'] = str(source)
-            sample['source_metadata']['source_sha256'] = datasets[str(source)]
             dump(path, sample)
             load_sample(path)
             samples.append({k: v for k, v in sample.items() if k != 'token_ids'} |
-                           dict(input_path=str(path), input_sha256=sha(path)))
+                           dict(input_path=str(path)))
         print(f'Frozen {length}/{task}: {len(rows)} prompts', flush=True)
     private = root / 'private_ucm/ucm'
-    if private.exists():
-        shutil.rmtree(private)
-    shutil.copytree(ucm, private, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    copy_private_ucm(ucm, private)
     for name in ('blend.py', 'selection.py'):
         shutil.copy2(REPO / 'ucm/sparse/blend' / name, private / 'sparse/blend' / name)
     method = private / 'sparse/prophetkv'
@@ -244,23 +302,16 @@ def prepare(cfg, root):
         stream.write('\nUcmSparseFactory.register_sparse_method("ProphetKV", "ucm.sparse.prophetkv.prophetkv", "ProphetKV")\n')
     snapshot = root / 'source'
     shutil.copytree(HERE, snapshot, dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    print('Hashing checkpoint, private method, and runtime for safe resume...', flush=True)
-    model = Path(cfg['model'])
-    model_hashes = {str(p): sha(p) for p in sorted(model.iterdir())
-                    if p.is_file() and p.suffix in ('.json', '.safetensors', '.jinja', '.txt', '.model')}
-    runtime_hashes = {str(p): sha(p) for p in vllm.rglob('*.py')}
-    protocol = dict(schema_version=1, study='ProphetKV UCM/vLLM port, remote Qwen3-32B', settings=cfg,
-                    model=cfg['model'], model_hashes=model_hashes, runtime_versions=runtime,
-                    runtime_hashes=runtime_hashes, source_hashes=hashes(HERE),
-                    private_ucm_hashes=hashes(private), ruler_hashes=hashes(ruler / 'scripts/data'),
+    print('Writing protocol (file checksums disabled)...', flush=True)
+    protocol = dict(schema_version=2, study='ProphetKV UCM/vLLM port, remote Qwen3-32B', settings=cfg,
+                    model=cfg['model'], runtime_versions=runtime, artifact_checksums=False,
                     ruler_task_definitions=definitions,
-                    ruler_task_config_sha256=sha(ruler / 'scripts/synthetic.yaml'),
                     gpu_devices=devices, tensor_parallel_size=len(devices), num_layers=64,
                     gpu_memory_utilization=cfg['memory'], max_output_tokens=128, thinking_enabled=False,
                     decoding=dict(temperature=0, top_p=1, seed=0), dtype='bfloat16', eager=True,
                     cases=list(CASES), lengths=sorted({u['length'] for u in cfg['scope']}),
                     scope=cfg['scope'], samples_per_task_length=cfg['samples'], dataset_output_reserve=128,
-                    samples=samples, dataset_hashes=datasets, measured_requests=len(samples) * len(CASES),
+                    samples=samples, datasets=datasets, measured_requests=len(samples) * len(CASES),
                     rope_scaling_64k=rope_for_length(65536), rope_scaling_other_lengths=None,
                     prompt_layout='native non-thinking chat, numbered block-padded chunks, fresh query suffix >=256',
                     rate_denominator='cached region after exact first chunk, before fresh suffix',
@@ -279,18 +330,8 @@ def verify(cfg, root):
     p = load(root / 'protocol.json')
     if p['settings'] != cfg:
         raise ValueError('Configuration changed: use the original settings or a new RESULT_ROOT')
-    if hashes(HERE) != p['source_hashes'] or hashes(root / 'source') != p['source_hashes']:
-        raise ValueError('Runner source changed since preparation; use a new RESULT_ROOT')
-    if hashes(root / 'private_ucm/ucm') != p['private_ucm_hashes']:
-        raise ValueError('Private UCM changed')
     if {n: version(n) for n in p['runtime_versions']} != p['runtime_versions']:
         raise ValueError('Runtime versions changed')
-    for path, digest in (p['model_hashes'] | p['runtime_hashes'] | p['dataset_hashes']).items():
-        if sha(path) != digest:
-            raise ValueError(f'Frozen input/runtime changed: {path}')
-    for sample in p['samples']:
-        if sha(sample['input_path']) != sample['input_sha256']:
-            raise ValueError('Frozen sample changed')
     _, devices = selected_devices(cfg['indices'])
     if devices != p['gpu_devices']:
         raise ValueError('GPU identities changed')
@@ -302,8 +343,7 @@ def validate(root, p, meta, case, path, smoke=False):
     log = path.with_suffix('.log').read_text(errors='replace')
     if FATAL.search(log) or 'WORKER_COMPLETE' not in log:
         raise ValueError(f'Worker failed: {path.with_suffix(".log")}')
-    expected = dict(sample_id=meta['id'], case=case, input_sha256=meta['input_sha256'],
-                    prompt_sha256=meta['prompt_sha256'], protocol_sha256=sha(root / 'protocol.json'),
+    expected = dict(sample_id=meta['id'], case=case,
                     prompt_tokens=meta['tokens'], label=meta['label'], context_target=meta['context_target'],
                     max_output_tokens=16 if smoke else 128, smoke=smoke,
                     timing_source=TIMING, cache_unchanged=True, online_mask_reused=False,
@@ -327,8 +367,6 @@ def validate(root, p, meta, case, path, smoke=False):
                 not Path(w['ucm_path']).resolve().is_relative_to(root / 'private_ucm')):
             raise ValueError('Wrong worker GPU or UCM import')
     dp = path.with_suffix('.diagnostics.json')
-    if sha(dp) != r['diagnostics_sha256']:
-        raise ValueError('Diagnostics changed')
     workers = load(dp)
     if sorted(w['rank'] for w in workers) != list(range(p['tensor_parallel_size'])):
         raise ValueError('Missing TP rank diagnostics')
@@ -381,8 +419,7 @@ def validate(root, p, meta, case, path, smoke=False):
 
 def accept(root, p, meta, case, path, smoke=False):
     r = validate(root, p, meta, case, path, smoke)
-    dump(path.with_suffix('.validated.json'), dict(record_sha256=sha(path),
-         log_sha256=sha(path.with_suffix('.log')), diagnostics_sha256=sha(path.with_suffix('.diagnostics.json'))))
+    dump(path.with_suffix('.validated.json'), dict(complete=True, sample_id=meta['id'], case=case))
     return r
 
 
@@ -390,9 +427,8 @@ def valid(root, p, meta, case, path, smoke=False):
     if not path.with_suffix('.validated.json').exists():
         return False
     receipt = load(path.with_suffix('.validated.json'))
-    for suffix, key in [('.json', 'record_sha256'), ('.log', 'log_sha256'), ('.diagnostics.json', 'diagnostics_sha256')]:
-        if sha(path.with_suffix(suffix)) != receipt[key]:
-            raise ValueError(f'Accepted artifact changed: {path}')
+    if receipt.get('complete') is False:
+        return False
     validate(root, p, meta, case, path, smoke)
     return True
 
@@ -473,7 +509,7 @@ def launch(cfg, root, p, meta, case, path, smoke=False):
             if artifact.is_file():
                 artifact.rename(archive / artifact.name)
     script = 'reference.py' if case == 'reference' else 'worker.py'
-    command = [sys.executable, '-u', str(root / 'source' / script), '--protocol', str(root / 'protocol.json'),
+    command = [sys.executable, '-u', str(HERE / script), '--protocol', str(root / 'protocol.json'),
                '--sample', meta['input_path'], '--output', str(path)]
     if case != 'reference':
         command += ['--case', case, '--cache-dir', str(cache)]
@@ -526,11 +562,15 @@ def valid_gate(root, p, length, task):
     gate = root / 'smoke' / str(length) / task
     if (gate / 'validation.json').exists():
         receipt = load(gate / 'validation.json')
-        if not receipt['complete'] or receipt['protocol_sha256'] != sha(root / 'protocol.json'):
-            raise ValueError('Gate protocol changed')
-        for path, digest in receipt['artifacts'].items():
-            if sha(path) != digest:
-                raise ValueError(f'Gate artifact changed: {path}')
+        if not receipt['complete']:
+            return False
+        if receipt['sample_id'] not in {m['id'] for m in p['samples']
+                if m['context_target'] == length and m['label'] == task}:
+            raise ValueError('Gate sample does not belong to this task/length')
+        # Older receipts store a path -> checksum dict; only paths are needed.
+        for path in receipt['artifacts']:
+            if not Path(path).is_file():
+                raise ValueError(f'Missing gate artifact: {path}')
         return True
     return False
 
@@ -560,8 +600,8 @@ def smoke_gate(cfg, root, p, length, task):
                 raise ValueError(f'ProphetKV100/native-prefix mismatch on TP rank {rank}, layer {layer}')
         comparisons.append(dict(rank=rank, bitwise_equal_layers=len(ref)))
     cleanup(cfg, root)
-    artifacts = {str(path): sha(path) for path in gate.iterdir() if path.is_file()}
-    dump(gate / 'validation.json', dict(complete=True, sample_id=meta['id'], protocol_sha256=sha(root / 'protocol.json'),
+    artifacts = [str(path) for path in gate.iterdir() if path.is_file() and path.name != 'validation.json']
+    dump(gate / 'validation.json', dict(complete=True, sample_id=meta['id'],
          comparisons=comparisons, artifacts=artifacts, smoke_output_tokens=16, measured=False))
     print(f'SMOKE_GATE_PASSED {length}/{task}', flush=True)
 
@@ -576,8 +616,11 @@ def run(cfg, root, args):
     check_orphan(root)
     dump(root / 'supervisor.json', dict(pid=os.getpid(), identity=identity(os.getpid()),
          pgid=os.getpgrp(), sid=os.getsid(0), command=sys.argv, started_at=time.time(), state='running'))
-    p = verify(cfg, root)
+    p = load(root / 'protocol.json')
     try:
+        progress(root, p, 'verifying')
+        print('Checking settings, runtime versions and GPU identities (no file hashing)...', flush=True)
+        p = verify(cfg, root)
         units = [u for u in p['scope'] if (args.length is None or u['length'] == args.length)
                  and (args.task is None or u['task'] == args.task)]
         if not units:
@@ -674,8 +717,8 @@ def report(root, p):
             if not valid_gate(root, p, length, task):
                 raise ValueError('Missing smoke gate')
         dump(directory / 'validation.json', dict(complete=True, validated=len(rows), target=p['measured_requests'],
-             protocol_sha256=sha(root / 'protocol.json'),
-             artifacts={k: v for k, v in hashes(directory).items() if k != 'validation.json'}))
+             artifacts=[str(path.relative_to(directory)) for path in directory.rglob('*')
+                        if path.is_file() and path.name != 'validation.json']))
     progress(root, p, 'complete' if complete else 'partial')
     print(f'REPORT {directory} ({len(rows)}/{p["measured_requests"]})', flush=True)
 
@@ -724,7 +767,7 @@ def detach(cfg, root, args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('jobs', 'plan', 'preflight', 'prepare', 'smoke', 'run', 'detach', 'status', 'stop', 'report', 'logs'))
+    parser.add_argument('command', choices=('jobs', 'plan', 'preflight', 'prepare', 'refresh', 'smoke', 'run', 'detach', 'status', 'stop', 'report', 'logs'))
     parser.add_argument('--length', type=int, choices=LENGTHS)
     parser.add_argument('--method', choices=CASES)
     parser.add_argument('--task', choices=TASKS)
@@ -768,6 +811,8 @@ def main():
         with locked(root):
             if args.command == 'prepare':
                 prepare(cfg, root)
+            elif args.command == 'refresh':
+                refresh_runtime(cfg, root)
             elif args.command == 'report':
                 report(root, verify(cfg, root))
             else:

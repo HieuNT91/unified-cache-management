@@ -13,7 +13,7 @@ license = { file="LICENSE" }
 readme = "README.md"
 description = "Persist and reuse KV Cache to speedup your LLM."
 requires-python = ">=3.10"
-dependencies = ["wrapt==1.17.2"]
+dependencies = ["wrapt==1.17.2", "typing_extensions>=4.0"]
 dynamic = [ "version", "optional-dependencies"]
 
 [project.urls]

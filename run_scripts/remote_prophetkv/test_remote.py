@@ -1,4 +1,5 @@
 """CPU safety/protocol tests. No GPU work or historical scheduler imports."""
+import ast
 import copy
 import json
 import os
@@ -9,17 +10,101 @@ import subprocess
 import runpy
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zipfile
 
 import common
 import suite
-from cacheblend_ruler import verify_cache, prompt_digest
-from common import dump, load, sha
+from cacheblend_ruler import verify_cache
+from common import dump, load
 from ruler_assets import materialize_hotpot
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_private_connector_imports_on_python310_without_changing_install(self):
+        from typing_extensions import Self
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / 'installed/ucm'
+            relative = Path('integration/vllm/blend_connector.py')
+            connector = installed / relative
+            connector.parent.mkdir(parents=True)
+            original = ('from typing import TYPE_CHECKING, List, Self, Tuple\n'
+                        'class Chunk:\n'
+                        '    def merge(self, other: Self) -> None: pass\n')
+            connector.write_text(original)
+            private = Path(directory) / 'private/ucm'
+            suite.copy_private_ucm(installed, private)
+            # Simulate Python 3.10 even when the test interpreter is newer.
+            typing310 = SimpleNamespace(TYPE_CHECKING=False, List=list, Tuple=tuple)
+            namespace = {}
+            with patch.dict(sys.modules, {'typing': typing310}):
+                exec(compile((private / relative).read_text(), str(relative), 'exec'), namespace)
+            self.assertIs(namespace['Chunk'].merge.__annotations__['other'], Self)
+            self.assertEqual(connector.read_text(), original)
+            # An already-compatible installed copy is preserved byte-for-byte.
+            fixed = (private / relative).read_bytes()
+            connector.write_bytes(fixed)
+            suite.copy_private_ucm(installed, private)
+            self.assertEqual((private / relative).read_bytes(), fixed)
+
+        # Exercise the checkout's actual typing imports without importing CUDA/vLLM.
+        tree = ast.parse((common.REPO / 'ucm' / relative).read_text())
+        imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)
+                   and node.module in ('typing', 'typing_extensions')]
+        with patch.dict(sys.modules, {'typing': typing310}):
+            namespace = {}
+            exec(compile(ast.Module(body=imports, type_ignores=[]), str(relative), 'exec'), namespace)
+        self.assertIs(namespace['Self'], Self)
+
+    def test_vllm092_patches_resolve_uuid_and_release_nvml_on_failure(self):
+        original = '''import os
+class Platform:
+    device_control_env_var = "CUDA_VISIBLE_DEVICES"
+    @classmethod
+    def device_id_to_physical_device_id(cls, device_id: int):
+        if cls.device_control_env_var in os.environ and os.environ[
+                cls.device_control_env_var] != "":
+            device_ids = os.environ[cls.device_control_env_var].split(",")
+            physical_device_id = device_ids[device_id]
+            return int(physical_device_id)
+        else:
+            return device_id
+
+'''
+        for filename in ('vllm-adapt.patch', 'vllm-adapt-sparse.patch'):
+            with self.subTest(patch=filename), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / 'vllm/platforms/interface.py'
+                path.parent.mkdir(parents=True)
+                path.write_text(original)
+                patch_file = common.REPO / 'ucm/integration/vllm/patch/0.9.2' / filename
+                subprocess.run(['git', 'apply', '--include=vllm/platforms/interface.py', str(patch_file)],
+                               cwd=root, check=True, capture_output=True)
+                namespace = runpy.run_path(str(path))
+                resolve = namespace['Platform'].device_id_to_physical_device_id
+                nvml = Mock()
+                nvml.nvmlDeviceGetIndex.return_value = 7
+                modules = {'vllm': SimpleNamespace(),
+                           'vllm.utils': SimpleNamespace(import_pynvml=lambda: nvml)}
+                with patch.dict(sys.modules, modules), patch.dict(os.environ, {}, clear=True):
+                    self.assertEqual(resolve(1), 1)
+                    os.environ['CUDA_VISIBLE_DEVICES'] = ''
+                    self.assertEqual(resolve(1), 1)
+                    os.environ['CUDA_VISIBLE_DEVICES'] = '5,2'
+                    self.assertEqual(resolve(1), 2)
+                    nvml.nvmlInit.assert_not_called()
+                    os.environ['CUDA_VISIBLE_DEVICES'] = 'GPU-first,GPU-second'
+                    self.assertEqual(resolve(1), 7)
+                    nvml.nvmlDeviceGetHandleByUUID.assert_called_once_with('GPU-second')
+                    nvml.nvmlInit.assert_called_once_with()
+                    nvml.nvmlShutdown.assert_called_once_with()
+                    nvml.reset_mock()
+                    nvml.nvmlDeviceGetHandleByUUID.side_effect = RuntimeError('Unknown UUID')
+                    with self.assertRaisesRegex(RuntimeError, 'Unknown UUID'):
+                        resolve(0)
+                    nvml.nvmlShutdown.assert_called_once_with()
+                    self.assertEqual(os.environ['CUDA_VISIBLE_DEVICES'], 'GPU-first,GPU-second')
+
     def test_packaged_hotpot_materializes_offline_atomically(self):
         rows = [dict(_id='x', question='Q?', answer='A', context=[['Doc', ['Text']]])]
         with tempfile.TemporaryDirectory() as directory:
@@ -272,11 +357,11 @@ class ValidationTests(unittest.TestCase):
         dump(self.root / 'protocol.json', self.p)
         ids = [8] * 63 + [0] + [9] * 63 + [0] + [10] * 256
         self.sample = dict(id='sample', dataset='ruler', label='niah_multivalue', token_ids=ids,
-                           prompt_sha256=prompt_digest(ids), boundaries=[0, 64, 128, 384], tokens=len(ids),
+                           boundaries=[0, 64, 128, 384], tokens=len(ids),
                            fresh_suffix_tokens=256, context_target=8192, query=dict(positions=[370]), source_metadata=dict(references=['123']))
         self.input_path = self.root / 'input.json'
         dump(self.input_path, self.sample)
-        self.meta = self.sample | dict(input_path=str(self.input_path), input_sha256=sha(self.input_path))
+        self.meta = self.sample | dict(input_path=str(self.input_path))
         self.path = self.root / 'prophetkv-50.json'
         self.imports = [dict(rank=i, visible_uuid=d['uuid'], ucm_path=str(self.root / 'private_ucm/ucm/__init__.py'))
                         for i, d in enumerate(self.devices)]
@@ -286,8 +371,7 @@ class ValidationTests(unittest.TestCase):
         layers = [dict(kind='layer_counts', layer=f'model.layers.{i}.self_attn.attn',
                        projection_tokens=288, attention_tokens=288, ffn_tokens=288) for i in range(2)]
         self.diag = [w | dict(diagnostics=copy.deepcopy([selection, *layers])) for w in self.imports]
-        self.record = dict(sample_id='sample', case='prophetkv-50', label='niah_multivalue', context_target=8192, input_sha256=sha(self.input_path),
-                           prompt_sha256=self.sample['prompt_sha256'], protocol_sha256=sha(self.root / 'protocol.json'),
+        self.record = dict(sample_id='sample', case='prophetkv-50', label='niah_multivalue', context_target=8192,
                            prompt_tokens=384, max_output_tokens=128, smoke=False, timing_source=common.TIMING,
                            cache_unchanged=True, online_mask_reused=False, gpu_devices=self.devices,
                            tensor_parallel_size=2, ttft_seconds=1., generation_seconds=2., output_tokens=1,
@@ -305,14 +389,119 @@ class ValidationTests(unittest.TestCase):
     def save(self):
         dp = self.path.with_suffix('.diagnostics.json')
         dump(dp, self.diag)
-        dump(self.path, self.record | dict(diagnostics_sha256=sha(dp)))
+        dump(self.path, self.record)
 
-    def test_accept_and_reject_tampered_resume(self):
+    def test_resume_revalidates_results_without_checksums(self):
         suite.accept(self.root, self.p, self.meta, 'prophetkv-50', self.path)
         self.assertTrue(suite.valid(self.root, self.p, self.meta, 'prophetkv-50', self.path))
         self.path.with_suffix('.log').write_text('changed')
-        with self.assertRaisesRegex(ValueError, 'Accepted artifact changed'):
+        with self.assertRaisesRegex(ValueError, 'Worker failed'):
             suite.valid(self.root, self.p, self.meta, 'prophetkv-50', self.path)
+
+    def test_legacy_checksums_ignored_without_rewriting_artifacts(self):
+        self.record.update(protocol_sha256='old', prompt_sha256='old', input_sha256='old', diagnostics_sha256='old')
+        self.sample['prompt_sha256'] = 'old'
+        dump(self.input_path, self.sample)
+        self.save()
+        dump(self.path.with_suffix('.validated.json'), dict(record_sha256='old', log_sha256='old', diagnostics_sha256='old'))
+        before = self.path.read_bytes()
+        with patch('hashlib.sha256', side_effect=AssertionError('Checksum must not run')):
+            self.assertTrue(suite.valid(self.root, self.p, self.meta, 'prophetkv-50', self.path))
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_prepare_and_resume_do_not_read_checkpoint_or_hash_files(self):
+        (self.root / 'protocol.json').unlink()
+        installed = self.root / 'installed/ucm'
+        connector = installed / 'integration/vllm/blend_connector.py'
+        connector.parent.mkdir(parents=True)
+        connector.write_text('from typing import TYPE_CHECKING, List, Self, Tuple\n')
+        (installed / 'sparse/blend').mkdir(parents=True)
+        (installed / 'sparse/factory.py').write_text('# installed factory\n')
+        cfg = dict(scope=[dict(length=8192, task='niah_multivalue')], samples=1,
+                   ruler=str(common.REPO / 'benchmarks/vendor/RULER'),
+                   model='/checkpoint-must-not-be-read', indices=[0, 1], memory=.9)
+        source = self.root / 'datasets/8192/niah_multivalue/validation.jsonl'
+        source.parent.mkdir(parents=True)
+        source.write_text(json.dumps(dict(input='already generated', outputs=['123'])) + '\n')
+        runtime = {'uc-manager': '0.3.0'}
+        with patch('suite.preflight', return_value=(runtime, installed, Path('/runtime-not-scanned'), self.devices, None)), \
+                patch('suite.encode', return_value=self.sample), \
+                patch('hashlib.sha256', side_effect=AssertionError('Checksum must not run')):
+            p = suite.prepare(cfg, self.root)
+        self.assertFalse(p['artifact_checksums'])
+        self.assertNotIn('model_hashes', p)
+        self.assertNotIn('source_hashes', p)
+        # Existing protocols can contain stale hashes, even inaccessible paths.
+        p.update(model_hashes={'/missing/weights.safetensors': 'old'},
+                 source_hashes={'old.py': 'old'}, private_ucm_hashes={'old.py': 'old'},
+                 runtime_hashes={'/missing/runtime.py': 'old'}, dataset_hashes={'/missing/data': 'old'})
+        dump(self.root / 'protocol.json', p)
+        before = (self.root / 'protocol.json').read_bytes()
+        with patch('suite.version', return_value='0.3.0'), \
+                patch('suite.selected_devices', return_value=('', self.devices)), \
+                patch('hashlib.sha256', side_effect=AssertionError('Checksum must not run')):
+            self.assertEqual(suite.verify(cfg, self.root), p)
+            with self.assertRaisesRegex(ValueError, 'Configuration changed'):
+                suite.verify(cfg | dict(samples=100), self.root)
+        self.assertEqual((self.root / 'protocol.json').read_bytes(), before)
+
+    def test_refresh_repairs_prepared_job_and_archives_smoke(self):
+        cfg = dict(samples=100)
+        p = self.p | dict(settings=cfg, samples=[self.meta], measured_requests=7,
+                         scope=[dict(length=8192, task='niah_multivalue')])
+        dump(self.root / 'protocol.json', p)
+        connector = self.root / 'private_ucm/ucm/integration/vllm/blend_connector.py'
+        connector.parent.mkdir(parents=True)
+        connector.write_text('from typing import TYPE_CHECKING, List, Self, Tuple\n')
+        runtime = self.root / 'private_ucm/ucm/sparse/prophetkv/runtime.py'
+        runtime.parent.mkdir(parents=True)
+        runtime.write_text('# old runtime\n')
+        dump(self.root / 'smoke/validation.json', dict(complete=False))
+        before = (self.root / 'protocol.json').read_bytes()
+        input_before = self.input_path.read_bytes()
+        with suite.locked(self.root):
+            suite.refresh_runtime(cfg, self.root)
+        self.assertIn('from typing_extensions import Self', connector.read_text())
+        self.assertEqual(runtime.read_text(), (common.HERE / 'method/prophetkv/runtime.py').read_text())
+        self.assertEqual((self.root / 'protocol.json').read_bytes(), before)
+        self.assertEqual(self.input_path.read_bytes(), input_before)
+        self.assertFalse((self.root / 'smoke').exists())
+        archives = list((self.root / 'runtime-refresh').iterdir())
+        self.assertEqual(len(archives), 1)
+        self.assertTrue((archives[0] / 'smoke/validation.json').exists())
+        suite.refresh_runtime(cfg, self.root)
+        self.assertEqual(list((self.root / 'runtime-refresh').iterdir()), archives)
+
+    def test_refresh_refuses_live_engines_or_validated_measurements(self):
+        with patch('suite.check_orphan', side_effect=RuntimeError('live engine')):
+            with self.assertRaisesRegex(RuntimeError, 'live engine'):
+                suite.refresh_runtime({}, self.root)
+        cfg = dict(samples=100)
+        dump(self.root / 'protocol.json', self.p | dict(settings=cfg))
+        private = self.root / 'private_ucm/ucm'
+        connector = private / 'integration/vllm/blend_connector.py'
+        connector.parent.mkdir(parents=True)
+        connector.write_text('from typing import TYPE_CHECKING, List, Self, Tuple\n')
+        runtime = private / 'sparse/prophetkv/runtime.py'
+        runtime.parent.mkdir(parents=True)
+        runtime.write_text('# old runtime\n')
+        dump(self.root / 'records/sample/baseline.validated.json', dict(complete=True))
+        with self.assertRaisesRegex(RuntimeError, 'validated measurements'):
+            suite.refresh_runtime(cfg, self.root)
+        self.assertEqual(runtime.read_text(), '# old runtime\n')
+
+    def test_legacy_smoke_gate_checks_presence_without_hashing(self):
+        p = self.p | dict(samples=[self.meta])
+        gate = self.root / 'smoke/8192/niah_multivalue'
+        artifact = gate / 'reference.json'
+        dump(artifact, dict(control='native_dense_exact_prefix'))
+        dump(gate / 'validation.json', dict(complete=True, sample_id=self.meta['id'],
+             protocol_sha256='old', artifacts={str(artifact): 'old'}))
+        with patch('hashlib.sha256', side_effect=AssertionError('Checksum must not run')):
+            self.assertTrue(suite.valid_gate(self.root, p, 8192, 'niah_multivalue'))
+            artifact.unlink()
+            with self.assertRaisesRegex(ValueError, 'Missing gate artifact'):
+                suite.valid_gate(self.root, p, 8192, 'niah_multivalue')
 
     def test_reject_tp_disagreement(self):
         self.diag[1]['diagnostics'][0]['scores'][0] = 2.
@@ -364,6 +553,48 @@ class NumericalTests(unittest.TestCase):
         import torch
         cls.torch = torch
         sys.path.insert(0, str(Path(__file__).parent / 'method'))
+
+    def test_setup_registers_missing_rope_and_normalizes_only_once(self):
+        from prophetkv.runtime import setup
+        torch = self.torch
+        table = torch.tensor([[1.25, 1.25, 0., 0.], [.75, 1., 1., .75]])
+        original = table.clone()
+        model = type('Qwen3Model', (), {})()
+        model.layers = [SimpleNamespace(self_attn=SimpleNamespace(
+            rotary_emb=SimpleNamespace(cos_sin_cache=table)))] * 64
+        wrapper = SimpleNamespace(model=model)
+        worker = SimpleNamespace(model_runner=SimpleNamespace(model=wrapper))
+        for preinitialized in (False, True):
+            for wrapped in (False, True):
+                with self.subTest(preinitialized=preinitialized, wrapped=wrapped):
+                    connector = SimpleNamespace(cos_sin_cache=table if preinitialized else None,
+                        bind_connector_metadata=Mock(), wait_for_layer_load=Mock())
+                    connector.setup_model = Mock(side_effect=lambda m: setattr(
+                        connector, 'cos_sin_cache', m.model.layers[0].self_attn.rotary_emb.cos_sin_cache))
+                    sparse = SimpleNamespace()
+                    group = SimpleNamespace(connector=connector) if wrapped else connector
+                    modules = {'ucm.sparse.state': SimpleNamespace(
+                        has_ucm_sparse=lambda: True, get_ucm_sparse=lambda: sparse),
+                        'vllm.distributed.kv_transfer': SimpleNamespace(get_kv_transfer_group=lambda: group)}
+                    with patch.dict(sys.modules, modules):
+                        self.assertEqual(setup(worker)['layers'], 64)
+                        normalized = connector.cos_sin_cache
+                        bound = connector.bind_connector_metadata
+                        setup(worker)
+                    self.assertIs(connector.cos_sin_cache, normalized)
+                    self.assertIs(connector.bind_connector_metadata, bound)
+                    torch.testing.assert_close(normalized, table / 1.25)
+                    torch.testing.assert_close(table, original)
+                    if preinitialized:
+                        connector.setup_model.assert_not_called()
+                    else:
+                        connector.setup_model.assert_called_once_with(wrapper)
+
+    def test_delta_rope_rejects_uninitialized_table(self):
+        from prophetkv.runtime import delta_rotation_table
+        for table in (None, self.torch.empty(0, 4), self.torch.ones(3), self.torch.ones(2, 3)):
+            with self.subTest(table=table), self.assertRaisesRegex(RuntimeError, 'initialized'):
+                delta_rotation_table(table)
 
     def test_tp_head_means_equal_global_head_mean(self):
         from prophetkv.selection import context_importance

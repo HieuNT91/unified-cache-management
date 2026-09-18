@@ -2,7 +2,7 @@
 # Scope, devices and output directories for one of four concurrent TP=2 jobs.
 set -euo pipefail
 if [[ $# -lt 1 || ! $1 =~ ^[0-3]$ ]]; then
-    echo 'Usage: bash run_scripts/job.sh {0|1|2|3} {plan|preflight|prepare|smoke|run|detach|status|logs|stop|report} [options]' >&2
+    echo 'Usage: bash run_scripts/job.sh {0|1|2|3} {plan|preflight|prepare|refresh|smoke|run|detach|status|logs|stop|report} [options]' >&2
     exit 2
 fi
 job_id="$1"

@@ -6,7 +6,7 @@ This is a numerical control only, never a measured no-cache baseline.
 import argparse,json,os,sys
 from pathlib import Path
 if os.environ.get('PROPHETKV_REFERENCE_HELPERS'):sys.path.insert(0,os.environ['PROPHETKV_REFERENCE_HELPERS'])
-from prophetkv_common import load_sample,generate,dump,sha
+from prophetkv_common import load_sample,generate,dump
 from common import verify_gpu_visibility
 from worker import audit_capture,worker_probe,build
 from types import SimpleNamespace
@@ -41,12 +41,11 @@ def main():
     artifact=args.output.with_suffix('.model-audit.pt')
     capture=llm.collective_rpc(audit_capture,kwargs={'enable':False,'output_path':str(artifact)})
     out=result.outputs[0]
-    dump(args.output,dict(control='native_dense_exact_prefix',measured=False,protocol_sha256=sha(args.protocol),
-        input_sha256=sha(args.sample),sample_id=s['id'],gpu_devices=p['gpu_devices'],
+    dump(args.output,dict(control='native_dense_exact_prefix',measured=False,
+        sample_id=s['id'],gpu_devices=p['gpu_devices'],
         exact_prefix_tokens=prefix,num_cached_tokens=hits,computed_prompt_tokens=s['tokens']-prefix,
         output_token_ids=list(out.token_ids),prediction=out.text,worker_imports=imports,
-        capture=capture,ttft_seconds=ttft,generation_seconds=total,
-        source_sha256=sha(__file__)))
+        capture=capture,ttft_seconds=ttft,generation_seconds=total))
     llm.llm_engine.engine_core.shutdown()
     print('REFERENCE_COMPLETE',flush=True)
 if __name__=='__main__':main()

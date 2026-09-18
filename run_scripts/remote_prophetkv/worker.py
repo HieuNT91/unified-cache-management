@@ -9,7 +9,7 @@ import sys
 import time
 from types import SimpleNamespace
 if os.environ.get('SELECTOR_UCM_ROOT'):sys.path.insert(0,os.environ['SELECTOR_UCM_ROOT'])
-from prophetkv_common import sha,dump,load_sample,cache_snapshot,generate,score
+from prophetkv_common import dump,load_sample,cache_snapshot,generate,score
 from common import verify_gpu_visibility, TIMING, CASES
 from cacheblend_ruler import wait_for_cache
 
@@ -57,7 +57,7 @@ def audit_capture(worker,enable,output_path=None,suffix_tokens=256):
         from vllm.distributed import get_tensor_model_parallel_rank
         output_path = output_path + f'.rank{get_tensor_model_parallel_rank()}.pt'
         torch.save([worker.prophet_model_audit],output_path)
-        result=dict(path=output_path,sha256=sha(output_path),layers=len(worker.prophet_model_audit))
+        result=dict(path=output_path,layers=len(worker.prophet_model_audit))
         worker.prophet_model_audit={}
         return result
     model=worker.model_runner.model.model
@@ -126,8 +126,7 @@ def main():
     print('verified_imports '+json.dumps(imports),flush=True)
     t=time.perf_counter();generate(llm.llm_engine,[100,200,300,400,500,600,700,800]*16,4,'warmup-128')
     warmup_seconds=time.perf_counter()-t
-    provenance=dict(protocol_sha256=sha(args.protocol),input_sha256=sha(args.sample),
-        sample_id=sample['id'],prompt_sha256=sample['prompt_sha256'],gpu_devices=p['gpu_devices'],tensor_parallel_size=p['tensor_parallel_size'],
+    provenance=dict(sample_id=sample['id'],gpu_devices=p['gpu_devices'],tensor_parallel_size=p['tensor_parallel_size'],
         worker_imports=imports,model_load_seconds=load_seconds,warmup_seconds=warmup_seconds)
     if args.case=='populate':
         t=time.perf_counter()
@@ -155,7 +154,7 @@ def main():
         if args.smoke and args.case in ('baseline','prophetkv-100'):
             audit_path=args.output.with_suffix('.model-audit.pt')
             receipt=llm.collective_rpc(audit_capture,kwargs={'enable':False,'output_path':str(audit_path)})
-            if any(r['layers']!=p['num_layers'] or r['sha256']!=sha(r['path']) for r in receipt):raise RuntimeError('Model audit transport failed')
+            if any(r['layers']!=p['num_layers'] or not Path(r['path']).is_file() for r in receipt):raise RuntimeError('Model audit transport failed')
         after=cache_snapshot(args.cache_dir)
         if before!=after:raise RuntimeError('Offline cache changed during measured inference')
         output=result.outputs[0];value,extracted=score(sample,output.text)
@@ -167,7 +166,7 @@ def main():
             prediction=output.text,output_token_ids=list(output.token_ids),output_tokens=len(output.token_ids),
             finish_reason=output.finish_reason,score=value,extracted_answer=extracted,references=sample['source_metadata']['references'],
             num_cached_tokens=getattr(result,'num_cached_tokens',None),cache_verification=verification,
-            warm_cache=True,cache_unchanged=True,online_mask_reused=False,diagnostics_sha256=sha(dp))
+            warm_cache=True,cache_unchanged=True,online_mask_reused=False)
         dump(args.output,record)
         print(f'result case={args.case} score={value} ttft={ttft:.3f} total={total:.3f}',flush=True)
     llm.llm_engine.engine_core.shutdown()

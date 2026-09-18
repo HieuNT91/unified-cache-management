@@ -48,10 +48,6 @@ def score_prediction(task, prediction, references):
 
 
 
-def prompt_digest(tokens):
-    return hashlib.sha256(struct.pack(f"<{len(tokens)}I", *tokens)).hexdigest()
-
-
 
 def verify_cache(args, token_groups):
     """Check every expected block and TP shard in this UCM 0.3.0 NFS store.
@@ -103,4 +99,3 @@ def wait_for_cache(args, token_groups, clock=time.monotonic, sleep=time.sleep):
             if remaining <= 0:
                 raise RuntimeError(f'Cache readiness timed out: {error}') from error
             sleep(min(0.25, remaining))
-

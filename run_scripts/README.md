@@ -45,14 +45,50 @@ job scripts automatically append `job-0`, `job-1`, `job-2`, or `job-3` and set
 the corresponding physical GPU pair. You do not need to set `GPU_INDICES`.
 
 The new default parent is `.results/qwen3-32b-prophetkv-ruler-tp2/`.
-Old TP=8 results remain intact. Previously prepared protocols cannot be resumed
-with these changed sources, task scopes or GPU assignments; prepare new job directories.
+Old TP=8 results remain intact. Changed task scopes, sample counts or GPU assignments
+require new job directories. Existing TP=2 protocols with matching settings can resume.
 
 The runtime remains UCM 0.3.0, patched vLLM 0.9.2 with Qwen3 sparse hooks,
 PyTorch 2.7.0, Transformers 4.53.2. RULER dependencies include PyYAML,
 wonderwords and NLTK sentence-tokenizer data. These scripts do not install or
 upgrade packages. `MODEL_PATH` must be a complete local BF16 checkpoint with its
 original configuration and tokenizer. Inference and data generation work offline.
+
+Python 3.10 requires `typing_extensions.Self`. Preparation fixes the older
+`typing.Self` import in the private installed-UCM copy;
+the installed package is not rewritten. The checkout connector uses the backport
+too. The checked-in vLLM 0.9.2 `vllm-adapt.patch` and `vllm-adapt-sparse.patch`
+include UUID resolution for `CUDA_VISIBLE_DEVICES`; retain that hunk when applying
+the appropriate patch to vLLM. Numeric visibility remains supported by vLLM,
+but these jobs still pin both physical GPUs by UUID.
+
+ProphetKV setup explicitly registers the loaded model with the connector when its
+RoPE cache is still unset, then normalizes the delta-rotation table once. This
+handles vLLM 0.9.2 installations that do not call the connector model-setup hook.
+
+For an already-prepared job that failed before any measurements were accepted,
+stop its supervisor and wait for its engines to exit, then run:
+
+```bash
+bash run_scripts/job_0.sh refresh
+bash run_scripts/job_0.sh detach
+```
+
+`refresh` updates only the private ProphetKV runtime and the connector's Python
+3.10 import. It retains prompts and the protocol, archives changed files and prior
+smoke checks under `runtime-refresh/`, and reruns qualification on the next launch.
+It refuses to modify a running job or one with accepted measurements.
+
+Preparation, resume, workers and reporting do not compute or verify artifact
+checksums. Existing checksum fields in older protocols/records are ignored;
+there is no checkpoint-wide read before GPU launch. Resume still checks settings,
+package versions and physical GPU identities. Prompt structure, cache block/shard
+availability, cache file sizes, inference diagnostics and result validation remain
+checked. UCM's cache-key hashing is part of KV lookup and is unchanged.
+
+Workers run from the current `run_scripts/remote_prophetkv/` checkout. The
+`source/` copy is retained as an archive and is not executed. Updating scripts
+therefore takes effect on subsequent launches without preparing data again.
 
 **GPU memory:** TP=2 at 64K is intended for A800 **80GB** devices. The launcher
 checks a lower bound for weights plus KV against the configured memory budget;
@@ -153,8 +189,9 @@ bash run_scripts/stop_jobs.sh
 
 `logs` follows the engine active when invoked; re-run it when the method changes.
 A stopped or failed job preserves accepted records. The same detach command
-resumes missing work and archives unaccepted attempts. Configuration/source
-changes require new output directories; incompatible records are not mixed.
+resumes missing work and archives unaccepted attempts. Configuration changes
+require new output directories. Source changes are no longer detected by checksum;
+keep the same inference implementation when resuming accepted measurements.
 The watchdog stops owned engines on fatal logs or 1,800 seconds without logged
 progress (`WATCHDOG_SECONDS` is configurable). GPU allocation alone is not progress.
 
@@ -169,7 +206,7 @@ progress (`WATCHDOG_SECONDS` is configurable). GPU allocation alone is not progr
 | `MEASURE_BEGIN` / `MEASURE_END` | Boundaries of the timed request |
 | `result ... score=... ttft=... total=...` | Prediction score and request timings |
 | `WORKER_COMPLETE` | Normal worker shutdown; validation follows |
-| `*.validated.json` | Accepted record/log/diagnostic hashes |
+| `*.validated.json` | Record passed scoring, timing, cache and diagnostic validation |
 | `SMOKE_GATE_PASSED <length>/<task>` | Qualification passed for that task/length |
 | `state: failed` / `Traceback` | Inspect the indicated engine log |
 
@@ -181,7 +218,7 @@ Each job produces its own final artifacts after all **2,800** requests validate:
   context length and method; 28 rows per completed job.
 - `final/REPORT.md`: scope and metric definitions.
 - `final/raw_records.jsonl`: predictions, output token IDs, references, prompt
-  hashes, timings and GPU provenance.
+  lengths, timings and GPU provenance.
 - `final/cache_build_costs.json`: offline population costs and resumed attempts.
 - `final/validation.json`: that job's completion certificate.
 - `records/<task>-<length>-<row>/<method>.{json,log,diagnostics.json}`:
