@@ -24,6 +24,7 @@ from ucm.sparse.base import (
     UcmSparseRole,
 )
 from ucm.sparse.utils import round_up
+from ucm.sparse.blend.selection import selection_scores
 
 
 @contextmanager
@@ -44,6 +45,7 @@ def get_num_blks(num_tokens, block_size):
 @dataclass
 class ReqMeta:
     req_idx: int = 0
+    request_id: str = ""
     need_blend: bool = false
 
     prefix_len: int = 0
@@ -167,6 +169,10 @@ class Blend(UcmSparseBase):
         self.blend_start_req_idx = 0
 
         self.compute_meta = self.blend_config["compute_meta"]
+        for config in self.compute_meta.values():
+            if config.get("selection_metric", "k") not in ("k", "v", "kv"):
+                raise ValueError("selection_metric must be 'k', 'v', or 'kv'")
+        self.selection_diagnostics = []
         self.blend_req_metas: BlendMetaData = BlendMetaData(
             need_re_index=False,
             chunk_blks_hit_mask=torch.zeros(
@@ -196,6 +202,8 @@ class Blend(UcmSparseBase):
                 attn_metadata.seq_lens,
                 self.block_size,
             )
+            if self.blend_req_metas.requests and blend_conn_request_meta[req_id].chunks_meta:
+                self.blend_req_metas.requests[-1].request_id = req_id
 
         return self.blend_req_metas
 
@@ -276,30 +284,52 @@ class Blend(UcmSparseBase):
                     chunk_hit_mask.copy_(src)
 
                     his_vllm_blk_ids = his_vllm_blk_ids[chunk_hit_mask]
-                    his_k = kv_cache[0, his_vllm_blk_ids]
                     candidate_len = req_meta.chunk_hit_blk_len * self.block_size
-                    his_k = his_k.reshape(candidate_len, -1)
-
-                    req_key = key[req_query_start:req_chunk_end]
-
-                    # req_key does not contain prefix cache
-                    golden_k = req_key.reshape(
-                        req_meta.chunks_blk_len, self.block_size, -1
-                    )[chunk_hit_mask]
-                    golden_k = golden_k.reshape(candidate_len, -1)
+                    config = self.compute_meta[layer_name]
+                    metric = config.get("selection_metric", "k")
+                    his_k = golden_k = his_v = golden_v = None
+                    # Both channels use the same eligible block IDs and query
+                    # positions. The connector has already aligned cached K.
+                    if metric in ("k", "kv"):
+                        his_k = kv_cache[0, his_vllm_blk_ids].reshape(candidate_len, -1)
+                        golden_k = key[req_query_start:req_chunk_end].reshape(
+                            req_meta.chunks_blk_len, self.block_size, -1
+                        )[chunk_hit_mask].reshape(candidate_len, -1)
+                    if metric in ("v", "kv"):
+                        his_v = kv_cache[1, his_vllm_blk_ids].reshape(candidate_len, -1)
+                        golden_v = value[req_query_start:req_chunk_end].reshape(
+                            req_meta.chunks_blk_len, self.block_size, -1
+                        )[chunk_hit_mask].reshape(candidate_len, -1)
 
                 with nvtx_range(f"calculate topK, req :{req_meta.req_idx}"):
-                    diff_k = torch.sum((his_k - golden_k).abs(), dim=[1])
+                    scores, diff_k, diff_v = selection_scores(
+                        his_k, golden_k, his_v, golden_v, metric
+                    )
                     topK_num = int(
                         candidate_len * self.compute_meta[layer_name]["ratio"]
                     )
 
-                    topK_indices = torch.topk(diff_k, k=topK_num).indices
+                    topK_indices = torch.topk(scores, k=topK_num).indices
 
                     # get origin idx in req_key
                     topK_indices = self.mask_idx[: req_meta.chunks_blk_len][
                         chunk_hit_mask
                     ].reshape(-1)[topK_indices]
+                    if config.get("selection_diagnostics", False):
+                        # Retain only small per-token tensors on device. The
+                        # caller must drain/serialize these AFTER timed generation.
+                        self.selection_diagnostics.append(dict(
+                            request_id=req_meta.request_id, layer=layer_name,
+                            selection_metric=metric, ratio=config["ratio"],
+                            eligible_count=candidate_len, selected_count=topK_num,
+                            prefix_tokens=req_meta.prefix_len,
+                            suffix_tokens=req_meta.suffix_len,
+                            eligible_positions=self.mask_idx[:req_meta.chunks_blk_len][
+                                chunk_hit_mask
+                            ].reshape(-1) + req_meta.prefix_len,
+                            selected_positions=topK_indices + req_meta.prefix_len,
+                            scores=scores, dK=diff_k, dV=diff_v,
+                        ))
 
                 with nvtx_range(f"update blend meta, req :{req_meta.req_idx}"):
                     # update compute_mask

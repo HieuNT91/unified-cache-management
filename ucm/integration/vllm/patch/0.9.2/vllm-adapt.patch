@@ -251,11 +251,15 @@ diff --git a/vllm/model_executor/models/qwen3.py b/vllm/model_executor/models/qw
 index de99a76f2..a98ffa3a4 100644
 --- a/vllm/model_executor/models/qwen3.py
 +++ b/vllm/model_executor/models/qwen3.py
-@@ -50,6 +50,8 @@ from .qwen2 import Qwen2MLP as Qwen3MLP
+@@ -50,6 +50,12 @@ from .qwen2 import Qwen2MLP as Qwen3MLP
  from .qwen2 import Qwen2Model
  from .utils import AutoWeightsLoader, PPMissingLayer, maybe_prefix
  
 +from ucm.sparse.rerope.attn_forward_utils import process_qkv
++from ucm.sparse.state import (
++    maybe_execute_sparse_ffn_begin,
++    maybe_execute_sparse_ffn_finished,
++)
 +
  logger = init_logger(__name__)
  
@@ -272,6 +276,24 @@ index de99a76f2..a98ffa3a4 100644
          output, _ = self.o_proj(attn_output)
          return output
  
+@@ -215,10 +222,16 @@ class Qwen3DecoderLayer(nn.Module):
+         hidden_states = self.self_attn(
+             positions=positions,
+             hidden_states=hidden_states,
+         )
+-
++        hidden_states, residual = maybe_execute_sparse_ffn_begin(
++            hidden_states, residual
++        )
++
+         # Fully Connected
+         hidden_states, residual = self.post_attention_layernorm(
+             hidden_states, residual)
+         hidden_states = self.mlp(hidden_states)
++        hidden_states, residual = maybe_execute_sparse_ffn_finished(
++            hidden_states, residual
++        )
+         return hidden_states, residual
 diff --git a/vllm/model_executor/models/qwen3_moe.py b/vllm/model_executor/models/qwen3_moe.py
 index ff182aadf..812e5d426 100644
 --- a/vllm/model_executor/models/qwen3_moe.py
@@ -839,15 +861,15 @@ index 277bac5d6..7eba71ead 100644
              hidden_states=hidden_states,
          )
 -
-+        residual, hidden_states = maybe_execute_sparse_ffn_begin(
-+                residual, hidden_states
++        hidden_states, residual = maybe_execute_sparse_ffn_begin(
++                hidden_states, residual
 +            )
          # Fully Connected
          hidden_states, residual = self.post_attention_layernorm(
              hidden_states, residual)
          hidden_states = self.mlp(hidden_states)
-+        residual, hidden_states = maybe_execute_sparse_ffn_finished(
-+                residual, hidden_states
++        hidden_states, residual = maybe_execute_sparse_ffn_finished(
++                hidden_states, residual
 +            )
          return hidden_states, residual
  
@@ -1517,4 +1539,3 @@ index c3a3d4230..d1053ca85 100644
              block_table=block_table_tensor,
 -- 
 2.34.1
-

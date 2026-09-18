@@ -201,15 +201,15 @@ index 7ef9d248d..e35ab2fdc 100644
              hidden_states=hidden_states,
          )
 -
-+        residual, hidden_states = maybe_execute_sparse_ffn_begin(
-+                residual, hidden_states
++        hidden_states, residual = maybe_execute_sparse_ffn_begin(
++                hidden_states, residual
 +            )
          # Fully Connected
          hidden_states, residual = self.post_attention_layernorm(
              hidden_states, residual)
          hidden_states = self.mlp(hidden_states)
-+        residual, hidden_states = maybe_execute_sparse_ffn_finished(
-+                residual, hidden_states
++        hidden_states, residual = maybe_execute_sparse_ffn_finished(
++                hidden_states, residual
 +            )
          return hidden_states, residual
  
@@ -236,6 +236,39 @@ index 7ef9d248d..e35ab2fdc 100644
          if not get_pp_group().is_last_rank:
              return IntermediateTensors({
                  "hidden_states": hidden_states,
+diff --git a/vllm/model_executor/models/qwen3.py b/vllm/model_executor/models/qwen3.py
+--- a/vllm/model_executor/models/qwen3.py
++++ b/vllm/model_executor/models/qwen3.py
+@@ -48,6 +48,10 @@ from .adapters import as_seq_cls_model
+ from .interfaces import SupportsLoRA, SupportsPP
+ from .qwen2 import Qwen2MLP as Qwen3MLP
+ from .qwen2 import Qwen2Model
+ from .utils import AutoWeightsLoader, PPMissingLayer, maybe_prefix
+-
++from ucm.sparse.state import (
++    maybe_execute_sparse_ffn_begin,
++    maybe_execute_sparse_ffn_finished,
++)
++
+ logger = init_logger(__name__)
+@@ -215,10 +219,16 @@ class Qwen3DecoderLayer(nn.Module):
+         hidden_states = self.self_attn(
+             positions=positions,
+             hidden_states=hidden_states,
+         )
+-
++        hidden_states, residual = maybe_execute_sparse_ffn_begin(
++            hidden_states, residual
++        )
++
+         # Fully Connected
+         hidden_states, residual = self.post_attention_layernorm(
+             hidden_states, residual)
+         hidden_states = self.mlp(hidden_states)
++        hidden_states, residual = maybe_execute_sparse_ffn_finished(
++            hidden_states, residual
++        )
+         return hidden_states, residual
 diff --git a/vllm/v1/attention/backends/mla/common.py b/vllm/v1/attention/backends/mla/common.py
 index f2aaf59a4..205bdbe71 100644
 --- a/vllm/v1/attention/backends/mla/common.py
@@ -880,4 +913,3 @@ index c3a3d4230..d1053ca85 100644
              block_table=block_table_tensor,
 -- 
 2.34.1
-

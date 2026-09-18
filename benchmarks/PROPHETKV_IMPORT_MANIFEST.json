@@ -1,0 +1,727 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-09-18T09:36:48.906083+00:00",
+  "source_root": "/home/thnguyen/unified-cache-management",
+  "source_git_head": "91118154eecd9a824fe1a546b8a6e9614e93ae3d",
+  "destination_base_git_head": "13690636a8781af3d5747205010dd69923d9c1f3",
+  "branch": "prophetkv/import-20260918",
+  "scope": "ProphetKV source and direct shared dependencies; RULER generators and general LongBench/LongBench v2 evaluation code. Standalone CacheBlend, QCFuse, selector, norm and random-skip studies excluded per user clarification.",
+  "upstream_revisions": {
+    "RULER": "c3f5e3b4f87f97e048793bb510a3a6b19a46bf3a",
+    "QCFuse": "38795d91d900debb5f2df23bd7296b3ff97960c8"
+  },
+  "excluded": [
+    "model weights",
+    "Python/CUDA environments",
+    "evaluation datasets and downloaded QA corpora",
+    "live results and process state",
+    "temporary KV caches",
+    "standalone CacheBlend/QCFuse and other historical ablation studies"
+  ],
+  "files": [
+    {
+      "source": "benchmarks/PROPHETKV.md",
+      "destination": "benchmarks/PROPHETKV.md",
+      "sha256": "91f8fc7a97471f09d6988d660bfe85358fc9021ba1238de08cf768311be606e7",
+      "bytes": 5267,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/cacheblend_prophetkv.py",
+      "destination": "benchmarks/cacheblend_prophetkv.py",
+      "sha256": "9c95a0a612a411087055d4efccd897229769466e7f01f6be59b6ad7a27bd9651",
+      "bytes": 9896,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/cacheblend_ruler.py",
+      "destination": "benchmarks/cacheblend_ruler.py",
+      "sha256": "598f62dfaac357d114e91ae5edec0c09816002356a93aca6e869fdd8c711a728",
+      "bytes": 22040,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/fill_kv_repair_chunks.py",
+      "destination": "benchmarks/fill_kv_repair_chunks.py",
+      "sha256": "1e775924657dea502368059aab80b1f56dcfeed7e75fe62ece6be3e93126e15b",
+      "bytes": 6515,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/fill_kv_repair_report.py",
+      "destination": "benchmarks/fill_kv_repair_report.py",
+      "sha256": "f39b77900bb24dd6992a43e456b06faef5090d8be5e5f6eacba71dc56796499f",
+      "bytes": 9140,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv64k/PROPHETKV.md",
+      "destination": "benchmarks/prophetkv64k/PROPHETKV.md",
+      "sha256": "a36c02140a784da879ff7934833c96d7e8d09fab4ad808fd3d2130ae0b54c448",
+      "bytes": 2354,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv64k/cacheblend_prophetkv.py",
+      "destination": "benchmarks/prophetkv64k/cacheblend_prophetkv.py",
+      "sha256": "fb96322225b0ccc47b06ee69c28be22da87685ad435b0be19a739c19596013df",
+      "bytes": 9877,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv64k/cacheblend_ruler.py",
+      "destination": "benchmarks/prophetkv64k/cacheblend_ruler.py",
+      "sha256": "598f62dfaac357d114e91ae5edec0c09816002356a93aca6e869fdd8c711a728",
+      "bytes": 22040,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv64k/prophetkv_common.py",
+      "destination": "benchmarks/prophetkv64k/prophetkv_common.py",
+      "sha256": "0d64b1b2a162a4e71e3249c9802a2d347b32e61a2ea0fb5df0ea8a09db3d5317",
+      "bytes": 4096,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv64k/prophetkv_data.py",
+      "destination": "benchmarks/prophetkv64k/prophetkv_data.py",
+      "sha256": "8b060aa4d5c41a0485c8a8906b1e938ecfc477e52faf37936e4480c318ebe17b",
+      "bytes": 5684,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv64k/prophetkv_gpu.py",
+      "destination": "benchmarks/prophetkv64k/prophetkv_gpu.py",
+      "sha256": "5031026794c0b862cf5e9bb9f1ab620dffed8c8b4e3596706cdee82c4b57a024",
+      "bytes": 3680,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv64k/prophetkv_report.py",
+      "destination": "benchmarks/prophetkv64k/prophetkv_report.py",
+      "sha256": "0869db4ec61d05a03109f3123ebd06cc14b31302a43bee51476cd765ccf76989",
+      "bytes": 5579,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv64k/run_prophetkv.py",
+      "destination": "benchmarks/prophetkv64k/run_prophetkv.py",
+      "sha256": "c7cc6ea823c565974c6f463ed6fcc8b41064e15aea64314d705a8fd08c208797",
+      "bytes": 26991,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv64k/run_with_multivalue.py",
+      "destination": "benchmarks/prophetkv64k/run_with_multivalue.py",
+      "sha256": "7ab6327c42c5ad64f4a58e22540fef4ddb159a5d38aa8876b7637241071eb5ec",
+      "bytes": 9555,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv64k/test_prophetkv.py",
+      "destination": "benchmarks/prophetkv64k/test_prophetkv.py",
+      "sha256": "37d62bbb23ec12eb9fcf97a800fda36f935c74f8a8fb6270d2bcbfab21757527",
+      "bytes": 8251,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_common.py",
+      "destination": "benchmarks/prophetkv_common.py",
+      "sha256": "0d64b1b2a162a4e71e3249c9802a2d347b32e61a2ea0fb5df0ea8a09db3d5317",
+      "bytes": 4096,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_csv/PROPHETKV.md",
+      "destination": "benchmarks/prophetkv_csv/PROPHETKV.md",
+      "sha256": "f7c04a61fd6612660d5e83989b6e2889c68cee9d8d0ebc7a1a62297b1448fa42",
+      "bytes": 1510,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_csv/cacheblend_prophetkv.py",
+      "destination": "benchmarks/prophetkv_csv/cacheblend_prophetkv.py",
+      "sha256": "4163b6d83b980f7af12d0c8384c4ca8edd2a90d303f736ac9e482d5d2a2f276c",
+      "bytes": 9863,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_csv/cacheblend_ruler.py",
+      "destination": "benchmarks/prophetkv_csv/cacheblend_ruler.py",
+      "sha256": "598f62dfaac357d114e91ae5edec0c09816002356a93aca6e869fdd8c711a728",
+      "bytes": 22040,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_csv/prophetkv_common.py",
+      "destination": "benchmarks/prophetkv_csv/prophetkv_common.py",
+      "sha256": "0d64b1b2a162a4e71e3249c9802a2d347b32e61a2ea0fb5df0ea8a09db3d5317",
+      "bytes": 4096,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_csv/prophetkv_data.py",
+      "destination": "benchmarks/prophetkv_csv/prophetkv_data.py",
+      "sha256": "0b8a5486c735126728bcbe653e514bb64b65ec12c8b3e2b37222535dfc5c9500",
+      "bytes": 6640,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_csv/prophetkv_gpu.py",
+      "destination": "benchmarks/prophetkv_csv/prophetkv_gpu.py",
+      "sha256": "bcf3364b5cb231b7534319a82143bf95b26aeaed0d37fb440b6ec403ba7d9353",
+      "bytes": 3662,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_csv/prophetkv_report.py",
+      "destination": "benchmarks/prophetkv_csv/prophetkv_report.py",
+      "sha256": "01f71459edc04919405e252dcc9cc6fa50c42be77e871fdb9adc9d2514cacb6b",
+      "bytes": 5577,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_csv/run_prophetkv.py",
+      "destination": "benchmarks/prophetkv_csv/run_prophetkv.py",
+      "sha256": "22e27184fc6b889c2afccb66f8b76b99e6b926cb900f3e3351ae3717d88f4d7d",
+      "bytes": 27864,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_csv/test_prophetkv.py",
+      "destination": "benchmarks/prophetkv_csv/test_prophetkv.py",
+      "sha256": "37d62bbb23ec12eb9fcf97a800fda36f935c74f8a8fb6270d2bcbfab21757527",
+      "bytes": 8251,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_data.py",
+      "destination": "benchmarks/prophetkv_data.py",
+      "sha256": "281b00c5f2e40c5089ce32f98c6a8e3048b0f92b9e55c9559cf0b46327b9630a",
+      "bytes": 5327,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_gpu.py",
+      "destination": "benchmarks/prophetkv_gpu.py",
+      "sha256": "34da535ec1b2f1ea65776ace0d05d240c8102633b65ce55d3e2c82cdce77641a",
+      "bytes": 3779,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/prophetkv_report.py",
+      "destination": "benchmarks/prophetkv_report.py",
+      "sha256": "f0786ae7970618a569d2f68509adf502c6dd3ad27bf9264ee1766b5c21e50b1c",
+      "bytes": 6515,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/run_prophetkv.py",
+      "destination": "benchmarks/run_prophetkv.py",
+      "sha256": "cd4d259bc2bb60dc54eb0cd0752645227d9d1e4f3a6375c5be0aebc64d19e329",
+      "bytes": 26461,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "benchmarks/test_prophetkv.py",
+      "destination": "benchmarks/test_prophetkv.py",
+      "sha256": "54a9fd30ba6d43ba6b0151f3e73c838f5fd0b5e6c5e3f48fb9e1e1af3166753e",
+      "bytes": 8251,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "test/common/uc_eval/README.md",
+      "destination": "test/common/uc_eval/README.md",
+      "sha256": "ddb4364e65a93b755122aadbdb763d223d316616f7b5e0d0dce93ccc297b7cd3",
+      "bytes": 15915,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/datasets/doc_qa/demo.jsonl",
+      "destination": "test/common/uc_eval/datasets/doc_qa/demo.jsonl",
+      "sha256": "bba562df6725eb11b4b599ff027eb44348bd95bc1e22f8bf21a62e1add7f0f00",
+      "bytes": 46862,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/datasets/multi_turn_dialogues/demo/demo.json",
+      "destination": "test/common/uc_eval/datasets/multi_turn_dialogues/demo/demo.json",
+      "sha256": "9461b70fca57670bc62b8c7e68452a72d9affff75ff6dcda5eeeaceacc785ef1",
+      "bytes": 6814,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/datasets/multi_turn_dialogues/multiturndialog.json",
+      "destination": "test/common/uc_eval/datasets/multi_turn_dialogues/multiturndialog.json",
+      "sha256": "d6e367471178b9ee01adac5074b9bbc88d9251aebd806b728995b5aabb4f6403",
+      "bytes": 43,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/task.py",
+      "destination": "test/common/uc_eval/task.py",
+      "sha256": "4fa75d0123d68d5ccab624c6563ad3e8acf4034de28af6f2e8ff8a2ee3e402bd",
+      "bytes": 16516,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/utils/benchmark.py",
+      "destination": "test/common/uc_eval/utils/benchmark.py",
+      "sha256": "bad74c27cbc5dae43b7b822248c6e2a8c1d46e91a34124cb738a1f74076e89bf",
+      "bytes": 12070,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/utils/client.py",
+      "destination": "test/common/uc_eval/utils/client.py",
+      "sha256": "bdbf0c5d82b22fb06e07d8f64618feb4dddf79432156579a88ac86ce8507cd59",
+      "bytes": 20778,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/utils/config_loader.py",
+      "destination": "test/common/uc_eval/utils/config_loader.py",
+      "sha256": "db8c8696550fa76f85f418718147b2fe6efa17fbc388fe930025f0b6c6dff87b",
+      "bytes": 7855,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/utils/data_class.py",
+      "destination": "test/common/uc_eval/utils/data_class.py",
+      "sha256": "21ec7092e943c91f35d89aefc61ddd12c448edca2783581fa3b35bea3058a972",
+      "bytes": 5078,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/utils/dataloader.py",
+      "destination": "test/common/uc_eval/utils/dataloader.py",
+      "sha256": "b2b4d05fc253c830e4f4b1b2403a84f052393c1b16ce13218ca3eb79953225ff",
+      "bytes": 11643,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/utils/metric.py",
+      "destination": "test/common/uc_eval/utils/metric.py",
+      "sha256": "96b8292eb31509c58f5364fbe3277cadb8cecaa1904d4a36da073cbf978adfa7",
+      "bytes": 9880,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/utils/prompt_config.py",
+      "destination": "test/common/uc_eval/utils/prompt_config.py",
+      "sha256": "9c2bb35efcbd680217cac59eaab3c8ad429317decadbb0b90af35eda7efbde10",
+      "bytes": 979,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/common/uc_eval/utils/utils.py",
+      "destination": "test/common/uc_eval/utils/utils.py",
+      "sha256": "742d2e66b73eafe04e1a8953b19bca82bf696d59d28fa8df8e044a6d82c6fabf",
+      "bytes": 11266,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "test/suites/E2E/test_evaluator.py",
+      "destination": "test/suites/E2E/test_evaluator.py",
+      "sha256": "c71762a6c077cf4506d0515b4df14003f10a3e37fd74213b82b540beb0ddf194",
+      "bytes": 1655,
+      "category": "implementation_and_experiments",
+      "action": "already_identical"
+    },
+    {
+      "source": "ucm/integration/vllm/patch/0.9.2/vllm-adapt-sparse.patch",
+      "destination": "ucm/integration/vllm/patch/0.9.2/vllm-adapt-sparse.patch",
+      "sha256": "85cf03dc17a293960b3253fc16212a9232fb4deb60f05c9d7030d15c5e7db428",
+      "bytes": 41821,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "ucm/integration/vllm/patch/0.9.2/vllm-adapt.patch",
+      "destination": "ucm/integration/vllm/patch/0.9.2/vllm-adapt.patch",
+      "sha256": "8cf8191da69bb483d77aae5081cf287d052cc3cf4dd58c2f399fa1414ac044a7",
+      "bytes": 68998,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "ucm/sparse/blend/blend.py",
+      "destination": "ucm/sparse/blend/blend.py",
+      "sha256": "aa9503eb7800d7869d3167a34e5070c98eefb11f31290b68ef0fa20812cc98c5",
+      "bytes": 16972,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "ucm/sparse/blend/selection.py",
+      "destination": "ucm/sparse/blend/selection.py",
+      "sha256": "b680c6d7463537e388b944c425dfbd59d6ab768afd611453f51a827a10f2141e",
+      "bytes": 1237,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "ucm/sparse/factory.py",
+      "destination": "ucm/sparse/factory.py",
+      "sha256": "29df176c27f5766fae9ecff3b0aa5a084ccc325634f347e6c8bf40a3911ee6ec",
+      "bytes": 2180,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "ucm/sparse/prophetkv/__init__.py",
+      "destination": "ucm/sparse/prophetkv/__init__.py",
+      "sha256": "92c0a5ba8d440fcfb33cbbb7336c86fb10bf12babe5c4c886985c77f0ef3fcad",
+      "bytes": 71,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "ucm/sparse/prophetkv/attention.py",
+      "destination": "ucm/sparse/prophetkv/attention.py",
+      "sha256": "652b17a9ca9af1bcf5836e4eeb13f6f654dd6905233673f06a36c348ccb877b6",
+      "bytes": 4172,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "ucm/sparse/prophetkv/causal_kernel.py",
+      "destination": "ucm/sparse/prophetkv/causal_kernel.py",
+      "sha256": "21b5724adfd95308eb80091e52926449fc4dc4896e50c86b057978c41af4d89f",
+      "bytes": 18632,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "ucm/sparse/prophetkv/prophetkv.py",
+      "destination": "ucm/sparse/prophetkv/prophetkv.py",
+      "sha256": "25f262cfc869f71a63f03c3d0502af78866f98f0fbf95739f777b49d8b596135",
+      "bytes": 6790,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "ucm/sparse/prophetkv/runtime.py",
+      "destination": "ucm/sparse/prophetkv/runtime.py",
+      "sha256": "6842c77fa7a42e5d884c2816f886f0cde189e8d11b71b22c89a03fc8084dd833",
+      "bytes": 4616,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "ucm/sparse/prophetkv/score_kernel.py",
+      "destination": "ucm/sparse/prophetkv/score_kernel.py",
+      "sha256": "f76e5f4d0fa829d82a75021116e4b5f025a072f819e734279bf25e090a013285",
+      "bytes": 12991,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": "ucm/sparse/prophetkv/selection.py",
+      "destination": "ucm/sparse/prophetkv/selection.py",
+      "sha256": "2eb8af433bdd1c8d5163c0ce5b2875f71435dfc60e87e2300b3888eb802f6469",
+      "bytes": 3822,
+      "category": "implementation_and_experiments",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/LICENSE",
+      "destination": "benchmarks/vendor/RULER/LICENSE",
+      "sha256": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+      "bytes": 11356,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/README.md",
+      "destination": "benchmarks/vendor/RULER/README.md",
+      "sha256": "f3aae5bbd58fcd7de32aab099c455dd2bbc1da23a2efee9db3071eb9fbf894a3",
+      "bytes": 18187,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/docker/requirements.txt",
+      "destination": "benchmarks/vendor/RULER/docker/requirements.txt",
+      "sha256": "6c366d2f47a50683e66e3d0b1e17aa9901dc313d5374f17e70909d2b5766d8b5",
+      "bytes": 237,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/config_models.sh",
+      "destination": "benchmarks/vendor/RULER/scripts/config_models.sh",
+      "sha256": "f59f5dd0a2e61ba430840f156af534f32a011db640881642d0093a885130cf34",
+      "bytes": 3039,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/config_tasks.sh",
+      "destination": "benchmarks/vendor/RULER/scripts/config_tasks.sh",
+      "sha256": "bd2b228b303951ff6e1dba2dd551270744b50d78f5d51493b0c4abfb41a0c544",
+      "bytes": 1167,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/manifest_utils.py",
+      "destination": "benchmarks/vendor/RULER/scripts/data/manifest_utils.py",
+      "sha256": "ecac79322f28ce9a12388b12e35d560ecb7cdad6b9888467a5a13b0eff2db91e",
+      "bytes": 1327,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/prepare.py",
+      "destination": "benchmarks/vendor/RULER/scripts/data/prepare.py",
+      "sha256": "f2d210860fbf5c640cb41ed104c7a923c9f4043f6e6c354277daacc73afc643d",
+      "bytes": 6730,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/synthetic/common_words_extraction.py",
+      "destination": "benchmarks/vendor/RULER/scripts/data/synthetic/common_words_extraction.py",
+      "sha256": "2671d4a84a383acef2d9e8f691a0bea4da03f1632ca3f4ad3c1de6d27ccbc6b9",
+      "bytes": 9183,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/synthetic/constants.py",
+      "destination": "benchmarks/vendor/RULER/scripts/data/synthetic/constants.py",
+      "sha256": "6296e901d495ec6200dc3f68993ea13d8282e3c0dbe1a8c47967f111105d1fde",
+      "bytes": 3052,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/synthetic/freq_words_extraction.py",
+      "destination": "benchmarks/vendor/RULER/scripts/data/synthetic/freq_words_extraction.py",
+      "sha256": "29b7af97ffdd2122fde348df20cd02add390a21cd6d64b6fd66c8663dc487f67",
+      "bytes": 7766,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/synthetic/json/PaulGrahamEssays_URLs.txt",
+      "destination": "benchmarks/vendor/RULER/scripts/data/synthetic/json/PaulGrahamEssays_URLs.txt",
+      "sha256": "9862c06b4303b7bb6fe4c4a88671c51d2d36ec65757db54730c703d9cf474099",
+      "bytes": 11717,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/synthetic/json/download_paulgraham_essay.py",
+      "destination": "benchmarks/vendor/RULER/scripts/data/synthetic/json/download_paulgraham_essay.py",
+      "sha256": "d89622edfe08d4011718bb2634da742d69a56728139fa5e236e00cca703cc84c",
+      "bytes": 2783,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/synthetic/json/download_qa_dataset.sh",
+      "destination": "benchmarks/vendor/RULER/scripts/data/synthetic/json/download_qa_dataset.sh",
+      "sha256": "368ff4bef09af0fc94205ea4dd8559a2d051c0e33215ca92d45e31e50ea750ac",
+      "bytes": 965,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/synthetic/json/english_words.json",
+      "destination": "benchmarks/vendor/RULER/scripts/data/synthetic/json/english_words.json",
+      "sha256": "affcd6d45fdf3cc843d585c99c97ad615094e760e6c4756b654bab6c73bc2eca",
+      "bytes": 8564991,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/synthetic/niah.py",
+      "destination": "benchmarks/vendor/RULER/scripts/data/synthetic/niah.py",
+      "sha256": "e9cada0a7660d274fe73a1338a90a7087e17b630169f1aaf14a8d3221c6805b5",
+      "bytes": 12733,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/synthetic/qa.py",
+      "destination": "benchmarks/vendor/RULER/scripts/data/synthetic/qa.py",
+      "sha256": "f00c0b59cf8698e90831bbf461c2c4f40f2a30f2469534c27455808c717281d0",
+      "bytes": 9833,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/synthetic/variable_tracking.py",
+      "destination": "benchmarks/vendor/RULER/scripts/data/synthetic/variable_tracking.py",
+      "sha256": "9aac483420e158d116ab63fc43b9606bdb284ac0c053288c30776d5c365530e5",
+      "bytes": 14306,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/template.py",
+      "destination": "benchmarks/vendor/RULER/scripts/data/template.py",
+      "sha256": "2e82d85152212136fffcd5624b158a2c75fd5036ec1c537f4b21eeb78fd18069",
+      "bytes": 1921,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/data/tokenizer.py",
+      "destination": "benchmarks/vendor/RULER/scripts/data/tokenizer.py",
+      "sha256": "c2e4bfab607eef87a86334558303c1811bc8e93f22a5c4b129f302726d2357a4",
+      "bytes": 4075,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/eval/evaluate.py",
+      "destination": "benchmarks/vendor/RULER/scripts/eval/evaluate.py",
+      "sha256": "b9a5fcbded7209663d97670496c74dbcd6358ddbe3d9887a0c5f0c4f974bfe1c",
+      "bytes": 6934,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/eval/synthetic/constants.py",
+      "destination": "benchmarks/vendor/RULER/scripts/eval/synthetic/constants.py",
+      "sha256": "6740467c17b8dc06b6b30f4f97e54ce8de81db0dd879f1538d0b6b5727f4bd5f",
+      "bytes": 1531,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/pred/call_api.py",
+      "destination": "benchmarks/vendor/RULER/scripts/pred/call_api.py",
+      "sha256": "949d06ae8a19266c637064c2dd18c7b3d21a0a7064bfc2ac52fe274b84d19e48",
+      "bytes": 11804,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/pred/client_wrappers.py",
+      "destination": "benchmarks/vendor/RULER/scripts/pred/client_wrappers.py",
+      "sha256": "4530a6b53f451d1af8f29f6ee794fca789feffa92b2e838af2c67a4568244b2c",
+      "bytes": 13743,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/pred/model_wrappers.py",
+      "destination": "benchmarks/vendor/RULER/scripts/pred/model_wrappers.py",
+      "sha256": "78def2b2b619e2095dee3ff8fc52e038c531c6c3bb11735e9ac4ce38cf2e0cd7",
+      "bytes": 5402,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/pred/serve_trt.py",
+      "destination": "benchmarks/vendor/RULER/scripts/pred/serve_trt.py",
+      "sha256": "4d785ace0cfa9ea320ea351db96dcfc422ed0ad21107ec49086d0131668d529a",
+      "bytes": 9348,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/pred/serve_vllm.py",
+      "destination": "benchmarks/vendor/RULER/scripts/pred/serve_vllm.py",
+      "sha256": "57ded4db3e84b5c0f9d5394b45a965ae470282fcbbc4b13674763f4340f9e81a",
+      "bytes": 4173,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/run.sh",
+      "destination": "benchmarks/vendor/RULER/scripts/run.sh",
+      "sha256": "221f90046bc39c24a357c7847ca2203e3fcacd6f8601f62ec8fbf1413006c67f",
+      "bytes": 4223,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/RULER/scripts/synthetic.yaml",
+      "destination": "benchmarks/vendor/RULER/scripts/synthetic.yaml",
+      "sha256": "34bc71dcacdc41a829a170f04b528fbf48d62c616338005ab4991680fbf8cb0b",
+      "bytes": 2356,
+      "category": "ruler_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".data/LongBench-v2/0shot.txt",
+      "destination": "benchmarks/vendor/LongBench-v2/prompts/0shot.txt",
+      "sha256": "68a162252bc9ff71d5d7abca3d69bb31aac3c35f832d657a2866f2018b8a6950",
+      "bytes": 262,
+      "category": "longbench_v2_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".results/qwen3-instruct-qcfuse-longbench-short-20260918/reference/longbench_pred_official.py",
+      "destination": "benchmarks/vendor/LongBench-v2/pred.py",
+      "sha256": "ab63f77866a1c0dc770582bc3fe6b014c3b4be4667399b0ee267075780c6a138",
+      "bytes": 7229,
+      "category": "longbench_v2_reference",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/QCFuse/LICENSE",
+      "destination": "benchmarks/vendor/prophetkv-kernels/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "bytes": 11357,
+      "category": "prophetkv_kernel_license",
+      "action": "copied"
+    },
+    {
+      "source": ".downloads/QCFuse/NOTICE",
+      "destination": "benchmarks/vendor/prophetkv-kernels/NOTICE",
+      "sha256": "9016a838b4717d0a2572134e5c4c56c28ab3984b7a1d9be66dcee889dd0b815b",
+      "bytes": 145,
+      "category": "prophetkv_kernel_license",
+      "action": "copied"
+    }
+  ]
+}

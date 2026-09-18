@@ -1,0 +1,58 @@
+{
+  "validated_at": "2026-09-18T09:41:57.717181+00:00",
+  "manifest_sha256": "075de279192a9522718485929bce8208e33e9655a480c24bba33afff94b53f5c",
+  "manifest_files_verified": 88,
+  "python_files_parsed": 66,
+  "official_ruler_tasks_checked": 13,
+  "cpu_test_suites": [
+    {
+      "directory": "benchmarks",
+      "pattern": "test_prophetkv.py",
+      "passed": 11,
+      "exit_code": 0
+    },
+    {
+      "directory": "benchmarks/prophetkv64k",
+      "pattern": "test_prophetkv.py",
+      "passed": 11,
+      "exit_code": 0
+    },
+    {
+      "directory": "benchmarks/prophetkv_csv",
+      "pattern": "test_prophetkv.py",
+      "passed": 11,
+      "exit_code": 0
+    }
+  ],
+  "note": "The three preserved experiment suites each contain the same 11 core regression tests; this is not 33 independent algorithm tests.",
+  "interpreter": "/home/thnguyen/unified-cache-management/.envs/cacheblend/bin/python",
+  "cuda_visible_devices": "",
+  "gpu_tests_run": false,
+  "experiments_launched": false,
+  "source_files_unchanged": true,
+  "limitations": [
+    "Source snapshot only; external runtime/model/data not installed in destination.",
+    "ProphetKV-specific LongBench and LongBench v2 drivers are not implemented.",
+    "TP=1 / 36-layer Qwen3 only; no new GPU validation."
+  ],
+  "whitespace_check": {
+    "preserved_source_warnings": [
+      "benchmarks/vendor/RULER/README.md",
+      "benchmarks/vendor/RULER/scripts/config_models.sh",
+      "benchmarks/vendor/RULER/scripts/data/prepare.py",
+      "benchmarks/vendor/RULER/scripts/data/synthetic/constants.py",
+      "benchmarks/vendor/RULER/scripts/data/synthetic/json/download_paulgraham_essay.py",
+      "benchmarks/vendor/RULER/scripts/data/template.py",
+      "benchmarks/vendor/RULER/scripts/data/tokenizer.py",
+      "benchmarks/vendor/RULER/scripts/eval/evaluate.py",
+      "benchmarks/vendor/RULER/scripts/eval/synthetic/constants.py",
+      "benchmarks/vendor/RULER/scripts/pred/call_api.py",
+      "benchmarks/vendor/RULER/scripts/pred/client_wrappers.py",
+      "benchmarks/vendor/RULER/scripts/pred/model_wrappers.py",
+      "benchmarks/vendor/RULER/scripts/run.sh",
+      "benchmarks/vendor/RULER/scripts/synthetic.yaml",
+      "ucm/sparse/prophetkv/causal_kernel.py"
+    ],
+    "reason": "Original source bytes retained for a faithful baseline; no formatting-only changes to imported files."
+  }
+}

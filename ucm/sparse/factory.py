@@ -54,3 +54,6 @@ UcmSparseFactory.register_sparse_method(
     "KVStarMultiStep", "ucm.sparse.kvstar.multistep", "KVStarMultiStep"
 )
 UcmSparseFactory.register_sparse_method("Blend", "ucm.sparse.blend.blend", "Blend")
+UcmSparseFactory.register_sparse_method(
+    "ProphetKV", "ucm.sparse.prophetkv.prophetkv", "ProphetKV"
+)
