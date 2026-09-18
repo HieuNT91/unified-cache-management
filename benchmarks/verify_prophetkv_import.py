@@ -19,9 +19,12 @@ def load_module(name, path):
 def main():
     root = Path(__file__).resolve().parents[1]
     manifest = json.loads((root / 'benchmarks/PROPHETKV_IMPORT_MANIFEST.json').read_text())
+    sync_path = root / 'benchmarks/PROPHETKV_SYNC_MANIFEST.json'
+    sync = json.loads(sync_path.read_text()) if sync_path.exists() else {'files': []}
+    entries = manifest['files'] + sync['files']
     failures = []
     parsed = 0
-    for entry in manifest['files']:
+    for entry in entries:
         path = root / entry['destination']
         if not path.is_file():
             failures.append(f"Missing: {entry['destination']}")
@@ -50,6 +53,7 @@ def main():
     print(json.dumps({
         'valid': not failures,
         'manifest_files': len(manifest['files']),
+        'synced_files': len(sync['files']),
         'python_files_parsed': parsed,
         'ruler_tasks_checked': len(bench.TASK_MAX_TOKENS),
         'gpu_execution': False,

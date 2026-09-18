@@ -1,0 +1,25 @@
+{
+  "checked_at": "2026-09-18T13:24:59.692548+00:00",
+  "valid": true,
+  "scope": "local checkout only",
+  "sync_manifest_sha256": "29ac5f19ee034460940952eb017181cbd95f75fcbda6db15f5bf285b83940127",
+  "original_manifest_sha256": "075de279192a9522718485929bce8208e33e9655a480c24bba33afff94b53f5c",
+  "original_files_verified": 88,
+  "synced_files_verified": 40,
+  "python_files_parsed": 105,
+  "ruler_scoring_tasks_checked": 13,
+  "cpu_tests": {
+    "prophetkv_full": 13,
+    "prophetkv_persistent": 17
+  },
+  "gpu_execution": false,
+  "committed": false,
+  "pushed": false,
+  "git_head": "c39967860bfc393ee786fd1544fbfeef5b094a6c",
+  "review_notes": [
+    "Previously imported ProphetKV sources and direct shared dependencies already match the source checkout.",
+    "New source trees preserve source bytes; newer fork upstream code and original import provenance are retained.",
+    "Runtime, input datasets, source-machine paths and GPU UUIDs require preparation before use in another checkout; see PROPHETKV_TRANSFER.md.",
+    "Dummy GPU workloads remain permanently prohibited."
+  ]
+}

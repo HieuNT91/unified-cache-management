@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-09-18T13:24:13.543434+00:00",
+  "source_root": "/home/thnguyen/unified-cache-management",
+  "source_git_head": "91118154eecd9a824fe1a546b8a6e9614e93ae3d",
+  "destination_base_git_head": "c39967860bfc393ee786fd1544fbfeef5b094a6c",
+  "scope": "Add full RULER/LongBench v2 and persistent ProphetKV sources; preserve the original import snapshot and newer fork upstream code.",
+  "files": [
+    {
+      "source": "benchmarks/prophetkv_full/PROPHETKV.md",
+      "destination": "benchmarks/prophetkv_full/PROPHETKV.md",
+      "sha256": "80e4318012b7db71a934fb53c26526221ac9e0bd389508b654fd4cbe5491d68c",
+      "bytes": 3560
+    },
+    {
+      "source": "benchmarks/prophetkv_full/cacheblend_prophetkv.py",
+      "destination": "benchmarks/prophetkv_full/cacheblend_prophetkv.py",
+      "sha256": "b0f0081d94af56bbfda1a4b16c359a60e3b79242029772f39ba33e3e2e6ce7aa",
+      "bytes": 9950
+    },
+    {
+      "source": "benchmarks/prophetkv_full/cacheblend_ruler.py",
+      "destination": "benchmarks/prophetkv_full/cacheblend_ruler.py",
+      "sha256": "598f62dfaac357d114e91ae5edec0c09816002356a93aca6e869fdd8c711a728",
+      "bytes": 22040
+    },
+    {
+      "source": "benchmarks/prophetkv_full/dense_prefix_reference.py",
+      "destination": "benchmarks/prophetkv_full/dense_prefix_reference.py",
+      "sha256": "c5949daca741f4c32f87072a2f1016de23d6a147248d72410a213edbc7ece4e6",
+      "bytes": 2991
+    },
+    {
+      "source": "benchmarks/prophetkv_full/method/prophetkv/__init__.py",
+      "destination": "benchmarks/prophetkv_full/method/prophetkv/__init__.py",
+      "sha256": "92c0a5ba8d440fcfb33cbbb7336c86fb10bf12babe5c4c886985c77f0ef3fcad",
+      "bytes": 71
+    },
+    {
+      "source": "benchmarks/prophetkv_full/method/prophetkv/attention.py",
+      "destination": "benchmarks/prophetkv_full/method/prophetkv/attention.py",
+      "sha256": "652b17a9ca9af1bcf5836e4eeb13f6f654dd6905233673f06a36c348ccb877b6",
+      "bytes": 4172
+    },
+    {
+      "source": "benchmarks/prophetkv_full/method/prophetkv/causal_kernel.py",
+      "destination": "benchmarks/prophetkv_full/method/prophetkv/causal_kernel.py",
+      "sha256": "21b5724adfd95308eb80091e52926449fc4dc4896e50c86b057978c41af4d89f",
+      "bytes": 18632
+    },
+    {
+      "source": "benchmarks/prophetkv_full/method/prophetkv/prophetkv.py",
+      "destination": "benchmarks/prophetkv_full/method/prophetkv/prophetkv.py",
+      "sha256": "b2412fff54135d0cea248165c3479e07b9a24c89230c2cdd52675a0e09d0a019",
+      "bytes": 6896
+    },
+    {
+      "source": "benchmarks/prophetkv_full/method/prophetkv/runtime.py",
+      "destination": "benchmarks/prophetkv_full/method/prophetkv/runtime.py",
+      "sha256": "dd27093ec4ee82a2ff50e255c6fdade5eef9ef8dc1ff605df2eb71c5fc616f8e",
+      "bytes": 4706
+    },
+    {
+      "source": "benchmarks/prophetkv_full/method/prophetkv/score_kernel.py",
+      "destination": "benchmarks/prophetkv_full/method/prophetkv/score_kernel.py",
+      "sha256": "f76e5f4d0fa829d82a75021116e4b5f025a072f819e734279bf25e090a013285",
+      "bytes": 12991
+    },
+    {
+      "source": "benchmarks/prophetkv_full/method/prophetkv/selection.py",
+      "destination": "benchmarks/prophetkv_full/method/prophetkv/selection.py",
+      "sha256": "3d113b0974aab54bbdd5416e157f29536c5d6ff7efd9e13d9d7ba6079cdb9fc0",
+      "bytes": 3830
+    },
+    {
+      "source": "benchmarks/prophetkv_full/prophetkv_common.py",
+      "destination": "benchmarks/prophetkv_full/prophetkv_common.py",
+      "sha256": "7c797ba069fefe14d2c34acaa850bb1285bb854c9aa469a007e7e2ca1291245b",
+      "bytes": 4391
+    },
+    {
+      "source": "benchmarks/prophetkv_full/prophetkv_data.py",
+      "destination": "benchmarks/prophetkv_full/prophetkv_data.py",
+      "sha256": "538ace805244b6e0b03c3868039105c5f525e1827acf23487e212673c44a1cdd",
+      "bytes": 6248
+    },
+    {
+      "source": "benchmarks/prophetkv_full/prophetkv_gpu.py",
+      "destination": "benchmarks/prophetkv_full/prophetkv_gpu.py",
+      "sha256": "dd06c10042901a577f92b0ac1c18560aca2919a8074bf48ae9650afed37d6ea4",
+      "bytes": 3774
+    },
+    {
+      "source": "benchmarks/prophetkv_full/prophetkv_report.py",
+      "destination": "benchmarks/prophetkv_full/prophetkv_report.py",
+      "sha256": "7e3a007dc7adfb7ef7b98ddbc82e590a7ba1629eef57178123fe75ee029687f5",
+      "bytes": 6115
+    },
+    {
+      "source": "benchmarks/prophetkv_full/run_parallel.py",
+      "destination": "benchmarks/prophetkv_full/run_parallel.py",
+      "sha256": "d803dee8eb4070843510822bda9e3aa30be1f597a9abc2c80d63502e5116e4cf",
+      "bytes": 6643
+    },
+    {
+      "source": "benchmarks/prophetkv_full/run_prophetkv.py",
+      "destination": "benchmarks/prophetkv_full/run_prophetkv.py",
+      "sha256": "e7385cbbfae9e92ce1d46a091291cf72d284461aa9f107ec0c9feb363e4fdebe",
+      "bytes": 27039
+    },
+    {
+      "source": "benchmarks/prophetkv_full/run_verified.py",
+      "destination": "benchmarks/prophetkv_full/run_verified.py",
+      "sha256": "f56cabeb59365be915861767bbca4c1e0859bb307381c05bcaddd3f283a14964",
+      "bytes": 10677
+    },
+    {
+      "source": "benchmarks/prophetkv_full/test_prophetkv.py",
+      "destination": "benchmarks/prophetkv_full/test_prophetkv.py",
+      "sha256": "0b1b3611e5d05b969d8cad2b40cb512ea75dd90d5f999ebee9b6ff849c3d22e6",
+      "bytes": 8978
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/cacheblend_prophetkv.py",
+      "destination": "benchmarks/prophetkv_persistent/cacheblend_prophetkv.py",
+      "sha256": "0e540b5538b25ce368676335731f7ce5bdffe77cac976910fe78c8aa90914ec7",
+      "bytes": 9930
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/cacheblend_ruler.py",
+      "destination": "benchmarks/prophetkv_persistent/cacheblend_ruler.py",
+      "sha256": "fed14873672a89f2bebc5bf865948949617433871e34bdab6bb01f7ad3ba2675",
+      "bytes": 22068
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/dense_prefix_reference.py",
+      "destination": "benchmarks/prophetkv_persistent/dense_prefix_reference.py",
+      "sha256": "d59104b2ee275bdd56d9490f0ab3398c8ae21fe06c59a530eab11b608e333674",
+      "bytes": 2983
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/gates.py",
+      "destination": "benchmarks/prophetkv_persistent/gates.py",
+      "sha256": "8fdc884d35533da0c3c524aceb10e66eaa45b6d814f266f04aaba52e6521053a",
+      "bytes": 8029
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/lifecycle.py",
+      "destination": "benchmarks/prophetkv_persistent/lifecycle.py",
+      "sha256": "82c3d950343d27cb6f9d055c7e5a43af9b71cb5111bee22411a599db8539acac",
+      "bytes": 4855
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/method/prophetkv/__init__.py",
+      "destination": "benchmarks/prophetkv_persistent/method/prophetkv/__init__.py",
+      "sha256": "92c0a5ba8d440fcfb33cbbb7336c86fb10bf12babe5c4c886985c77f0ef3fcad",
+      "bytes": 71
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/method/prophetkv/attention.py",
+      "destination": "benchmarks/prophetkv_persistent/method/prophetkv/attention.py",
+      "sha256": "652b17a9ca9af1bcf5836e4eeb13f6f654dd6905233673f06a36c348ccb877b6",
+      "bytes": 4172
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/method/prophetkv/causal_kernel.py",
+      "destination": "benchmarks/prophetkv_persistent/method/prophetkv/causal_kernel.py",
+      "sha256": "21b5724adfd95308eb80091e52926449fc4dc4896e50c86b057978c41af4d89f",
+      "bytes": 18632
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/method/prophetkv/prophetkv.py",
+      "destination": "benchmarks/prophetkv_persistent/method/prophetkv/prophetkv.py",
+      "sha256": "b2412fff54135d0cea248165c3479e07b9a24c89230c2cdd52675a0e09d0a019",
+      "bytes": 6896
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/method/prophetkv/runtime.py",
+      "destination": "benchmarks/prophetkv_persistent/method/prophetkv/runtime.py",
+      "sha256": "dd27093ec4ee82a2ff50e255c6fdade5eef9ef8dc1ff605df2eb71c5fc616f8e",
+      "bytes": 4706
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/method/prophetkv/score_kernel.py",
+      "destination": "benchmarks/prophetkv_persistent/method/prophetkv/score_kernel.py",
+      "sha256": "f76e5f4d0fa829d82a75021116e4b5f025a072f819e734279bf25e090a013285",
+      "bytes": 12991
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/method/prophetkv/selection.py",
+      "destination": "benchmarks/prophetkv_persistent/method/prophetkv/selection.py",
+      "sha256": "3d113b0974aab54bbdd5416e157f29536c5d6ff7efd9e13d9d7ba6079cdb9fc0",
+      "bytes": 3830
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/persistent_connector.py",
+      "destination": "benchmarks/prophetkv_persistent/persistent_connector.py",
+      "sha256": "68716ae4b439e63279835519cd3f7de2ce15eb658aaac8ac2c2534cfc20a7c95",
+      "bytes": 1551
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/prophetkv_common.py",
+      "destination": "benchmarks/prophetkv_persistent/prophetkv_common.py",
+      "sha256": "7c797ba069fefe14d2c34acaa850bb1285bb854c9aa469a007e7e2ca1291245b",
+      "bytes": 4391
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/prophetkv_gpu.py",
+      "destination": "benchmarks/prophetkv_persistent/prophetkv_gpu.py",
+      "sha256": "e4ad220440e5be0c6c15bff62483d5c437730e10b504fb14665227da7251127e",
+      "bytes": 3779
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/prophetkv_report.py",
+      "destination": "benchmarks/prophetkv_persistent/prophetkv_report.py",
+      "sha256": "7e3a007dc7adfb7ef7b98ddbc82e590a7ba1629eef57178123fe75ee029687f5",
+      "bytes": 6115
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/run.py",
+      "destination": "benchmarks/prophetkv_persistent/run.py",
+      "sha256": "746c35b8bc73c3c3073c05445fd5a8da02097dc99d54584a9352365bbb8a0b00",
+      "bytes": 14006
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/test_persistent.py",
+      "destination": "benchmarks/prophetkv_persistent/test_persistent.py",
+      "sha256": "827b7b10586e697d85d4523b1010ac2a48fa949c6d068b3fc415ba86e461bc54",
+      "bytes": 2052
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/test_prophetkv.py",
+      "destination": "benchmarks/prophetkv_persistent/test_prophetkv.py",
+      "sha256": "0b1b3611e5d05b969d8cad2b40cb512ea75dd90d5f999ebee9b6ff849c3d22e6",
+      "bytes": 8978
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/validation.py",
+      "destination": "benchmarks/prophetkv_persistent/validation.py",
+      "sha256": "ff507c7b5374ffa1cac498e5412e75776f6fa06dc38602d6c9d354ba8205f0cf",
+      "bytes": 6648
+    },
+    {
+      "source": "benchmarks/prophetkv_persistent/worker.py",
+      "destination": "benchmarks/prophetkv_persistent/worker.py",
+      "sha256": "460630e23089db4113626aeee39daca31dab7a684f4842472538f02478c98e54",
+      "bytes": 9843
+    }
+  ],
+  "excluded": [
+    "datasets",
+    "model weights",
+    "Python/CUDA environments",
+    "results and live state",
+    "KV caches",
+    "unrelated experiments"
+  ],
+  "gpu_execution": false
+}
