@@ -24,6 +24,7 @@ from common import (HERE, REPO, LENGTHS, TASKS, JOBS, CASES, CONTROLS, TIMING, s
                     identity, group_alive, rope_for_length)
 from cacheblend_ruler import cacheblend_prompt, prompt_digest
 from prophetkv_common import load_sample, score
+from ruler_assets import materialize_hotpot
 
 STOP = False
 FATAL = re.compile(r'Traceback|\[UC\]\[E\]|load kv cache failed|dump kv cache failed|'
@@ -80,9 +81,11 @@ def preflight(cfg):
     if 'ucm' not in qwen.lower() or 'ucm' not in runner.lower():
         raise RuntimeError('vLLM is missing the UCM/Qwen3 hooks; an unpatched pip vLLM is insufficient')
     ruler = Path(cfg['ruler'])
+    tasks = {unit['task'] for unit in cfg['scope']}
+    if 'qa_2' in tasks:
+        materialize_hotpot(ruler / 'scripts/data/synthetic/json')
     required = ['scripts/synthetic.yaml', 'scripts/data/synthetic/constants.py',
                 'scripts/data/synthetic/json/PaulGrahamEssays.json']
-    tasks = {unit['task'] for unit in cfg['scope']}
     if 'qa_1' in tasks: required.append('scripts/data/synthetic/json/squad.json')
     if 'qa_2' in tasks: required.append('scripts/data/synthetic/json/hotpotqa.json')
     if 'cwe' in tasks: required.append('scripts/data/synthetic/json/english_words.json')

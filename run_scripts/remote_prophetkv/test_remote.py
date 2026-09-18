@@ -10,14 +10,44 @@ import runpy
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+import zipfile
 
 import common
 import suite
 from cacheblend_ruler import verify_cache, prompt_digest
 from common import dump, load, sha
+from ruler_assets import materialize_hotpot
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_packaged_hotpot_materializes_offline_atomically(self):
+        rows = [dict(_id='x', question='Q?', answer='A', context=[['Doc', ['Text']]])]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / 'hotpotqa.json.zip'
+            with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as bundle:
+                bundle.writestr('hotpotqa.json', json.dumps(rows))
+            destination = materialize_hotpot(root)
+            self.assertEqual(load(destination), rows)
+            self.assertFalse(list(root.glob('*.tmp')))
+            # An existing validated JSON is accepted without rewriting it.
+            before = destination.stat().st_mtime_ns
+            self.assertEqual(materialize_hotpot(root), destination)
+            self.assertEqual(destination.stat().st_mtime_ns, before)
+
+    def test_packaged_hotpot_rejects_extra_or_nested_members(self):
+        rows = [dict(_id='x', question='Q?', answer='A', context=[])]
+        for members in ({'nested/hotpotqa.json': json.dumps(rows)},
+                        {'hotpotqa.json': json.dumps(rows), 'extra': 'x'}):
+            with self.subTest(members=list(members)), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with zipfile.ZipFile(root / 'hotpotqa.json.zip', 'w') as bundle:
+                    for name, value in members.items():
+                        bundle.writestr(name, value)
+                with self.assertRaisesRegex(ValueError, 'exactly one top-level'):
+                    materialize_hotpot(root)
+                self.assertFalse((root / 'hotpotqa.json').exists())
+
     def test_four_job_partition_has_no_missing_or_duplicate_units(self):
         units = common.scope_for_job('all')
         self.assertEqual(len(units), 16)

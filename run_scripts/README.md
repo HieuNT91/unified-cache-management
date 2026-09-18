@@ -59,18 +59,21 @@ checks a lower bound for weights plus KV against the configured memory budget;
 40GB cards do not have sufficient headroom for this BF16 configuration. Smoke
 checks establish whether the actual eager execution and audits fit on your server.
 
-`RULER_ROOT` defaults to `benchmarks/vendor/RULER`. Required assets are
-`PaulGrahamEssays.json`, `english_words.json`, `squad.json` (SQuAD dev-v2.0) and
-`hotpotqa.json` (HotpotQA dev distractor), under `scripts/data/synthetic/json/`.
-If missing, run this optional CPU-only setup **once before preparing jobs**:
+`RULER_ROOT` defaults to `benchmarks/vendor/RULER`. The repository carries
+`PaulGrahamEssays.json`, `english_words.json`, `squad.json` (SQuAD dev-v2.0),
+and compressed `hotpotqa.json.zip` (HotpotQA dev distractor) under
+`scripts/data/synthetic/json/`. On the A800 server, `prepare_jobs.sh`
+automatically validates and atomically extracts HotpotQA. No dataset download or
+manual unzip command is required:
 
 ```bash
-bash run_scripts/prepare_ruler_assets.sh
+bash run_scripts/prepare_jobs.sh
 ```
 
-It downloads the upstream corpus assets and missing NLTK data, using direct
-connections first and the inherited proxy as fallback. It does not download
-models or install packages. You can instead point at an already prepared RULER checkout.
+The Python environment still needs the RULER package dependencies and NLTK
+`punkt`/`punkt_tab` data installed ahead of time. `prepare_ruler_assets.sh`
+remains a networked-machine utility for rebuilding missing source assets; do not
+run it on the offline A800 server.
 
 Allow at least 25 GiB of local cache disk space **per concurrent job** (100 GiB
 for four), plus results and smoke tensors. Temporary KV storage is bounded to one

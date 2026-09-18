@@ -6,6 +6,7 @@ import runpy
 import shutil
 import tempfile
 import urllib.request
+from ruler_assets import materialize_hotpot
 
 
 def main():
@@ -30,6 +31,8 @@ def main():
     # incomplete corpus rather than silently changing the evaluation data.
     urllib.request.urlopen = fetch
     directory = Path(os.environ['RULER_ROOT']).resolve() / 'scripts/data/synthetic/json'
+    # The repository carries HotpotQA compressed. Prefer it to any network call.
+    materialize_hotpot(directory)
     target = directory / 'PaulGrahamEssays.json'
     if not target.exists():
         with tempfile.TemporaryDirectory(prefix='ruler-essays-') as temporary:
