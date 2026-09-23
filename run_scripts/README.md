@@ -66,18 +66,21 @@ ProphetKV setup explicitly registers the loaded model with the connector when it
 RoPE cache is still unset, then normalizes the delta-rotation table once. This
 handles vLLM 0.9.2 installations that do not call the connector model-setup hook.
 
-For an already-prepared job that failed before any measurements were accepted,
-stop its supervisor and wait for its engines to exit, then run:
+For an already-prepared job, stop its supervisor and wait for its engines to exit.
+After syncing the updated repository, run (no prompt regeneration needed):
 
 ```bash
 bash run_scripts/job_0.sh refresh
 bash run_scripts/job_0.sh detach
 ```
 
-`refresh` updates only the private ProphetKV runtime and the connector's Python
-3.10 import. It retains prompts and the protocol, archives changed files and prior
-smoke checks under `runtime-refresh/`, and reruns qualification on the next launch.
-It refuses to modify a running job or one with accepted measurements.
+`refresh` installs the private persistent connector and lifecycle modules, and
+applies the RoPE/Python 3.10 fixes if still needed. It retains prompts and the
+protocol, archives prior files/smoke checks under `runtime-refresh/`, and reruns
+qualification on the next launch. It refuses running jobs. With accepted
+measurements, it may add missing persistence modules but refuses changes to
+existing inference files. Existing records remain unchanged; the execution
+amendment and report identify the change in engine policy. Repeat for jobs 1–3.
 
 Preparation, resume, workers and reporting do not compute or verify artifact
 checksums. Existing checksum fields in older protocols/records are ignored;
@@ -113,7 +116,9 @@ run it on the offline A800 server.
 
 Allow at least 25 GiB of local cache disk space **per concurrent job** (100 GiB
 for four), plus results and smoke tensors. Temporary KV storage is bounded to one
-sample per job and removed only after its engine group exits.
+sample per job. Between prompts, files are deleted only after the scheduler and
+both TP workers acknowledge retirement and all cache transfers finish. The final
+session cleanup waits for the engine process group to exit.
 
 ## Prepare and launch concurrently
 
@@ -160,10 +165,24 @@ Smoke outputs have a 16-token budget and are excluded from the measurement count
 Audits cover all 64 layers and both ranks, including tensor writes, preserved
 cached KV, global selection agreement and original-position causal attention.
 
-This runner still uses **fresh engines per sample/method**, plus one population
-engine per sample. Model loading adds substantial wall-clock time and shared-disk
-traffic; it is excluded from TTFT. Concurrent jobs can affect one another's
-CPU/disk performance, so record that concurrency when interpreting timings.
+This runner uses **one resident engine per method and RoPE group**, adapted from
+`benchmarks/prophetkv_persistent` in the original checkout. All compatible prompts
+run sequentially through that engine; chunk population uses the same engine.
+Each prompt gets a unique cache namespace. The 64K YaRN group requires a separate
+engine from the native-RoPE group. A complete uninterrupted measured sweep starts
+14 engines each for jobs 0–2 and 7 for job 3: **49 total**, excluding qualification
+and recovery. Method order is fixed across prompts rather than rotated per prompt.
+
+Qualification runs an A-B-A sequence and a fresh-engine A comparison per method
+and task/length, checks both ranks' retirement/memory, and retains the native
+100% equivalence and layer audits. It uses extra engine starts before the sweep.
+Every measured request is validated immediately. After a failed session, the
+supervisor retries only unfinished requests once with a new engine/namespace.
+Already validated requests are preserved on restart.
+
+Loading, chunk population, cache-readiness waits and warmup are outside TTFT.
+Session metadata records loading/warmup once; individual records retain cache
+population costs. Concurrent jobs can affect CPU/disk timings.
 
 The older `run_all.sh`, `run_8k.sh`, `run_16k.sh`, `run_32k.sh` and `run_64k.sh`
 remain sequential alternatives on one GPU pair and the unsuffixed result root.
@@ -193,19 +212,23 @@ resumes missing work and archives unaccepted attempts. Configuration changes
 require new output directories. Source changes are no longer detected by checksum;
 keep the same inference implementation when resuming accepted measurements.
 The watchdog stops owned engines on fatal logs or 1,800 seconds without logged
-progress (`WATCHDOG_SECONDS` is configurable). GPU allocation alone is not progress.
+progress (`WATCHDOG_SECONDS` is configurable), then retries unfinished measured
+requests once. GPU allocation alone is not progress.
 
 | File/message under each `job-N/` | Meaning |
 |---|---|
 | `progress.json` | Accepted count and per-task/per-length/per-method progress |
 | `supervisor.json` | Supervisor identity; `status` verifies whether it is live |
-| `active.json` | Sample, method, engine group and current log path |
+| `active.json` | Method, session, engine group and current log path |
 | `supervisor.log` | Scheduling, gate completion and failures |
 | `logs/prepare-<length>-<task>.log` | Dataset generation |
-| `cache-builds/*.log` | Offline chunk population, outside TTFT |
+| `sessions/<id>.log` | Resident engine log, including all prompt population and inference |
+| `sessions/<id>.json` | Engine configuration, loading/warmup costs and completion |
 | `MEASURE_BEGIN` / `MEASURE_END` | Boundaries of the timed request |
-| `result ... score=... ttft=... total=...` | Prediction score and request timings |
-| `WORKER_COMPLETE` | Normal worker shutdown; validation follows |
+| `result ... score=... ttft=...` | Prediction score and TTFT |
+| `REQUEST_COMPLETE` / `VALIDATED` | One request retired / accepted; engine stays resident |
+| `SESSION_COMPLETE` | Normal resident-engine shutdown |
+| `WORKER_COMPLETE` | Completion marker in extracted per-request logs or legacy worker logs |
 | `*.validated.json` | Record passed scoring, timing, cache and diagnostic validation |
 | `SMOKE_GATE_PASSED <length>/<task>` | Qualification passed for that task/length |
 | `state: failed` / `Traceback` | Inspect the indicated engine log |
@@ -220,11 +243,14 @@ Each job produces its own final artifacts after all **2,800** requests validate:
 - `final/raw_records.jsonl`: predictions, output token IDs, references, prompt
   lengths, timings and GPU provenance.
 - `final/cache_build_costs.json`: offline population costs and resumed attempts.
+- `final/engine_sessions.json`: loading/warmup costs, recorded once per measured session.
+- `final/engine_policy_counts.json`: counts of persistent and retained legacy measurements.
 - `final/validation.json`: that job's completion certificate.
 - `records/<task>-<length>-<row>/<method>.{json,log,diagnostics.json}`:
   individual measurements, engine logs and rank diagnostics.
 - `smoke/<length>/<task>/validation.json`: qualification receipt.
-- `protocol.json`, `prompt_manifest.json`: pinned configuration and prompt identities.
+- `protocol.json`, `prompt_manifest.json`: original configuration and prompt identities.
+- `execution-persistent.json`: current engine policy amendment for prepared jobs.
 - `cleanup.json`: owned engine exit and cache removal receipt.
 
 There are four completion certificates; completion of one job does not imply

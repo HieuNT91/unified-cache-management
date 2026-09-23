@@ -10,7 +10,7 @@ import time
 from types import SimpleNamespace
 if os.environ.get('SELECTOR_UCM_ROOT'):sys.path.insert(0,os.environ['SELECTOR_UCM_ROOT'])
 from prophetkv_common import dump,load_sample,cache_snapshot,generate,score
-from common import verify_gpu_visibility, TIMING, CASES
+from common import verify_gpu_visibility, TIMING, CASES, model_limit
 from cacheblend_ruler import wait_for_cache
 
 CONTROLS=('prophetkv-0','prophetkv-100')
@@ -78,8 +78,8 @@ def build(args,sample,p):
     from vllm import LLM
     from vllm.config import KVTransferConfig
     cfg=dict(model=p['model'],tokenizer=p['model'],trust_remote_code=True,enforce_eager=True,
-        dtype='bfloat16',max_model_len=((sample['tokens']+128+63)//64)*64,
-        max_num_batched_tokens=((sample['tokens']+128+63)//64)*64,
+        dtype='bfloat16',max_model_len=model_limit(p, sample),
+        max_num_batched_tokens=model_limit(p, sample),
         max_num_seqs=1,gpu_memory_utilization=p['gpu_memory_utilization'],block_size=64,enable_prefix_caching=False,
         distributed_executor_backend='mp',tensor_parallel_size=p['tensor_parallel_size'],disable_custom_all_reduce=True,
         generation_config='vllm',seed=0,enable_chunked_prefill=False)
@@ -91,8 +91,11 @@ def build(args,sample,p):
         sparse=dict(chunk_end_token_id=sample['token_ids'][sample['boundaries'][1]-1],method=method,
             ratio=ratio,component_audit=args.smoke,compute_meta={'model.layers.1.self_attn.attn':
                 dict(ratio=ratio,selection_metric='k',selection_diagnostics=True)})
-        cfg['kv_transfer_config']=KVTransferConfig(kv_connector='UCMBlendConnector',
-            kv_connector_module_path='ucm.integration.vllm.blend_connector',kv_role='kv_both',
+        persistent = getattr(args, 'persistent', False)
+        cfg['kv_transfer_config']=KVTransferConfig(
+            kv_connector='PersistentBlendConnector' if persistent else 'UCMBlendConnector',
+            kv_connector_module_path=('ucm.integration.vllm.persistent_connector' if persistent
+                                      else 'ucm.integration.vllm.blend_connector'),kv_role='kv_both',
             kv_connector_extra_config=dict(ucm_connectors=[dict(ucm_connector_name='UcmNfsStore',
                 ucm_connector_config=dict(storage_backends=str(args.cache_dir),use_direct=False,timeout_ms=120000))],
                 ucm_sparse_config={'ProphetKV':sparse,'Blend':sparse}))

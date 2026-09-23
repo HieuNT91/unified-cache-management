@@ -1,0 +1,47 @@
+Qwen3-32B — ProphetKV UCM/vLLM port
+
+Completed: 120/120 measured requests; 10 VT + 10 CWE prompts.
+GPUs 1–4, TP=4, BF16, greedy, thinking off, max 128 new tokens.
+64K-target data, 4096-token chunks, YaRN factor 2.
+
+| Task | Method | Samples | Mean TTFT (s) | Accuracy (%) | Speedup |
+|---|---|---:|---:|---:|---:|
+| vt | baseline | 10 | 30.115 | 100.0 | 1.00x |
+| vt | prophetkv-5 | 10 | 3.395 | 92.0 | 8.87x |
+| vt | prophetkv-20 | 10 | 9.612 | 98.0 | 3.13x |
+| vt | prophetkv-30 | 10 | 13.461 | 98.0 | 2.24x |
+| vt | prophetkv-40 | 10 | 17.145 | 98.0 | 1.76x |
+| vt | prophetkv-50 | 10 | 20.664 | 100.0 | 1.46x |
+| cwe | baseline | 10 | 30.052 | 74.0 | 1.00x |
+| cwe | prophetkv-5 | 10 | 3.390 | 35.0 | 8.87x |
+| cwe | prophetkv-20 | 10 | 9.458 | 42.0 | 3.18x |
+| cwe | prophetkv-30 | 10 | 13.176 | 47.0 | 2.28x |
+| cwe | prophetkv-40 | 10 | 16.813 | 44.0 | 1.79x |
+| cwe | prophetkv-50 | 10 | 20.260 | 57.0 | 1.48x |
+| combined | baseline | 20 | 30.084 | 87.0 | 1.00x |
+| combined | prophetkv-5 | 20 | 3.392 | 63.5 | 8.87x |
+| combined | prophetkv-20 | 20 | 9.535 | 70.0 | 3.16x |
+| combined | prophetkv-30 | 20 | 13.319 | 72.5 | 2.26x |
+| combined | prophetkv-40 | 20 | 16.979 | 71.0 | 1.77x |
+| combined | prophetkv-50 | 20 | 20.462 | 78.5 | 1.47x |
+
+Actual prompt lengths: 65,216–65,664 tokens.
+Length-limited outputs: 0/120.
+Accuracy is the official RULER reference-substring score, averaged over prompts.
+TTFT runs from engine submission to first token-bearing output; it includes online probing,
+cache transfers, selection and fusion. Model loading, offline cache building and priming
+are excluded. Cache-building costs and total generation times are saved separately.
+Ratios refer to selected cached tokens after the exact first chunk and before the fresh suffix.
+All methods share prompts, generation budgets and four physical GPUs. One timing per sample.
+Memory adaptation on every method: 4096-token MLP and attention-output-projection tiles,
+early release of dead attention tensors, expandable allocator segments, and 1029 KV blocks.
+Tiling can change BF16 rounding and execution cost; these are memory-adapted local results.
+Nominal factor-2 window is 65,536. The identical 65,792-token engine window uses
+256 appended RoPE table positions with unchanged factor-2 frequencies and magnitude;
+the first 65,536 table entries are bitwise preserved. This slightly exceeds nominal 2x.
+This is a 10-sample/task study, not the full default RULER evaluation.
+The 4B summary uses 100 samples/task and different model/RoPE/TP settings; its aggregate
+accuracy and TTFT are not a paired comparison with this experiment.
+
+Model configuration: https://huggingface.co/Qwen/Qwen3-32B
+Artifacts: /home/thnguyen/spark/unified-cache-management/.results/qwen3-32b-prophetkv-vt-cwe10-64k-c4096-tp4-yarn2-20260921/final

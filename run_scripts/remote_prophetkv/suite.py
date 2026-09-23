@@ -18,10 +18,11 @@ import statistics
 import subprocess
 import sys
 import time
+import uuid
 
 from common import (HERE, REPO, LENGTHS, TASKS, JOBS, CASES, CONTROLS, TIMING, dump,
                     load, settings, selected_devices, busy_devices,
-                    identity, group_alive, rope_for_length)
+                    identity, group_alive, rope_for_length, ENGINE_POLICY, engine_group, model_limit)
 from cacheblend_ruler import cacheblend_prompt
 from prophetkv_common import load_sample, score
 from ruler_assets import materialize_hotpot
@@ -213,6 +214,11 @@ def compatible_connector_source(source):
     return fixed
 
 
+def persistent_sources(private):
+    return {private / 'sparse/prophetkv/lifecycle.py': (HERE / 'lifecycle.py').read_text(),
+            private / 'integration/vllm/persistent_connector.py': (HERE / 'persistent_connector.py').read_text()}
+
+
 def refresh_runtime(cfg, root):
     """Repair a stopped, prepared job without regenerating data or repinning it."""
     check_orphan(root)
@@ -226,11 +232,13 @@ def refresh_runtime(cfg, root):
     runtime = private / 'sparse/prophetkv/runtime.py'
     updates = {connector: compatible_connector_source(connector.read_text()),
                runtime: (HERE / 'method/prophetkv/runtime.py').read_text()}
-    updates = {path: text for path, text in updates.items() if path.read_text() != text}
+    updates.update(persistent_sources(private))
+    updates = {path: text for path, text in updates.items() if not path.exists() or path.read_text() != text}
     if not updates:
         print('Private runtime is already current; no changes made.', flush=True)
         return
-    if any((root / 'records').rglob('*.validated.json')):
+    if any((root / 'records').rglob('*.validated.json')) and any(
+            path.exists() for path in updates):
         raise RuntimeError('Private runtime refresh requires a job with no validated measurements')
     for path, text in updates.items():
         compile(text, str(path), 'exec')
@@ -238,16 +246,18 @@ def refresh_runtime(cfg, root):
     for path in updates:
         backup = history / path.relative_to(root)
         backup.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, backup)
+        if path.exists():
+            shutil.copy2(path, backup)
     # Old smoke checks used the previous implementation and must run again.
     if (root / 'smoke').exists():
         (root / 'smoke').rename(history / 'smoke')
     for path, text in updates.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix('.py.tmp')
         temporary.write_text(text)
         temporary.replace(path)
     dump(history / 'receipt.json', dict(changed=[str(path) for path in updates],
-         reason='Initialize connector RoPE before normalization; support Python 3.10 Self import',
+         reason='Refresh private runtime and install persistent engine lifecycle support',
          updated_at=time.time()))
     progress(root, p, 'prepared')
     print(f'Private runtime updated. Prior files/smoke logs: {history}. Prompts retained.', flush=True)
@@ -297,6 +307,8 @@ def prepare(cfg, root):
     if method.exists():
         shutil.rmtree(method)
     shutil.copytree(HERE / 'method/prophetkv', method, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    for path, source in persistent_sources(private).items():
+        path.write_text(source)
     factory = private / 'sparse/factory.py'
     with factory.open('a') as stream:
         stream.write('\nUcmSparseFactory.register_sparse_method("ProphetKV", "ucm.sparse.prophetkv.prophetkv", "ProphetKV")\n')
@@ -317,7 +329,7 @@ def prepare(cfg, root):
                     rate_denominator='cached region after exact first chunk, before fresh suffix',
                     selection='question-only context-softmax scores; all-layer sum; TP head mean; shared global top-k',
                     timing_source=TIMING, timing='includes probe, transfer, selection, fusion; excludes load/build/warmup',
-                    storage='buffered local warm cache', engine_lifetime='fresh per sample and configuration',
+                    storage='buffered local warm cache', engine_lifetime=ENGINE_POLICY,
                     kernel_reference='uYanJX/QCFuse@38795d91d900debb5f2df23bd7296b3ff97960c8', created_at=time.time())
     dump(root / 'prompt_manifest.json', samples)
     dump(root / 'protocol.json', protocol)
@@ -366,6 +378,9 @@ def validate(root, p, meta, case, path, smoke=False):
         if (w['visible_uuid'] != p['gpu_devices'][w['rank']]['uuid'] or
                 not Path(w['ucm_path']).resolve().is_relative_to(root / 'private_ucm')):
             raise ValueError('Wrong worker GPU or UCM import')
+    request_id = r.get('request_id', 'measured-1-0')
+    if r.get('engine_policy') == ENGINE_POLICY:
+        validate_retirement(r, p, meta)
     dp = path.with_suffix('.diagnostics.json')
     workers = load(dp)
     if sorted(w['rank'] for w in workers) != list(range(p['tensor_parallel_size'])):
@@ -381,7 +396,7 @@ def validate(root, p, meta, case, path, smoke=False):
     eligible = b[-2] - b[1]
     count = math.floor(eligible * int(case.split('-')[-1]) / 100)
     measured = log.split('MEASURE_BEGIN', 1)[1].split('MEASURE_END', 1)[0]
-    hits = re.findall(r'request_id: measured-1-0,.*?req_stage: BlendStage\.(\w+), first chunk prefix hit: (\d+), chunks cache total hit: (\d+)', measured)
+    hits = re.findall(r'request_id: ' + re.escape(request_id) + r',.*?req_stage: BlendStage\.(\w+), first chunk prefix hit: (\d+), chunks cache total hit: (\d+)', measured)
     if not hits or any(h != ('CACHE_BLEND', str(b[1] // 64), str(eligible // 64)) for h in hits):
         raise ValueError('Missing complete measured cache-hit evidence')
     previous = None
@@ -391,7 +406,7 @@ def validate(root, p, meta, case, path, smoke=False):
         if len(selection) != 1 or len(layers) != p['num_layers'] or len(w['diagnostics']) != 1 + len(layers):
             raise ValueError('Missing selection/layer diagnostics')
         d = selection[0]
-        if any(d[k] != v for k, v in dict(request_id='measured-1-0', eligible_count=eligible,
+        if any(d[k] != v for k, v in dict(request_id=request_id, eligible_count=eligible,
                 selected_count=count, probe_layers=p['num_layers'], alignment_count=p['num_layers'],
                 question_positions=meta['query']['positions']).items()):
             raise ValueError('Incorrect probe or selection budget')
@@ -415,6 +430,25 @@ def validate(root, p, meta, case, path, smoke=False):
                      'suffix_verified', 'causal_attention_verified')):
                 raise ValueError('Per-layer tensor/causality audit failed')
     return r
+
+
+def validate_retirement(record, protocol, meta):
+    from lifecycle import namespace_from_id
+    if namespace_from_id(record['request_id']) != record['namespace']:
+        raise ValueError('Wrong request namespace')
+    if (record['max_model_len'] != model_limit(protocol, meta) or
+            record['rope_group'] != engine_group(meta['context_target']) or
+            record['cache_files_after_retirement'] != 0):
+        raise ValueError('Invalid persistent engine configuration/cleanup')
+    workers = record['retirement']['workers']
+    if sorted(w['rank'] for w in workers) != list(range(protocol['tensor_parallel_size'])) or not all(
+            w['quiescent'] and w['transfers']['pending'] == 0 and w['request_bookkeeping'] == 0 for w in workers):
+        raise ValueError('Missing TP retirement acknowledgement')
+    if record['case'] != 'baseline':
+        if record['retirement']['scheduler'] != dict(request_id=record['request_id'], requests_blend_meta=0, requests_meta=0):
+            raise ValueError('Stale scheduler retirement')
+        if record['cache_verification']['namespace'] != record['namespace']:
+            raise ValueError('Cache verified under a different namespace')
 
 
 def accept(root, p, meta, case, path, smoke=False):
@@ -558,11 +592,167 @@ def launch(cfg, root, p, meta, case, path, smoke=False):
         accept(root, p, meta, case, path, smoke)
 
 
+def session_plan(root, p, samples, method=None):
+    """Keep each configuration resident across every compatible missing prompt."""
+    for group in dict.fromkeys(engine_group(m['context_target']) for m in samples):
+        for case in ([method] if method else CASES):
+            entries = []
+            for meta in samples:
+                if engine_group(meta['context_target']) != group:
+                    continue
+                path = root / 'records' / meta['id'] / f'{case}.json'
+                if not valid(root, p, meta, case, path):
+                    entries.append(meta | dict(output=str(path)))
+            if entries:
+                yield group, case, entries
+
+
+def collect_completed(root, p, case, pending, text, smoke):
+    """Accept only complete request intervals; a later failure cannot spoil them."""
+    while pending:
+        entry = pending[0]
+        path = Path(entry['output'])
+        if not path.exists():
+            break
+        record = load(path)
+        rid = record['request_id']
+        marker = 'REQUEST_COMPLETE ' + rid + ' ' + str(path) + '\n'
+        if marker not in text:
+            break
+        before, text = text.split(marker, 1)
+        begin = 'REQUEST_BEGIN ' + rid + '\n'
+        if begin not in before or FATAL.search(before):
+            raise RuntimeError('Invalid request completion log')
+        path.with_suffix('.log').write_text(begin + before.split(begin, 1)[1] + marker + 'WORKER_COMPLETE\n')
+        accept(root, p, entry, case, path, smoke)
+        pending.pop(0)
+        print(f'VALIDATED {entry["id"]} {case} remaining_in_session={len(pending)}', flush=True)
+        if not smoke:
+            progress(root, p, 'running', sample_id=entry['id'], method=case,
+                     engine_policy=ENGINE_POLICY, session_id=record['session_id'])
+    return text
+
+
+def launch_session(cfg, root, p, case, entries, smoke=False, retries=1):
+    pending = list(entries)
+    for attempt in range(retries + 1):
+        if not pending:
+            return
+        check_orphan(root)
+        if STOP:
+            raise InterruptedError('Stop requested')
+        cache = cleanup(cfg, root)
+        cache.mkdir(parents=True, exist_ok=True)
+        dump(cache / 'owner.json', dict(result_root=str(root)))
+        while busy_devices(p['gpu_devices']):
+            dump(root / 'active.json', dict(state='waiting_for_free_gpus', case=case))
+            print('Waiting for selected GPUs', flush=True)
+            for _ in range(10):
+                if STOP:
+                    raise InterruptedError('Stop requested')
+                time.sleep(1)
+        _, devices = selected_devices(cfg['indices'])
+        if devices != p['gpu_devices']:
+            raise RuntimeError('GPU identities changed')
+        for entry in pending:
+            path = Path(entry['output'])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.with_suffix('.validated.json').exists():
+                raise RuntimeError('Refusing to overwrite accepted request')
+            artifacts = [a for a in path.parent.glob(path.stem + '.*') if a.is_file()]
+            if artifacts:
+                archive = path.parent / 'attempts' / str(time.time_ns())
+                archive.mkdir(parents=True)
+                for artifact in artifacts:
+                    artifact.rename(archive / artifact.name)
+        sid = uuid.uuid4().hex
+        session = root / 'sessions' / (sid + '.json')
+        manifest = session.with_suffix('.manifest.json')
+        log_path = session.with_suffix('.log')
+        dump(manifest, pending)
+        dump(session, dict(session_id=sid, state='starting', case=case, engine_policy=ENGINE_POLICY,
+                           requested_samples=[m['id'] for m in pending], started_at=time.time()))
+        command = [sys.executable, '-u', str(HERE / 'persistent_worker.py'),
+            '--protocol', str(root / 'protocol.json'), '--manifest', str(manifest),
+            '--case', case, '--cache-dir', str(cache), '--session', str(session)]
+        if smoke:
+            command.append('--smoke')
+        env = cpu_env()
+        env.update(CUDA_VISIBLE_DEVICES=','.join(d['uuid'] for d in devices),
+            REMOTE_GPU_DEVICES=json.dumps(devices), SELECTOR_UCM_ROOT=str(root / 'private_ucm'),
+            ENABLE_SPARSE='TRUE', VLLM_USE_V1='1', VLLM_WORKER_MULTIPROC_METHOD='spawn',
+            VLLM_ALLOW_INSECURE_SERIALIZATION='1', CUDA_DEVICE_ORDER='PCI_BUS_ID',
+            PROPHETKV_SCHEDULER_RECEIPT=str(session.with_suffix('.scheduler.json')))
+        print(f'LAUNCH_SESSION {case} prompts={len(pending)} smoke={smoke} log={log_path}', flush=True)
+        try:
+            with log_path.open('w') as log:
+                child = subprocess.Popen(command, cwd='/tmp', env=env, stdin=subprocess.DEVNULL,
+                    stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                dump(root / 'active.json', dict(state='running', pid=child.pid, pgid=child.pid,
+                    identity=identity(child.pid), command=command, case=case, session_id=sid,
+                    engine_policy=ENGINE_POLICY, samples=len(pending), log=str(log_path),
+                    gpu_devices=devices, started_at=time.time()))
+                buffer = ''
+                try:
+                    with log_path.open(errors='replace') as reader:
+                        while True:
+                            returncode = child.poll()
+                            buffer += reader.read()
+                            buffer = collect_completed(root, p, case, pending, buffer, smoke)
+                            if STOP:
+                                raise InterruptedError('Stop requested')
+                            if FATAL.search(buffer):
+                                raise RuntimeError(f'Fatal engine log: {log_path}')
+                            if returncode is not None:
+                                if returncode or pending or 'SESSION_COMPLETE' not in buffer:
+                                    raise RuntimeError(f'Incomplete session exit={returncode}: {log_path}')
+                                break
+                            if time.time() - log_path.stat().st_mtime > int(os.environ.get('WATCHDOG_SECONDS', '1800')):
+                                raise RuntimeError(f'Session made no logged progress: {log_path}')
+                            time.sleep(1)
+                finally:
+                    terminate(child)
+                    dump(root / 'active.json', dict(state='engine_exited', pgid=child.pid,
+                        case=case, session_id=sid, log=str(log_path), ended_at=time.time()))
+        except RuntimeError as error:
+            dump(session, load(session) | dict(state='failed', error=str(error), ended_at=time.time()))
+            if not pending or attempt == retries:
+                raise
+            print(f'RETRY_SESSION {case} missing={len(pending)}: {error}', flush=True)
+        finally:
+            cleanup(cfg, root)
+
+
+def isolation_signature(path):
+    r = load(path)
+    diagnostics = load(path.with_suffix('.diagnostics.json'))
+    return (r['output_token_ids'], r['score'], r['num_cached_tokens'],
+            [[{k: v for k, v in d.items() if k not in ('request_id', 'probe_seconds')}
+              for d in w['diagnostics']] for w in sorted(diagnostics, key=lambda w: w['rank'])])
+
+
+def check_isolation(paths, fresh):
+    records = [load(path) for path in paths]
+    if len({r['session_id'] for r in records}) != 1 or len({r['namespace'] for r in records}) != len(records):
+        raise ValueError('Isolation gate needs one resident engine and distinct namespaces')
+    if [r['session_request_index'] for r in records] != list(range(len(records))):
+        raise ValueError('Isolation gate requests were not consecutive')
+    if isolation_signature(paths[0]) != isolation_signature(paths[-1]) or isolation_signature(paths[0]) != isolation_signature(fresh):
+        raise ValueError('Persistent A-B-A differs from repeat or fresh engine')
+    first = sorted(records[0]['retirement']['workers'], key=lambda w: w['rank'])
+    last = sorted(records[-1]['retirement']['workers'], key=lambda w: w['rank'])
+    if any(b['allocated_bytes'] - a['allocated_bytes'] > 16 * 2**20 for a, b in zip(first, last)):
+        raise ValueError('Persistent request allocations grew beyond 16 MiB')
+    return dict(session_id=records[0]['session_id'], samples=[r['sample_id'] for r in records],
+                fresh_session_id=load(fresh)['session_id'], repeated_equal=True, fresh_equal=True,
+                tp_memory_growth_bound_bytes=16 * 2**20)
+
+
 def valid_gate(root, p, length, task):
     gate = root / 'smoke' / str(length) / task
     if (gate / 'validation.json').exists():
         receipt = load(gate / 'validation.json')
-        if not receipt['complete']:
+        if not receipt['complete'] or receipt.get('engine_policy') != ENGINE_POLICY:
             return False
         if receipt['sample_id'] not in {m['id'] for m in p['samples']
                 if m['context_target'] == length and m['label'] == task}:
@@ -579,13 +769,26 @@ def smoke_gate(cfg, root, p, length, task):
     gate = root / 'smoke' / str(length) / task
     if valid_gate(root, p, length, task):
         return
-    meta = max((m for m in p['samples'] if m['context_target'] == length and m['label'] == task), key=lambda x: x['tokens'])
+    # Preserve earlier gate evidence; qualification must exercise consecutive requests.
+    if gate.exists():
+        history = root / 'smoke-history' / str(time.time_ns()) / str(length)
+        history.mkdir(parents=True)
+        gate.rename(history / task)
+    candidates = [m for m in p['samples'] if m['context_target'] == length and m['label'] == task]
+    meta = max(candidates, key=lambda x: x['tokens'])
+    other = min((m for m in candidates if m['id'] != meta['id']),
+                key=lambda x: x['tokens'], default=meta)
     cleanup(cfg, root)
-    for case in ('reference', 'populate', *CASES, *CONTROLS):
-        path = gate / f'{case}.json'
-        if case not in ('reference', 'populate') and valid(root, p, meta, case, path, True):
-            continue
-        launch(cfg, root, p, meta, case, path, True)
+    launch(cfg, root, p, meta, 'reference', gate / 'reference.json', True)
+    isolation = {}
+    for case in (*CASES, *CONTROLS):
+        paths = [gate / f'{case}.json', gate / 'isolation' / case / 'middle.json',
+                 gate / 'isolation' / case / 'repeat.json']
+        entries = [m | dict(output=str(path)) for m, path in zip((meta, other, meta), paths)]
+        launch_session(cfg, root, p, case, entries, smoke=True, retries=0)
+        fresh = gate / 'isolation' / case / 'fresh.json'
+        launch_session(cfg, root, p, case, [meta | dict(output=str(fresh))], smoke=True, retries=0)
+        isolation[case] = check_isolation(paths, fresh)
     # Match the no-custom-attention reference with EXACT first-chunk reuse.
     # Full no-cache prefill has different numerical scheduling and is not the oracle.
     import torch
@@ -600,9 +803,10 @@ def smoke_gate(cfg, root, p, length, task):
                 raise ValueError(f'ProphetKV100/native-prefix mismatch on TP rank {rank}, layer {layer}')
         comparisons.append(dict(rank=rank, bitwise_equal_layers=len(ref)))
     cleanup(cfg, root)
-    artifacts = [str(path) for path in gate.iterdir() if path.is_file() and path.name != 'validation.json']
+    artifacts = [str(path) for path in gate.rglob('*') if path.is_file() and path.name != 'validation.json']
     dump(gate / 'validation.json', dict(complete=True, sample_id=meta['id'],
-         comparisons=comparisons, artifacts=artifacts, smoke_output_tokens=16, measured=False))
+         comparisons=comparisons, artifacts=artifacts, smoke_output_tokens=16, measured=False,
+         engine_policy=ENGINE_POLICY, isolation=isolation))
     print(f'SMOKE_GATE_PASSED {length}/{task}', flush=True)
 
 
@@ -621,6 +825,9 @@ def run(cfg, root, args):
         progress(root, p, 'verifying')
         print('Checking settings, runtime versions and GPU identities (no file hashing)...', flush=True)
         p = verify(cfg, root)
+        if any(not path.is_file() or path.read_text() != text for path, text in
+               persistent_sources(root / 'private_ucm/ucm').items()):
+            raise RuntimeError('Private persistence modules need updating: run this job script with refresh first')
         units = [u for u in p['scope'] if (args.length is None or u['length'] == args.length)
                  and (args.task is None or u['task'] == args.task)]
         if not units:
@@ -629,26 +836,15 @@ def run(cfg, root, args):
             length, task = unit['length'], unit['task']
             progress(root, p, 'smoke', context_target=length, task=task)
             smoke_gate(cfg, root, p, length, task)
-            if args.command == 'smoke':
-                continue
-            for meta in (m for m in p['samples'] if m['context_target'] == length and m['label'] == task):
-                # Rotate percentage order across prompts; baseline always measures full prefill.
-                methods = list(CASES[1:])
-                offset = meta['source_row'] % len(methods)
-                methods = [CASES[0], *methods[offset:], *methods[:offset]]
-                if args.method:
-                    methods = [args.method]
-                missing = [c for c in methods if not valid(root, p, meta, c, root / 'records' / meta['id'] / f'{c}.json')]
-                if not missing:
-                    continue
-                cleanup(cfg, root)
-                if any(c != 'baseline' for c in missing):
-                    launch(cfg, root, p, meta, 'populate', root / 'cache-builds' / f'{meta["id"]}-{time.time_ns()}.json')
-                for case in missing:
-                    progress(root, p, 'running', sample_id=meta['id'], method=case)
-                    launch(cfg, root, p, meta, case, root / 'records' / meta['id'] / f'{case}.json')
-                    progress(root, p, 'running')
-                cleanup(cfg, root)
+        if args.command != 'smoke':
+            selected = [m for m in p['samples'] if any(
+                m['context_target'] == u['length'] and m['label'] == u['task'] for u in units)]
+            dump(root / 'execution-persistent.json', dict(engine_policy=ENGINE_POLICY,
+                 source=str(HERE), artifact_checksums=False, updated_at=time.time(),
+                 note='Existing validated measurements retained with their original engine policy.'))
+            for group, case, entries in session_plan(root, p, selected, args.method):
+                progress(root, p, 'running', method=case, rope_group=group)
+                launch_session(cfg, root, p, case, entries)
         progress(root, p, 'smoke_complete' if args.command == 'smoke' else 'partial')
         if args.command != 'smoke':
             report(root, p)
@@ -694,7 +890,14 @@ def report(root, p):
         writer.writeheader()
         writer.writerows(comparison)
     costs = [load(path) for path in sorted((root / 'cache-builds').glob('*.json'))]
+    costs += [dict(sample_id=r['sample_id'], case=r['case'], session_id=r['session_id'],
+                   cache_build_seconds=r['cache_build_seconds']) for r in rows if 'session_id' in r]
     dump(directory / 'cache_build_costs.json', costs)
+    session_ids = {r['session_id'] for r in rows if 'session_id' in r}
+    dump(directory / 'engine_sessions.json', [load(root / 'sessions' / (sid + '.json')) for sid in sorted(session_ids)])
+    policies = {r.get('engine_policy', 'fresh-per-sample-and-method') for r in rows}
+    dump(directory / 'engine_policy_counts.json', {policy: sum(
+         r.get('engine_policy', 'fresh-per-sample-and-method') == policy for r in rows) for policy in sorted(policies)})
     (directory / 'REPORT.md').write_text(
         f'# Qwen3-32B ProphetKV UCM/vLLM port\n\nValidated {len(rows)}/{p["measured_requests"]} requests. '
         f'{p["samples_per_task_length"]} independent prompts per task/length; one timing per prompt/method.\n\n'
@@ -706,7 +909,9 @@ def report(root, p):
         'All 64 layers probe and repair; TP ranks share the globally averaged head scores and selected positions.\n\n'
         'TTFT includes online probing, transfers, ranking and inference. Loading, offline chunk population, cache readiness '
         'and warmup are excluded and recorded separately. Storage is buffered local warm cache. '
-        'Fresh engines isolate each sample/method; this adds substantial wall-clock loading cost. '
+        'New measurements reuse one engine per method and RoPE group, with unique prompt cache namespaces and '
+        'TP retirement barriers before cleanup. Earlier fresh-engine records, if any, remain unchanged; '
+        'engine_policy_counts.json identifies mixed execution histories. '
         '64K alone uses YaRN factor 4; other lengths use original RoPE. Compare methods within each length.\n\n'
         'Smoke controls (0/100% plus native dense exact-prefix reference) are excluded from measured results. '
         'This is the local ProphetKV UCM/vLLM port, not a claim of an upstream pipeline reproduction.\n')
@@ -784,7 +989,8 @@ def main():
     elif args.command == 'plan':
         print(json.dumps(dict(settings=cfg, scope=cfg['scope'], methods=CASES,
               requests=len(cfg['scope']) * cfg['samples'] * len(CASES), thinking=False, max_new_tokens=128,
-              tensor_parallel_size=len(cfg['indices'])), indent=2))
+              tensor_parallel_size=len(cfg['indices']), engine_policy=ENGINE_POLICY,
+              measured_engine_sessions=len({engine_group(u['length']) for u in cfg['scope']}) * len(CASES)), indent=2))
     elif args.command == 'status':
         live = live_supervisor(root)
         print(json.dumps(dict(supervisor_live=bool(live), supervisor=live,

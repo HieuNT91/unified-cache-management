@@ -1,0 +1,97 @@
+"""CPU-only final report with prompt/source integrity and completed-run checks."""
+import csv
+import hashlib
+import json
+from pathlib import Path
+import statistics
+
+from common import REPO, settings, load, dump
+from suite import locked, live_supervisor, check_orphan, verify, report
+from experiment import verify_frozen
+
+
+def main():
+    cfg = settings()
+    root = Path(cfg['root'])
+    with locked(root):
+        if live_supervisor(root):
+            raise RuntimeError('Wait for the inference supervisor to exit')
+        check_orphan(root)
+        p = verify(cfg, root)
+        verify_frozen(root)
+        provenance = load(root / 'provenance.json')
+        memory_audits = list((root / 'smoke').rglob('*.memory-audit.rank*.json')) + list((root / 'sessions').glob('*.memory-audit.rank*.json'))
+        if not memory_audits:
+            raise ValueError('Missing activation-memory numerical audits')
+        for path in memory_audits:
+            audit = load(path)
+            if len(audit['layers']) != 64 or not all(x['passed'] and x['output_projection']['passed'] for x in audit['layers']):
+                raise ValueError(f'Invalid memory adaptation audit: {path}')
+            windows = audit.get('rope_windows', [])
+            if len(windows) != 64 or not all(w['factor'] == 2 and w['table_positions'] == 65792
+                    and w['original_entries_bitwise_equal'] and w['extended_formula_bitwise_equal'] for w in windows):
+                raise ValueError(f'Invalid factor-2 position table audit: {path}')
+        cleanup = load(root / 'cleanup.json')
+        if not cleanup['owned_engine_groups_exited'] or not cleanup['cache_removed']:
+            raise ValueError('Incomplete engine/cache cleanup')
+        report(root, p)
+        certificate = load(root / 'final/validation.json')
+        assert certificate['complete'] and certificate['validated'] == 3850
+        records = [json.loads(line) for line in (root / 'final/raw_records.jsonl').read_text().splitlines()]
+        rows = []
+        lines = ['Qwen3-32B — ProphetKV UCM/vLLM port', '',
+                 'Completed: 3850/3850 measured requests; 50 samples each across ten RULER tasks plus 50 LongBench v2 samples.',
+                 f'GPUs {p["settings"]["indices"]}, TP={p["tensor_parallel_size"]}, BF16, thinking off, max 128 new tokens.',
+                 'Qualification/smoke phase disabled by explicit user request.',
+                 'RULER 64K-target data; LongBench v2 formatted prompts <65536; 4096-token chunks; YaRN factor 2.',
+                 '600 original measurements retained; 3250 new measurements. Cohorts were measured at different times.', '',
+                 '| Task | Method | Samples | Mean TTFT (s) | Accuracy (%) | Speedup |',
+                 '|---|---|---:|---:|---:|---:|']
+        for task in (*[u['task'] for u in p['scope']], 'ruler_all', 'combined'):
+            group = [r for r in records if task == 'combined' or (task == 'ruler_all' and r['dataset'] == 'ruler') or r['label'] == task]
+            base = statistics.mean(r['ttft_seconds'] for r in group if r['case'] == 'baseline')
+            for method in p['cases']:
+                subset = [r for r in group if r['case'] == method]
+                ttft = statistics.mean(r['ttft_seconds'] for r in subset)
+                accuracy = 100 * statistics.mean(r['score'] for r in subset)
+                rows.append(dict(task=task, method=method, samples=len(subset),
+                    mean_ttft_seconds=ttft, accuracy_percent=accuracy, speedup=base/ttft,
+                    length_limited=sum(r['finish_reason'] == 'length' for r in subset),
+                    mean_cache_build_seconds=statistics.mean(r['cache_build_seconds'] for r in subset)))
+                lines.append(f'| {task} | {method} | {len(subset)} | {ttft:.3f} | {accuracy:.1f} | {base/ttft:.2f}x |')
+        lengths = [s['tokens'] for s in p['samples']]
+        lines += ['', f'Actual prompt lengths: {min(lengths):,}–{max(lengths):,} tokens.',
+                  f'Length-limited outputs: {sum(r["finish_reason"] == "length" for r in records)}/3850.',
+                  'RULER uses reference-substring credit; LongBench v2 uses extracted multiple-choice answer accuracy.',
+                  'TTFT runs from engine submission to first token-bearing output; it includes online probing,',
+                  'cache transfers, selection and fusion. Model loading, offline cache building and priming',
+                  'are excluded. Cache-building costs and total generation times are saved separately.',
+                  'Ratios refer to selected cached tokens after the exact first chunk and before the fresh suffix.',
+                  'All methods share prompts, generation budgets and the configured physical GPUs. One timing per sample.',
+                  'Memory adaptation on every method: 4096-token MLP and attention-output-projection tiles,',
+                  'early release of dead attention tensors, expandable allocator segments, and 1029 KV blocks.',
+                  'Tiling can change BF16 rounding and execution cost; these are memory-adapted local results.',
+                  'Nominal factor-2 window is 65,536. The identical 65,792-token engine window uses',
+                  '256 appended RoPE table positions with unchanged factor-2 frequencies and magnitude;',
+                  'the first 65,536 table entries are bitwise preserved. This slightly exceeds nominal 2x.',
+                  'This is a 50-sample/task RULER and 50-sample total LongBench v2 study, not the full default RULER evaluation.',
+                  'The 4B summary uses 100 samples/task and different model/RoPE/TP settings; its aggregate',
+                  'accuracy and TTFT are not a paired comparison with this experiment.', '',
+                  'Model configuration: https://huggingface.co/Qwen/Qwen3-32B',
+                  f'Artifacts: {root / "final"}']
+        text = '\n'.join(lines) + '\n'
+        (root / 'final/RESULTS.md').write_text(text)
+        (REPO / 'qwen3_32b_yarn2_ruler50_lb50_results.txt').write_text(text)
+        with (root / 'final/summary.csv').open('w', newline='') as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        dump(root / 'final/integrity-validation.json', dict(complete=True,
+            frozen_artifacts_verified=len(provenance['sha256']), measured_requests=3850,
+            cleanup=cleanup, summary=rows))
+        print(text)
+
+
+
+if __name__ == "__main__":
+    main()

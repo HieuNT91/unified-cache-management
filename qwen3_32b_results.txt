@@ -1,0 +1,47 @@
+Qwen3-32B — ProphetKV UCM/vLLM port
+
+Completed: 120/120 measurements; 10 VT + 10 CWE prompts per method.
+Original no-cache, 5% and 20% measurements retained unchanged; 30%, 40%, 50% added.
+GPUs 1–4, TP=4, BF16, native non-thinking chat, greedy, max 128 new tokens.
+64K-target data, 4096-token chunks, YaRN factor 4.
+
+| Task | Method | Samples | Mean TTFT (s) | Accuracy (%) | Speedup |
+|---|---|---:|---:|---:|---:|
+| vt | baseline | 10 | 30.115 | 100.0 | 1.00x |
+| vt | prophetkv-5 | 10 | 3.362 | 64.0 | 8.96x |
+| vt | prophetkv-20 | 10 | 9.547 | 90.0 | 3.15x |
+| vt | prophetkv-30 | 10 | 13.447 | 98.0 | 2.24x |
+| vt | prophetkv-40 | 10 | 17.229 | 98.0 | 1.75x |
+| vt | prophetkv-50 | 10 | 20.831 | 98.0 | 1.45x |
+| cwe | baseline | 10 | 30.048 | 69.0 | 1.00x |
+| cwe | prophetkv-5 | 10 | 3.353 | 35.0 | 8.96x |
+| cwe | prophetkv-20 | 10 | 9.370 | 35.0 | 3.21x |
+| cwe | prophetkv-30 | 10 | 13.123 | 35.0 | 2.29x |
+| cwe | prophetkv-40 | 10 | 16.803 | 43.0 | 1.79x |
+| cwe | prophetkv-50 | 10 | 20.293 | 49.0 | 1.48x |
+| combined | baseline | 20 | 30.081 | 84.5 | 1.00x |
+| combined | prophetkv-5 | 20 | 3.357 | 49.5 | 8.96x |
+| combined | prophetkv-20 | 20 | 9.459 | 62.5 | 3.18x |
+| combined | prophetkv-30 | 20 | 13.285 | 66.5 | 2.26x |
+| combined | prophetkv-40 | 20 | 17.016 | 70.5 | 1.77x |
+| combined | prophetkv-50 | 20 | 20.562 | 73.5 | 1.46x |
+
+Actual prompt lengths: 65,216–65,664 tokens.
+Length-limited outputs: 8/120.
+Accuracy is official RULER reference-substring credit averaged across prompts.
+TTFT is engine submission to first token-bearing output, including online probing,
+cache transfers, selection and fusion; model loading, cache building and priming are excluded.
+Cache-building costs, total generation times and per-method truncation counts are in summary.csv.
+Ratios select cached tokens after the exact first chunk and before the fresh suffix.
+All methods use identical prompts and budgets; one timing per prompt and method.
+Added ratios were measured later than the preserved original cohort; method order is fixed.
+Every method uses 4096-token MLP/output-projection tiling, early release of dead attention tensors,
+expandable allocator segments, and 1029 KV blocks. Tiling can affect BF16 rounding and timing.
+The extension removes only the unused startup checkpoint export; inference arithmetic is unchanged.
+Native-prefix bitwise controls are inherited from the original qualified implementation.
+Each new ratio/task passed A-B-A versus fresh-engine isolation and all-layer tensor/causality audits.
+This is a 10-sample/task study, not the full default RULER evaluation.
+The 4B summary has different sample counts/model/RoPE/TP settings and is not a paired comparison.
+
+Original artifacts: /home/thnguyen/spark/unified-cache-management/.results/qwen3-32b-prophetkv-vt-cwe10-64k-c4096-tp4-20260921/final
+Combined artifacts: /home/thnguyen/spark/unified-cache-management/.results/qwen3-32b-prophetkv-vt-cwe10-64k-c4096-tp4-extension-20260921/combined

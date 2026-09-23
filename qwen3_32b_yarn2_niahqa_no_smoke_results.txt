@@ -1,0 +1,84 @@
+Qwen3-32B — ProphetKV UCM/vLLM port
+
+Completed: 480/480 measured requests; 10 samples each across eight NIAH/QA tasks.
+GPUs [1, 2, 3, 4], TP=4, BF16, thinking off, max 128 new tokens.
+Qualification/smoke phase disabled by explicit user request.
+64K-target data, 4096-token chunks, YaRN factor 2.
+
+| Task | Method | Samples | Mean TTFT (s) | Accuracy (%) | Speedup |
+|---|---|---:|---:|---:|---:|
+| niah_multikey_3 | baseline | 10 | 30.057 | 100.0 | 1.00x |
+| niah_multikey_3 | prophetkv-5 | 10 | 3.431 | 0.0 | 8.76x |
+| niah_multikey_3 | prophetkv-20 | 10 | 9.490 | 0.0 | 3.17x |
+| niah_multikey_3 | prophetkv-30 | 10 | 13.247 | 10.0 | 2.27x |
+| niah_multikey_3 | prophetkv-40 | 10 | 16.936 | 10.0 | 1.77x |
+| niah_multikey_3 | prophetkv-50 | 10 | 20.418 | 50.0 | 1.47x |
+| niah_multikey_2 | baseline | 10 | 29.948 | 100.0 | 1.00x |
+| niah_multikey_2 | prophetkv-5 | 10 | 3.417 | 20.0 | 8.76x |
+| niah_multikey_2 | prophetkv-20 | 10 | 9.332 | 50.0 | 3.21x |
+| niah_multikey_2 | prophetkv-30 | 10 | 13.054 | 60.0 | 2.29x |
+| niah_multikey_2 | prophetkv-40 | 10 | 16.587 | 50.0 | 1.81x |
+| niah_multikey_2 | prophetkv-50 | 10 | 20.012 | 70.0 | 1.50x |
+| niah_multikey_1 | baseline | 10 | 29.925 | 100.0 | 1.00x |
+| niah_multikey_1 | prophetkv-5 | 10 | 3.254 | 90.0 | 9.20x |
+| niah_multikey_1 | prophetkv-20 | 10 | 8.939 | 100.0 | 3.35x |
+| niah_multikey_1 | prophetkv-30 | 10 | 12.641 | 100.0 | 2.37x |
+| niah_multikey_1 | prophetkv-40 | 10 | 16.223 | 100.0 | 1.84x |
+| niah_multikey_1 | prophetkv-50 | 10 | 19.689 | 100.0 | 1.52x |
+| qa_1 | baseline | 10 | 29.209 | 60.0 | 1.00x |
+| qa_1 | prophetkv-5 | 10 | 3.248 | 50.0 | 8.99x |
+| qa_1 | prophetkv-20 | 10 | 8.851 | 50.0 | 3.30x |
+| qa_1 | prophetkv-30 | 10 | 12.469 | 60.0 | 2.34x |
+| qa_1 | prophetkv-40 | 10 | 16.010 | 60.0 | 1.82x |
+| qa_1 | prophetkv-50 | 10 | 19.433 | 60.0 | 1.50x |
+| qa_2 | baseline | 10 | 29.076 | 70.0 | 1.00x |
+| qa_2 | prophetkv-5 | 10 | 3.220 | 50.0 | 9.03x |
+| qa_2 | prophetkv-20 | 10 | 8.740 | 80.0 | 3.33x |
+| qa_2 | prophetkv-30 | 10 | 12.302 | 90.0 | 2.36x |
+| qa_2 | prophetkv-40 | 10 | 15.802 | 80.0 | 1.84x |
+| qa_2 | prophetkv-50 | 10 | 19.167 | 80.0 | 1.52x |
+| niah_single_1 | baseline | 10 | 30.158 | 100.0 | 1.00x |
+| niah_single_1 | prophetkv-5 | 10 | 3.411 | 100.0 | 8.84x |
+| niah_single_1 | prophetkv-20 | 10 | 9.722 | 100.0 | 3.10x |
+| niah_single_1 | prophetkv-30 | 10 | 13.513 | 100.0 | 2.23x |
+| niah_single_1 | prophetkv-40 | 10 | 17.293 | 100.0 | 1.74x |
+| niah_single_1 | prophetkv-50 | 10 | 20.737 | 100.0 | 1.45x |
+| niah_single_2 | baseline | 10 | 30.185 | 100.0 | 1.00x |
+| niah_single_2 | prophetkv-5 | 10 | 3.235 | 100.0 | 9.33x |
+| niah_single_2 | prophetkv-20 | 10 | 8.914 | 100.0 | 3.39x |
+| niah_single_2 | prophetkv-30 | 10 | 12.564 | 100.0 | 2.40x |
+| niah_single_2 | prophetkv-40 | 10 | 16.234 | 100.0 | 1.86x |
+| niah_single_2 | prophetkv-50 | 10 | 19.708 | 100.0 | 1.53x |
+| niah_single_3 | baseline | 10 | 29.878 | 100.0 | 1.00x |
+| niah_single_3 | prophetkv-5 | 10 | 3.210 | 100.0 | 9.31x |
+| niah_single_3 | prophetkv-20 | 10 | 8.798 | 100.0 | 3.40x |
+| niah_single_3 | prophetkv-30 | 10 | 12.466 | 100.0 | 2.40x |
+| niah_single_3 | prophetkv-40 | 10 | 16.014 | 100.0 | 1.87x |
+| niah_single_3 | prophetkv-50 | 10 | 19.481 | 100.0 | 1.53x |
+| combined | baseline | 80 | 29.804 | 91.2 | 1.00x |
+| combined | prophetkv-5 | 80 | 3.303 | 63.7 | 9.02x |
+| combined | prophetkv-20 | 80 | 9.098 | 72.5 | 3.28x |
+| combined | prophetkv-30 | 80 | 12.782 | 77.5 | 2.33x |
+| combined | prophetkv-40 | 80 | 16.387 | 75.0 | 1.82x |
+| combined | prophetkv-50 | 80 | 19.831 | 82.5 | 1.50x |
+
+Actual prompt lengths: 61,376–65,664 tokens.
+Length-limited outputs: 0/480.
+Accuracy is the official RULER reference-substring score, averaged over prompts.
+TTFT runs from engine submission to first token-bearing output; it includes online probing,
+cache transfers, selection and fusion. Model loading, offline cache building and priming
+are excluded. Cache-building costs and total generation times are saved separately.
+Ratios refer to selected cached tokens after the exact first chunk and before the fresh suffix.
+All methods share prompts, generation budgets and the configured physical GPUs. One timing per sample.
+Memory adaptation on every method: 4096-token MLP and attention-output-projection tiles,
+early release of dead attention tensors, expandable allocator segments, and 1029 KV blocks.
+Tiling can change BF16 rounding and execution cost; these are memory-adapted local results.
+Nominal factor-2 window is 65,536. The identical 65,792-token engine window uses
+256 appended RoPE table positions with unchanged factor-2 frequencies and magnitude;
+the first 65,536 table entries are bitwise preserved. This slightly exceeds nominal 2x.
+This is a 10-sample/task study, not the full default RULER evaluation.
+The 4B summary uses 100 samples/task and different model/RoPE/TP settings; its aggregate
+accuracy and TTFT are not a paired comparison with this experiment.
+
+Model configuration: https://huggingface.co/Qwen/Qwen3-32B
+Artifacts: /home/thnguyen/spark/unified-cache-management/.results/qwen3-32b-prophetkv-niahqa8x10-yarn2-no-smoke-20260921/final

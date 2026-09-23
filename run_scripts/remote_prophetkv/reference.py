@@ -7,7 +7,7 @@ import argparse,json,os,sys
 from pathlib import Path
 if os.environ.get('PROPHETKV_REFERENCE_HELPERS'):sys.path.insert(0,os.environ['PROPHETKV_REFERENCE_HELPERS'])
 from prophetkv_common import load_sample,generate,dump
-from common import verify_gpu_visibility
+from common import verify_gpu_visibility, model_limit
 from worker import audit_capture,worker_probe,build
 from types import SimpleNamespace
 
@@ -22,7 +22,7 @@ def main():
         raise RuntimeError('Unsafe reference launch')
     # Independent native vLLM: enable only its exact-prefix cache.
     from vllm import LLM
-    length=((s['tokens']+191)//64)*64
+    length=model_limit(p, s)
     cfg=dict(model=p['model'],tokenizer=p['model'],trust_remote_code=True,enforce_eager=True,
         dtype='bfloat16',max_model_len=length,max_num_batched_tokens=length,max_num_seqs=1,
         gpu_memory_utilization=p['gpu_memory_utilization'],block_size=64,enable_prefix_caching=True,

@@ -1,0 +1,33 @@
+Qwen3-32B: paired YaRN 4x versus 2x
+
+120 preserved 4x measurements versus 120 fresh 2x measurements on identical prompts.
+Ten prompts/task; native non-thinking chat, BF16 TP=4 on GPUs 1–4, 128-token cap, 4096-token chunks.
+
+| Task | Method | 4x TTFT (s) | 4x accuracy (%) | 2x TTFT (s) | 2x accuracy (%) |
+|---|---|---:|---:|---:|---:|
+| vt | baseline | 30.115 | 100.0 | 30.115 | 100.0 |
+| vt | prophetkv-5 | 3.362 | 64.0 | 3.395 | 92.0 |
+| vt | prophetkv-20 | 9.547 | 90.0 | 9.612 | 98.0 |
+| vt | prophetkv-30 | 13.447 | 98.0 | 13.461 | 98.0 |
+| vt | prophetkv-40 | 17.229 | 98.0 | 17.145 | 98.0 |
+| vt | prophetkv-50 | 20.831 | 98.0 | 20.664 | 100.0 |
+| cwe | baseline | 30.048 | 69.0 | 30.052 | 74.0 |
+| cwe | prophetkv-5 | 3.353 | 35.0 | 3.390 | 35.0 |
+| cwe | prophetkv-20 | 9.370 | 35.0 | 9.458 | 42.0 |
+| cwe | prophetkv-30 | 13.123 | 35.0 | 13.176 | 47.0 |
+| cwe | prophetkv-40 | 16.803 | 43.0 | 16.813 | 44.0 |
+| cwe | prophetkv-50 | 20.293 | 49.0 | 20.260 | 57.0 |
+| combined | baseline | 30.081 | 84.5 | 30.084 | 87.0 |
+| combined | prophetkv-5 | 3.357 | 49.5 | 3.392 | 63.5 |
+| combined | prophetkv-20 | 9.459 | 62.5 | 9.535 | 70.0 |
+| combined | prophetkv-30 | 13.285 | 66.5 | 13.319 | 72.5 |
+| combined | prophetkv-40 | 17.016 | 70.5 | 16.979 | 71.0 |
+| combined | prophetkv-50 | 20.562 | 73.5 | 20.462 | 78.5 |
+
+TTFT excludes model load, offline cache building, readiness waits and priming.
+Accuracy is official RULER reference-substring credit; one timing per prompt/method.
+The 2x cohort ran later. All methods share the original memory tiling and engine allocation.
+The 2x table appends 256 positions beyond its nominal 65536 using unchanged frequencies
+to preserve exact prompts and the 65792-token engine window. Original entries are bitwise unchanged.
+Both factors passed their own native-prefix bitwise controls and all-layer tensor audits.
+Tiling may affect BF16 rounding and execution cost. This is ten samples/task, not full RULER.

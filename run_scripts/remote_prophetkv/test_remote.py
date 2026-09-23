@@ -228,7 +228,7 @@ class Platform:
                    'vllm.config': SimpleNamespace(KVTransferConfig=lambda **kwargs: kwargs)}
         with patch.dict(sys.modules, modules):
             for case in common.CASES:
-                cfg = worker.build(SimpleNamespace(case=case, cache_dir=Path('/cache'), smoke=False), sample, p)
+                cfg = worker.build(SimpleNamespace(case=case, cache_dir=Path('/cache'), smoke=False, persistent=True), sample, p)
                 self.assertEqual(cfg['tensor_parallel_size'], 2)
                 self.assertFalse(cfg['enable_prefix_caching'])
                 self.assertEqual(cfg['rope_scaling'], p['rope_scaling_64k'])
@@ -236,6 +236,7 @@ class Platform:
                 if case == 'baseline':
                     self.assertNotIn('kv_transfer_config', cfg)
                 else:
+                    self.assertEqual(cfg['kv_transfer_config']['kv_connector'], 'PersistentBlendConnector')
                     sparse = cfg['kv_transfer_config']['kv_connector_extra_config']['ucm_sparse_config']['ProphetKV']
                     self.assertEqual(sparse['ratio'], int(case.split('-')[-1]) / 100)
                     self.assertEqual(sparse['method'], 'prophetkv')
@@ -490,7 +491,7 @@ class ValidationTests(unittest.TestCase):
             suite.refresh_runtime(cfg, self.root)
         self.assertEqual(runtime.read_text(), '# old runtime\n')
 
-    def test_legacy_smoke_gate_checks_presence_without_hashing(self):
+    def test_legacy_smoke_gate_requires_persistent_requalification(self):
         p = self.p | dict(samples=[self.meta])
         gate = self.root / 'smoke/8192/niah_multivalue'
         artifact = gate / 'reference.json'
@@ -498,6 +499,9 @@ class ValidationTests(unittest.TestCase):
         dump(gate / 'validation.json', dict(complete=True, sample_id=self.meta['id'],
              protocol_sha256='old', artifacts={str(artifact): 'old'}))
         with patch('hashlib.sha256', side_effect=AssertionError('Checksum must not run')):
+            self.assertFalse(suite.valid_gate(self.root, p, 8192, 'niah_multivalue'))
+            receipt = load(gate / 'validation.json')
+            dump(gate / 'validation.json', receipt | dict(engine_policy=common.ENGINE_POLICY))
             self.assertTrue(suite.valid_gate(self.root, p, 8192, 'niah_multivalue'))
             artifact.unlink()
             with self.assertRaisesRegex(ValueError, 'Missing gate artifact'):
@@ -660,6 +664,255 @@ class NumericalTests(unittest.TestCase):
         state.take('prime')
         with self.assertRaises(RuntimeError):
             state.take('measured')
+
+
+
+class PersistentTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = ValidationTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.tearDown)
+        self.root = self.fixture.root
+
+    def test_schedule_groups_methods_and_skips_only_validated_prompts(self):
+        samples = [dict(id=str(i), context_target=length) for i, length in enumerate((8192, 32768, 65536, 65536))]
+        with patch('suite.valid', side_effect=lambda root, p, m, case, path: m['id']=='0' and case=='baseline'):
+            plan = list(suite.session_plan(self.root, {}, samples))
+        self.assertEqual(len(plan), 14)
+        self.assertEqual([e['id'] for e in plan[0][2]], ['1'])
+        self.assertEqual([e['id'] for e in plan[1][2]], ['0', '1'])
+        self.assertEqual([e['id'] for e in plan[7][2]], ['2', '3'])
+        with patch('suite.valid', return_value=False):
+            self.assertEqual(len(list(suite.session_plan(self.root, {}, samples, 'prophetkv-10'))), 2)
+        p = dict(samples=[m | dict(tokens=n) for m, n in zip(samples, (8000,33000,66000,67000))])
+        self.assertEqual(common.model_limit(p, samples[0]), common.model_limit(p, samples[1]))
+        self.assertGreaterEqual(common.model_limit(p, samples[0]), 33128)
+        self.assertGreaterEqual(common.model_limit(p, samples[2]), 67128)
+        self.assertNotEqual(common.model_limit(p, samples[0]), common.model_limit(p, samples[2]))
+
+    def test_namespaced_cache_verifier_requires_both_tp_shards(self):
+        import hashlib
+        import pickle
+        from lifecycle import seed_value
+        model = self.root / 'model'
+        dump(model / 'config.json', dict(num_key_value_heads=8, num_attention_heads=64,
+             hidden_size=5120, head_dim=128, num_hidden_layers=64))
+        cache = self.root / 'cache'
+        tokens = list(range(64))
+        seed = seed_value('a'*32)
+        def hashed(meta, value):
+            value = value if isinstance(value, bytes) else pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+            return hashlib.md5(meta + value).digest()
+        metas = [f'{model}:2:torch.bfloat16:{rank}'.encode() for rank in range(2)]
+        key = hashed(metas[0], (hashed(metas[0], seed), tuple(tokens)))
+        for rank in range(2):
+            name = (key if rank == 0 else hashed(metas[rank], key)).hex()
+            path = cache / 'kv' / name[:8] / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open('wb') as stream:
+                stream.truncate(64 * 4 * 128 * 4 * 64)
+        args = SimpleNamespace(model_path=model, tensor_parallel_size=2, cache_dir=cache, hash_seed=seed)
+        self.assertEqual(verify_cache(args, [tokens])['verified_shards'], 2)
+        args.hash_seed = seed_value('b'*32)
+        with self.assertRaisesRegex(RuntimeError, 'Cache incomplete'):
+            verify_cache(args, [tokens])
+        args.hash_seed = seed
+        path.unlink()
+        with self.assertRaisesRegex(RuntimeError, 'Cache incomplete'):
+            verify_cache(args, [tokens])
+
+    def test_transfer_failure_retains_pending_handle(self):
+        from lifecycle import TrackedStore
+        store = Mock()
+        store.dump_data.return_value = object()
+        tracked = TrackedStore(store)
+        tracked.dump_data('data')
+        store.wait.side_effect = RuntimeError('not complete')
+        with self.assertRaisesRegex(RuntimeError, 'not complete'):
+            tracked.drain()
+        self.assertEqual(len(tracked.pending), 1)
+        store.wait.side_effect = None
+        self.assertEqual(tracked.drain(), dict(pending=0, completed=1))
+
+    def test_retirement_deletes_only_known_block_files(self):
+        from lifecycle import delete_retired_files
+        from prophetkv_common import cache_snapshot
+        cache = self.root / 'cache'
+        block = cache / 'kv' / ('a'*8) / ('a'*32)
+        block.parent.mkdir(parents=True)
+        block.write_bytes(b'kv')
+        dump(cache / 'owner.json', dict(result_root=str(self.root)))
+        snapshot = cache_snapshot(cache)
+        unexpected = block.parent / 'unexpected'
+        unexpected.write_bytes(b'do not delete')
+        with self.assertRaisesRegex(RuntimeError, 'Unexpected'):
+            delete_retired_files(cache, snapshot)
+        self.assertTrue(block.exists())
+        unexpected.unlink()
+        delete_retired_files(cache, snapshot)
+        self.assertFalse(block.exists())
+        self.assertTrue((cache / 'owner.json').exists())
+        block.parent.mkdir(parents=True)
+        block.symlink_to(cache / 'owner.json')
+        with self.assertRaisesRegex(ValueError, 'symlinked'):
+            delete_retired_files(cache, cache_snapshot(cache))
+
+    def test_tp_barrier_rejects_live_missing_rank_pending_and_stale_scheduler(self):
+        import persistent_worker as worker
+        llm = Mock()
+        llm.llm_engine.has_unfinished_requests.return_value = True
+        with self.assertRaisesRegex(RuntimeError, 'live'):
+            worker.barrier(llm, 'request', False, 2)
+        llm.llm_engine.has_unfinished_requests.return_value = False
+        ranks = [dict(rank=i, quiescent=True, transfers=dict(pending=0), request_bookkeeping=0) for i in range(2)]
+        for bad in (ranks[:1], [ranks[0], ranks[0]], [ranks[0], ranks[1] | dict(transfers=dict(pending=1))]):
+            llm.collective_rpc.return_value = bad
+            with self.assertRaisesRegex(RuntimeError, 'Every TP rank'):
+                worker.barrier(llm, 'request', False, 2)
+        llm.collective_rpc.return_value = ranks
+        receipt = self.root / 'scheduler.json'
+        dump(receipt, dict(request_id='old', requests_blend_meta=0, requests_meta=0))
+        with patch.dict(os.environ, PROPHETKV_SCHEDULER_RECEIPT=str(receipt)):
+            with self.assertRaisesRegex(RuntimeError, 'Scheduler'):
+                worker.barrier(llm, 'new', True, 2)
+            self.assertEqual(worker.barrier(llm, 'old', True, 2)['workers'], ranks)
+
+    def persistent_record(self):
+        f = self.fixture
+        ns = 'a'*32
+        rid = ns + ':measured'
+        r = f.record
+        r.update(engine_policy=common.ENGINE_POLICY, request_id=rid, namespace=ns, session_id='session',
+                 max_model_len=common.model_limit(f.p, f.meta), rope_group='native',
+                 cache_files_after_retirement=0,
+                 retirement=dict(workers=[dict(rank=i, quiescent=True, transfers=dict(pending=0), request_bookkeeping=0)
+                                          for i in range(2)],
+                                 scheduler=dict(request_id=rid, requests_blend_meta=0, requests_meta=0)))
+        r['cache_verification']['namespace'] = ns
+        for w in f.diag:
+            w['diagnostics'][0]['request_id'] = rid
+        text = f.path.with_suffix('.log').read_text().replace('measured-1-0', rid)
+        f.path.with_suffix('.log').write_text(text)
+        f.save()
+        return f, rid, text
+
+    def test_validation_uses_real_namespaced_request_and_both_tp_retirements(self):
+        f, rid, text = self.persistent_record()
+        suite.validate(f.root, f.p, f.meta, 'prophetkv-50', f.path)
+        f.record['retirement']['workers'][1]['transfers']['pending'] = 1
+        f.save()
+        with self.assertRaisesRegex(ValueError, 'retirement'):
+            suite.validate(f.root, f.p, f.meta, 'prophetkv-50', f.path)
+
+    def test_completed_request_survives_later_session_failure(self):
+        f, rid, text = self.persistent_record()
+        pending = [f.meta | dict(output=str(f.path)), dict(id='next', output=str(f.root/'missing.json'))]
+        log = 'REQUEST_BEGIN '+rid+'\n'+text.replace('WORKER_COMPLETE\n','')
+        log += 'REQUEST_COMPLETE '+rid+' '+str(f.path)+'\nTraceback: later request failed\n'
+        with patch('suite.progress'):
+            remainder = suite.collect_completed(f.root, f.p, 'prophetkv-50', pending, log, False)
+        self.assertEqual(len(pending), 1)
+        self.assertIn('Traceback', remainder)
+        self.assertNotIn('Traceback', f.path.with_suffix('.log').read_text())
+        self.assertTrue(suite.valid(f.root, f.p, f.meta, 'prophetkv-50', f.path))
+        pending = [f.meta | dict(output=str(f.path))]
+        with self.assertRaisesRegex(RuntimeError, 'Invalid request'):
+            suite.collect_completed(f.root, f.p, 'prophetkv-50', pending, 'Traceback\n'+log, False)
+
+    def test_cached_worker_reuses_engine_and_retires_before_next_prompt(self):
+        import persistent_worker as worker
+        from contextlib import ExitStack, redirect_stdout
+        import io
+        f = self.fixture
+        samples = {}
+        entries = []
+        for i in range(3):
+            sample = f.sample | dict(id=f'sample-{i}', chunk_size=64, source_row=i)
+            input_path = f.root / f'input-{i}.json'
+            dump(input_path, sample)
+            samples[str(input_path)] = sample
+            entries.append(sample | dict(input_path=str(input_path), output=str(f.root/f'out-{i}.json')))
+        p = f.p | dict(samples=entries, model='/model')
+        args = SimpleNamespace(case='prophetkv-10', smoke=False, cache_dir=f.root/'cache', session=f.root/'session.json')
+        events = []
+        llm = Mock()
+        llm.collective_rpc.return_value = f.imports
+        result = SimpleNamespace(num_cached_tokens=64, outputs=[SimpleNamespace(text='123', token_ids=[1], finish_reason='stop')])
+        def generate(engine, ids, budget, rid):
+            events.append(('generate', rid, budget))
+            return result, .1, .2
+        def barrier(*args):
+            events.append(('barrier', args[1]))
+            return dict(workers=[], scheduler={})
+        with ExitStack() as stack:
+            build = stack.enter_context(patch.object(worker, 'build', return_value=llm))
+            stack.enter_context(patch.object(worker, 'generate', side_effect=generate))
+            stack.enter_context(patch.object(worker, 'barrier', side_effect=barrier))
+            verify = stack.enter_context(patch.object(worker, 'wait_for_cache', side_effect=lambda *a: dict(complete=True)))
+            stack.enter_context(patch.object(worker, 'delete_retired_files', side_effect=lambda *a: events.append(('delete',))))
+            stack.enter_context(redirect_stdout(io.StringIO()))
+            worker.run_session(args, p, entries)
+        build.assert_called_once()
+        llm.llm_engine.engine_core.shutdown.assert_called_once()
+        records = [load(e['output']) for e in entries]
+        self.assertEqual(len({r['namespace'] for r in records}), 3)
+        self.assertEqual([r['session_request_index'] for r in records], [0,1,2])
+        self.assertEqual(load(args.session)['engine_initializations'], 1)
+        self.assertEqual(verify.call_count, 3)
+        for call, record in zip(verify.call_args_list, records):
+            self.assertEqual(call.args[0].tensor_parallel_size, 2)
+            self.assertEqual(call.args[0].hash_seed[-1], record['namespace'])
+        for i, event in enumerate(events):
+            if event[0]=='delete':
+                self.assertEqual(events[i-1][0], 'barrier')
+        for record in records:
+            generated = [e for e in events if e[0]=='generate' and e[1].startswith(record['namespace'])]
+            self.assertEqual([e[2] for e in generated], [1,1,1,128])
+        metadata = [call.kwargs['kwargs']['request_id'] for call in llm.collective_rpc.call_args_list
+                    if call.args[0] is worker.set_request]
+        self.assertEqual(len(metadata), 6)
+        self.assertEqual(len(set(metadata)), 6)
+
+    def test_session_failure_retries_only_unaccepted_prompts(self):
+        f = self.fixture
+        entries = [dict(id=str(i), input_path='unused', output=str(self.root/f'{i}.json')) for i in range(2)]
+        cfg = dict(cache=str(self.root/'cache'), indices=[0,1])
+        processes = [Mock(pid=900001), Mock(pid=900002)]
+        for process in processes:
+            process.poll.return_value=1
+        seen = []
+        def collect(root, p, case, pending, text, smoke):
+            seen.append([e['id'] for e in pending])
+            pending.pop(0)
+            return 'SESSION_COMPLETE' if len(seen)==2 else 'Traceback: injected failure'
+        processes[1].poll.return_value=0
+        with patch('suite.subprocess.Popen', side_effect=processes), patch('suite.busy_devices', return_value=[]), \
+             patch('suite.selected_devices', return_value=('', f.devices)), patch('suite.identity', return_value={}), \
+             patch('suite.terminate'), patch('suite.group_alive', return_value=False), \
+             patch('suite.collect_completed', side_effect=collect):
+            suite.launch_session(cfg, self.root, f.p, 'baseline', entries)
+        self.assertEqual(seen, [['0','1'], ['1']])
+        manifests = [load(path) for path in (self.root/'sessions').glob('*.manifest.json')]
+        self.assertEqual(sorted(len(m) for m in manifests), [1,2])
+
+    def test_install_persistence_preserves_existing_measurements_and_protocol(self):
+        f = self.fixture
+        cfg = dict(samples=100)
+        dump(f.root/'protocol.json', f.p | dict(settings=cfg, samples=[f.meta], measured_requests=7,
+                                               scope=[dict(length=8192, task='niah_multivalue')]))
+        private = f.root/'private_ucm/ucm'
+        connector = private/'integration/vllm/blend_connector.py'
+        connector.parent.mkdir(parents=True)
+        connector.write_text('from typing_extensions import Self\n')
+        runtime = private/'sparse/prophetkv/runtime.py'
+        runtime.parent.mkdir(parents=True)
+        runtime.write_text((common.HERE/'method/prophetkv/runtime.py').read_text())
+        record = f.root/'records/old/baseline.validated.json'
+        dump(record, dict(complete=True))
+        original = record.read_bytes(), (f.root/'protocol.json').read_bytes()
+        suite.refresh_runtime(cfg, f.root)
+        self.assertEqual(original, (record.read_bytes(), (f.root/'protocol.json').read_bytes()))
+        self.assertTrue((private/'integration/vllm/persistent_connector.py').is_file())
 
 
 if __name__ == '__main__':

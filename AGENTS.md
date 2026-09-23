@@ -1,5 +1,244 @@
 # Agent instructions
 
+## Qwen3-32B YaRN 2x expansion to 50 samples (2026-09-22)
+
+Latest authorized scope: 50 samples each of the preceding eight NIAH/QA tasks
+plus CWE and VT, and 50 LongBench v2 samples total with fully formatted prompts
+strictly below 65536 tokens. Methods are baseline and ProphetKV 5/20/30/40/50/60%.
+Total: 3850 measurements, retaining 600 original measurements byte-for-byte and
+running 3250 new ones. The first ten RULER prompts are copied exactly; rows 10–49
+come from the same source datasets. LongBench selection is seeded and spread
+across domains from the preserved eligible cohort, without truncation.
+
+Current driver: `benchmarks/prophetkv32b_yarn2_ruler50_lb50/run.sh`.
+Results: `.results/qwen3-32b-prophetkv-yarn2-ruler10x50-lb50-20260922/`.
+Read progress, supervisor, active, reporter, reporting-launch and current logs
+before any action. Never duplicate a live supervisor/reporter or launch an older
+scheduler. Retained records are read-only references to their original artifacts;
+preserve the parent experiments and their reports. Timings span different cohorts.
+
+No qualification/smoke is authorized; the smoke command is disabled. Normal
+initialization, priming, cache readiness and measured-result checks remain.
+Qwen3-32B BF16 TP4 on physical GPUs 1–4 pinned by UUID, YaRN 2x, thinking off,
+greedy 128-token cap, 4096-token chunks, 65792-token allocation and unchanged
+private memory adaptation remain required. GPU 0 and dummy jobs are forbidden.
+The detached CPU reporter writes `qwen3_32b_yarn2_ruler50_lb50_results.txt`
+only after 3850 validated measurements and verified owned-engine exit.
+Launched 2026-09-22: supervisor PID 188785 and CPU reporter PID 188962;
+verify current identities rather than relying on these historical PIDs. Both
+were confirmed reparented to PID 1 with independent sessions, SIGHUP ignored
+and stdin `/dev/null`. The first session schedules 450 missing baseline prompts;
+`expansion-validation.json` records the CPU scheduling and reuse checks.
+
+## Main NIAH/QA restart on GPUs 1–4, no qualification (latest request)
+
+The user explicitly reauthorized **GPUs 1,2,3,4** and requested restart of
+the main measurements **without qualification/smoke**. This supersedes the
+three-GPU restriction and pending hardware decision below. GPU 0 remains
+forbidden; dummy workloads remain forbidden. The old supervisor/reporter
+are stopped and their qualification artifacts are preserved.
+
+Current driver: `benchmarks/prophetkv32b_yarn2_niahqa_no_smoke/run.sh`.
+Results: `.results/qwen3-32b-prophetkv-niahqa8x10-yarn2-no-smoke-20260921/`.
+Use `status`, `detach`, or `stop` only after checking live process identities;
+never restart the historical qualification runner. The main scheduler skips
+all native-reference, 0/100%, and A-B-A qualification sessions. Its `smoke`
+command is disabled. Normal model initialization, priming, cache-readiness
+checks and measured-result validation remain; they are not a qualification
+phase and remain excluded from TTFT as before.
+
+Scope remains 480 measurements: ten rows each for multikey 3/2/1, QA 1/2,
+single 1/2/3, with baseline and ProphetKV 5/20/30/40/50%. Qwen3-32B BF16 TP4,
+YaRN 2x, native non-thinking chat, greedy 128-token cap, 4096-token chunks,
+65792-token allocation and the same private memory adaptation are unchanged.
+GPU visibility must be pinned by UUID. The new nohup supervisor and CPU
+reporter use separate sessions. Automatic final reporting writes
+`qwen3_32b_yarn2_niahqa_no_smoke_results.txt` after 480/480 and engine exit.
+Read `progress.json`, `supervisor.json`, `active.json`, `reporter.json`,
+`reporting-launch.json` and current logs. Preserve all prior results.
+
+Completed: **480/480 measurements**, zero length-limited outputs; all engines
+and temporary caches were released. The original automatic report failed on
+a leftover `Missing smoke gate` assertion after measurements completed.
+CPU-only `benchmarks/finalize_niahqa_no_smoke.py` recovered reporting using
+the frozen protocol's explicit qualification waiver. No inference was rerun;
+all 480 measured record hashes and frozen sources remain unchanged. Original
+failure states/logs and the exact reporting-only change are preserved under
+`report-recovery/`. Final validation and `qwen3_32b_yarn2_niahqa_no_smoke_results.txt`
+are complete. Do not restart this finished experiment.
+
+## NIAH/QA jobs stopped; qualification removed (2026-09-21, latest request)
+
+The user stopped all jobs, removed the qualification/smoke phase and requested
+restart on **GPUs 1,2,3 only**. The eight-task TP4 supervisor and CPU reporter
+are stopped; **0/480 measured records** existed. Qualification artifacts remain
+preserved; see its `cancellation.json`. Owned engine groups exited and caches
+were removed. No GPU compute processes remained. Do not resume the old runner.
+
+An unlaunched restart is prepared at
+`benchmarks/prophetkv32b_yarn2_niahqa_no_smoke/`. Its main run bypasses all
+native-reference, 0/100%, and A-B-A qualification sessions; the `smoke` command
+is rejected. Measured-request cache readiness/hit checks and result validation
+remain in place. Original frozen sources and previous results are unchanged.
+
+Restart is awaiting a hardware decision: TP=3 is unsupported because Qwen3-32B
+has 64 attention heads. BF16 checkpoint files plus the 65792-token KV cache
+require about **77.1 GiB before activations**, exceeding three 24 GiB cards.
+The user was asked to choose either TP=2 on GPUs 1–2 with CPU weight offload
+(GPU 3 idle, GPU 4 excluded; requires adaptation), or explicitly reauthorize
+GPU 4 for the existing BF16 TP=4 setup without qualification. No alternative
+has been authorized yet, and no new GPU work was launched. GPU 0 remains
+forbidden. Do not assume permission to use GPU 4 or change model precision.
+
+## Qwen3-32B YaRN 2x eight-task NIAH/QA run (2026-09-21, latest request)
+
+The user requested nohup jobs for `niah_multikey_3`, `niah_multikey_2`,
+`niah_multikey_1`, `qa_1`, `qa_2`, `niah_single_1`, `niah_single_2`,
+`niah_single_3`. Use ten source rows 0–9/task from the existing RULER100
+datasets: **80 prompts × six methods = 480 fresh measurements**. Methods:
+no cache and ProphetKV 5%, 20%, 30%, 40%, 50%. All previous results remain
+unchanged; 1649 source/prior artifacts are pinned in `experiment.json`.
+
+Driver: `benchmarks/prophetkv32b_tp4_yarn2_niahqa/run.sh`
+(`status`, `detach`, `stop`). Results:
+`.results/qwen3-32b-prophetkv-niahqa8x10-64k-c4096-tp4-yarn2-20260921/`.
+Read progress, supervisor, active log and reporter state before any launch;
+never duplicate a supervisor/reporter or start a historical scheduler.
+Supervisor and reporter are nohup-detached with separate sessions.
+
+Qwen3-32B BF16 TP=4, physical GPUs **1–4 by UUID**, thinking off, greedy
+128-token cap, 64K-target data, 4096-token chunks, YaRN factor 2 and private
+memory adaptation are unchanged. GPU 0 and dummy workloads remain forbidden.
+Actual prompts span **61376–65664 tokens**. The same 65792-token engine
+allocation, 1029 KV blocks and 256-position unchanged-frequency RoPE table
+extension are retained. Inference and private UCM are byte-identical to the
+completed VT/CWE 2x run. New prompt encoding uses its unchanged tokenizer,
+non-thinking chat and chunking functions.
+
+Each task requires fresh native-prefix, 0/100%, and A-B-A/fresh-engine gates:
+256 unmeasured smoke requests plus eight native references precede measurement.
+The CPU reporter waits for all 480 records and supervisor exit, then writes
+`qwen3_32b_yarn2_niahqa_results.txt` and `final/` tables/validation. Its state,
+launch receipt and log are `reporter.json`, `reporting-launch.json`, and
+`reporting.log`. Temporary caches remain bounded and are cleaned only after
+verified request retirement or engine exit. No shared packages were changed.
+
+## Independent Qwen3-32B YaRN 2x run (2026-09-21, latest request)
+
+The user requested the same experiment with **YaRN factor 2 instead of 4**.
+Run a fresh no-cache baseline and ProphetKV **5%, 20%, 30%, 40%, 50%**:
+the same 10 VT + 10 CWE prompts, **120 new measurements**. Preserve all 120
+YaRN-4x results and `qwen3_32b_results.txt` unchanged. BF16 TP=4, GPUs **1–4
+by UUID**, thinking off, greedy 128-token cap, 64K target, 4096-token chunks,
+MLP/output-projection tiling and the 65792-token engine window are unchanged.
+GPU 0 and dummy jobs remain forbidden.
+
+Driver: `benchmarks/prophetkv32b_tp4_yarn2/run.sh` (`status`, `detach`, `stop`).
+Results: `.results/qwen3-32b-prophetkv-vt-cwe10-64k-c4096-tp4-yarn2-20260921/`.
+Read progress, supervisor, active log and reporter state before any launch.
+Never duplicate a live supervisor or reporter or resume a historical scheduler.
+This runner uses the original external runtime and its own private UCM/source
+copies. `experiment.json` pins prior artifacts; exact prompt bytes are copied.
+
+The frozen prompts reach 65664 tokens; factor 2 nominally covers 65536. To keep
+inputs and output budgets identical, `VLLM_ALLOW_LONG_MAX_MODEL_LEN=1` permits
+the same 65792-token allocation, and private `rope_window.py` appends 256 table
+positions using unchanged factor-2 frequencies, correction ranges and magnitude.
+Every rank/layer verifies that all original 65536 entries remain bitwise equal
+and the extended table matches the same formula. Report this slight extension
+beyond the nominal 2x window; do not truncate prompts or change the factor.
+
+Fresh native-prefix references, 0/100% controls and 64 A-B-A/fresh-engine smoke
+requests qualify all methods/tasks under 2x before measurement. Smoke is excluded
+from results. The detached CPU reporter finalizes only after 120/120 validation
+and engine exit, writing `qwen3_32b_yarn2_results.txt` and
+`qwen3_32b_yarn_comparison.txt`. Read `reporter.json`, `reporting-launch.json`
+and `reporting.log`; never launch a duplicate. Owned caches are removed only
+after verified retirement/engine exit.
+
+Completed 2026-09-21: **120/120 new measurements** and all final integrity
+checks passed. `qwen3_32b_yarn2_results.txt` reports all six methods;
+`qwen3_32b_yarn_comparison.txt` pairs them with the unchanged 4x results.
+All 997 pinned prior artifacts remain unchanged. No measured 2x output hit
+the 128-token cap. Supervisor and reporter exited; owned GPU processes and
+temporary caches were released. Do not restart this completed run.
+CPU-only explanatory analysis is under the run's `diagnosis/` directory;
+its reference-word coverage is post-hoc analysis, never inference input.
+
+## Qwen3-32B ratio extension (2026-09-21, latest request)
+
+The user authorized **30%, 40%, 50% ProphetKV**, retaining all original no-cache,
+5% and 20% measurements unchanged. Run only **60 new measurements** on the exact
+same 10 VT + 10 CWE frozen prompts; combined comparison has **120 records**.
+GPUs **1–4 by UUID**, TP=4 BF16, non-thinking, 128-token cap, 64K target,
+4096-token chunks, YaRN factor 4 and the original memory adaptation are unchanged.
+GPU 0 and dummy jobs remain forbidden. No historical scheduler is authorized.
+
+Extension driver: `benchmarks/prophetkv32b_tp4_extension/run.sh` (`status`,
+`detach`, `stop`). Results:
+`.results/qwen3-32b-prophetkv-vt-cwe10-64k-c4096-tp4-extension-20260921/`.
+Read progress, supervisor, active log and reporter state; never duplicate a live
+supervisor or reporter. The original completed experiment stays untouched.
+`extension.json` pins 596 parent artifacts, exact inputs and inference sources.
+Only the unused startup checkpoint export was removed from the new memory worker;
+tiling and inference arithmetic remain unchanged. Each new ratio/task must pass
+A-B-A/fresh-engine isolation and all-layer tensor audits; native-prefix controls
+are inherited from the hash-pinned original qualification. Smoke is unmeasured.
+The detached CPU reporter writes `combined/` and updates `qwen3_32b_results.txt`
+only after 60 new records validate and owned engines exit. Preserve the timing
+caveat that new ratios were measured later; do not rerun the retained methods.
+
+Extension completed 2026-09-21: **60/60 new, 120/120 combined** records validated;
+all 596 pinned parent artifacts remained unchanged. `combined/summary.csv`,
+`combined/REPORT.md` and `qwen3_32b_results.txt` contain all six methods.
+Supervisor and reporter exited; all owned GPU processes and temporary caches
+were released. Do not restart this completed extension.
+
+## Local Qwen3-32B ProphetKV comparison (2026-09-21)
+
+The user authorized a new independent run on the last four physical GPUs,
+**1, 2, 3, 4**; GPU 0 remains forbidden. Qwen/Qwen3-32B BF16, TP=4, native
+non-thinking chat, greedy 128-token cap, 64K-target VT and CWE, ten source
+rows 0–9/task from the small-model RULER100 data, 4096-token chunks. Methods:
+no cache, ProphetKV 5%, ProphetKV 20%; **20 prompts / 60 measurements**.
+YaRN factor 4 extends the original checkpoint for these contexts.
+
+Driver: `benchmarks/prophetkv32b_tp4/run.sh` (`status`, `detach`, `stop`).
+Results: `.results/qwen3-32b-prophetkv-vt-cwe10-64k-c4096-tp4-20260921/`.
+This checkout uses the existing runtime at
+`/home/thnguyen/unified-cache-management/.envs/cacheblend` and CUDA toolkit
+from that original checkout, without changing shared packages or old results.
+Independent local runner/private UCM copies preserve the remote TP=2 scripts.
+The supervisor is locked, nohup-detached, and pins all four GPUs by UUID.
+Read progress, supervisor, active state and its current log. Never start a
+duplicate; never resume a historical scheduler for this request. Qualification
+and model loading are excluded from measured results. Final CPU-only reporting:
+`CUDA_VISIBLE_DEVICES='' /home/thnguyen/unified-cache-management/.envs/cacheblend/bin/python benchmarks/prophetkv32b_tp4/finalize.py`
+after the supervisor exits, produces `qwen3_32b_results.txt`. Frozen prompt,
+source and private-runtime hashes are in `provenance.json`. Keep dummy GPU
+jobs disabled and clean owned caches only after verified retirement/engine exit.
+
+The unmodified dense 64K activation path did not fit 24 GB cards. The private
+`memory_worker.py` now tiles MLPs and attention output projections over 4096
+tokens, drops dead attention views, uses expandable allocator segments, and
+fixes KV allocation at 1029 blocks. All methods and native references use this
+adaptation; report it because BF16 rounding and execution costs can change.
+All 64 MLP/output-projection numerical checks passed on all four ranks, and the
+native 64K prefix reference completed. Failed preparation attempts remain under
+`preflight-history/` and `smoke-history/`; they are not measured results.
+The exact original checkpoint is still used: vLLM V1 rejected the optional
+sharded-state loader, so its exported copy is unused. Read live smoke gates
+for full qualification status. `watch_report.py` is a detached CPU-only reporter;
+check `reporter.json`, `reporting-launch.json` and `reporting.log` before starting
+another reporter. It finalizes only after 60/60 completion and supervisor exit.
+
+Completed 2026-09-21: all **60/60** measurements and final integrity checks
+passed. `qwen3_32b_results.txt` and `final/summary.csv` contain the results.
+The supervisor and reporter exited, all owned GPU processes ended, and caches
+were retired. The unused 61 GiB TP export was removed after engine exit;
+its validation receipts and `checkpoint-export-retirement.json` are preserved.
+Do not restart this completed run.
+
 ## Permanent prohibition on dummy GPU jobs
 
 Never launch dummy GPU jobs, idle GPU placeholders, reservation workloads, or

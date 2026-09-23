@@ -22,6 +22,19 @@ CASES = ('baseline', 'prophetkv-5', 'prophetkv-10', 'prophetkv-20',
          'prophetkv-30', 'prophetkv-40', 'prophetkv-50')
 CONTROLS = ('prophetkv-0', 'prophetkv-100')
 TIMING = 'engine_step_first_token_monotonic'
+ENGINE_POLICY = 'persistent-per-method-and-rope'
+
+
+def engine_group(length):
+    return 'yarn64k' if length == 65536 else 'native'
+
+
+def model_limit(protocol, sample):
+    """Use the same fixed allocation for every method and retry in a RoPE group."""
+    group = engine_group(sample['context_target'])
+    sizes = [m['tokens'] for m in protocol.get('samples', [sample])
+             if engine_group(m['context_target']) == group]
+    return ((max(sizes) + 128 + 63) // 64) * 64
 
 
 def dump(path, value):
