@@ -56,8 +56,8 @@ class RequestMetadata:
         b=self.boundaries
         if not self.request_id or len(b)<4 or b[0]!=0 or any(a>=z for a,z in zip(b,b[1:])):
             raise ValueError('Invalid request boundaries')
-        if any(x%64 for x in b[:-1]) or b[-1]-b[-2]!=256:
-            raise ValueError('Expected block-aligned context and 256 fresh tokens')
+        if any(x%64 for x in b[:-1]) or b[-1]-b[-2]<256:
+            raise ValueError('Expected block-aligned context and at least 256 fresh tokens')
         q=self.question_positions
         if not q or list(q)!=sorted(set(q)) or q[0]<b[-2] or q[-1]>=b[-1]:
             raise ValueError('Question must lie entirely in fresh suffix')

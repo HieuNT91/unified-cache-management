@@ -82,6 +82,7 @@ ucm/sparse/gsa_on_device/csrc/ascend/dist/
 .data/
 .models/
 .results/
+.analysis/
 kv_repair*.csv
 # HotpotQA is stored as hotpotqa.json.zip; preparation expands this generated file.
 benchmarks/vendor/RULER/scripts/data/synthetic/json/hotpotqa.json

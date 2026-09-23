@@ -57,3 +57,6 @@ UcmSparseFactory.register_sparse_method("Blend", "ucm.sparse.blend.blend", "Blen
 UcmSparseFactory.register_sparse_method(
     "ProphetKV", "ucm.sparse.prophetkv.prophetkv", "ProphetKV"
 )
+UcmSparseFactory.register_sparse_method(
+    "prophetkv_with_expansion", "ucm.sparse.prophetkv.prophetkv", "ProphetKV"
+)

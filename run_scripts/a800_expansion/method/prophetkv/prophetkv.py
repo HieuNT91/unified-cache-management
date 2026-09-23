@@ -99,10 +99,10 @@ class ProphetKV(Blend):
         self.skipped_slots=self.full_slots[~torch.isin(self.full_slots,slots)]
         event=dict(kind='layer_counts',layer=layer_name,request_id=self.request.request_id,
             projection_tokens=self.projection_count,attention_tokens=len(query),ffn_tokens=len(query),
-            prefix_tokens=self.req.prefix_len,fresh_suffix_tokens=256,skipped_tokens=len(self.skipped_slots))
+            prefix_tokens=self.req.prefix_len,fresh_suffix_tokens=self.request.boundaries[-1]-self.request.boundaries[-2],skipped_tokens=len(self.skipped_slots))
         if self.method=='prophetkv_with_expansion':
             # Export after generation; retain device views without host synchronization.
-            event['selected_positions']=self.current_positions[:-256]
+            event['selected_positions']=self.current_positions[:-(self.request.boundaries[-1]-self.request.boundaries[-2])]
         if self.audit:
             cache=forward_context.no_compile_layers[layer_name].kv_cache[forward_context.virtual_engine]
             event['kind']='fusion_audit'
@@ -121,7 +121,7 @@ class ProphetKV(Blend):
             v_write_verified=torch.equal(written[1],v.reshape_as(written[1])),
             skipped_preserved=torch.equal(cache[:,self.skipped_slots//64,self.skipped_slots%64],skipped),
             prefix_preserved=torch.equal(cache[:,self.prefix_blocks],prefix),
-            suffix_verified=torch.equal(self.fusion_positions[-256:],torch.arange(
+            suffix_verified=torch.equal(self.fusion_positions[-(self.request.boundaries[-1]-self.request.boundaries[-2]):],torch.arange(
                 self.request.boundaries[-2],self.request.boundaries[-1],device=k.device)))
         if not all(checks.values()):raise RuntimeError('K/V write/preservation audit failed')
         event.update(checks)

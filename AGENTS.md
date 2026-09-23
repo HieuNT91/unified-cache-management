@@ -1,5 +1,114 @@
 # Agent instructions
 
+## Expansion ratio warmup recovery (2026-09-23, current driver)
+
+The 30/40/50% extension stopped at 16:36 HKT after **211/600** validated new
+measurements (30%:100, 40%:60, 50%:51). All workers exited and caches were removed.
+Warmup cleanup raced the backend's asynchronous disk commit: transfer wait only
+acknowledges device-to-host copy, leaving `.temp` files until write/rename completes.
+CPU regression reproduces the failure and verifies waiting for both expected,
+full-size committed warmup blocks before cleanup. This wait is outside TTFT;
+all original cleanup guards, inference, selection and measured validation remain.
+
+Current driver: `benchmarks/prophetkv_with_expansion_ratios_recovery/run.sh`.
+Same results directory as the extension below; **389 missing measurements** at
+recovery preparation. Never launch the original ratio scheduler. Original sources,
+protocol and private runtime remain unchanged. `warmup-recovery/amendment.json`
+pins recovery sources and `preserved-records.json` pins all 844 artifacts belonging
+to the 211 accepted records. Prior states/logs are in `warmup-recovery/previous-state`.
+New session/record provenance includes the amendment hash and warmup readiness.
+Recovery supervisor/reporter launched at 16:56 HKT as PIDs 703129/703265;
+both verified parented to PID 1, separate sessions, ignored SIGHUP, stdin
+`/dev/null`, CPU-only visibility. See `warmup-recovery/detachment.json` and
+verify current identities rather than relying on these historical PIDs.
+All 400 baseline/20% records remain preserved. Final reporting still requires
+600 new/1000 combined validations and verified engine exit. Read live supervisor,
+reporter, GPU states and logs before acting; do not duplicate processes. User's
+preference against ongoing assistant polling remains in force.
+
+## ProphetKV expansion 30/40/50% extension (2026-09-23, latest scope)
+
+The user authorized **600 new measurements** on the same 200 frozen prompts,
+explicitly choosing total/anchor ratios **30/22.5%, 40/30%, 50/37.5%**. Preserve
+all 400 completed baseline/20% measurements and their report byte-for-byte.
+Combined scope: 1000 measurements across five configurations. All other settings
+from the completed expansion comparison below remain unchanged: Qwen3-4B-Instruct,
+BF16 TP1 eager, native RoPE, non-thinking greedy 128-token cap, chunk4096,
+fresh256, allocation65792, formatted prompts <=65536 without truncation. Same
+samples/references and physical GPU assignment across configurations. GPUs 1–4
+by UUID only; GPU 0 and dummy jobs remain forbidden. No model smoke/qualification.
+
+Current driver: `benchmarks/prophetkv_with_expansion_ratios/run.sh`.
+Results: `.results/prophetkv-with-expansion-ratios-ruler4x50-20260923/`.
+Read progress, supervisor, reporter, per-GPU states, launch/detachment receipts
+and current session logs before any action. Supervisor/reporter launched as
+PIDs 600769/600834; verify live identities. Both were confirmed parented to PID 1,
+with separate sessions, SIGHUP ignored, stdin `/dev/null`. Never duplicate them.
+The parent runtime is copied byte-for-byte; no previous sources/results changed.
+`preserved-parent.json` pins 2127 parent artifacts. 69 CUDA/reference comparisons,
+CPU checks for all three configurations/600 scheduled requests, and combined-report
+regression checks passed before launch. New method order rotates across GPUs.
+Cache readiness, measured hits, all-layer sets, saved-score mask validation,
+retirement barriers, bounded caches, 900-second watchdog and one retry remain.
+
+The detached CPU reporter writes `prophetkv_with_expansion_ratios_results.txt`
+and `final/` only after 600 new validated records plus 400 retained records and
+verified owned-engine exit. Report accuracy, mean/median TTFT, paired mean speedup,
+length-limited counts, and the timing-cohort caveat: baseline/20% measured earlier.
+The user's preference is to leave detached jobs running without ongoing assistant
+polling; they will request results when ready. Do not resume the completed 400-run.
+
+## ProphetKV with expansion comparison (2026-09-23, latest scope)
+
+The user authorized implementation and **400 fresh measurements**: baseline and
+`prophetkv_with_expansion`, 50 distinct prompts each for `niah_multikey_2`,
+`niah_multikey_3`, `cwe`, `qa_1`. Fully formatted prompts must be **<=65536 tokens**
+without truncation. The first 50 eligible rows of the existing 100-row datasets
+are frozen; actual lengths are 61120–65536. Model: Qwen3-4B-Instruct-2507,
+BF16 TP1 eager, native RoPE, non-thinking, greedy 128-token cap, 4096-token chunks,
+256-token fresh suffix, common 65792-token allocation. Physical GPUs **1–4 by UUID**;
+GPU 0 and dummy jobs remain forbidden. Same sample/GPU across methods; phase order
+is counterbalanced. No separate model qualification/smoke is authorized.
+
+Defaults confirmed by the user: total_ratio=.20, anchor_ratio=.15, max_gap=2,
+score_exponent=.5, window_scale=8., window_exponent=.5, min_window=8, max_window=64.
+Segments group anchors transitively across <=max_gap unselected tokens. Sum only
+anchor scores sequentially in ascending position with float64, normalize by
+anchor_count**score_exponent; tie by leftmost segment. Expand immediately right
+of each segment by clamp(Python-round(window_scale*anchor_count**window_exponent),
+min_window,max_window), then use ranked fallback. Internal gaps are left for
+fallback; chunk boundaries do not clip windows. Original ProphetKV stays selectable.
+
+Driver: `benchmarks/prophetkv_with_expansion/run.sh` (`status`, `verify`, `detach`).
+Results: `.results/prophetkv-with-expansion-ruler4x50-20260923/`. Read progress,
+supervisor, reporter, GPU state, launch receipts and current session logs before
+any action. Never duplicate supervisors/reporters. The new supervisor/reporter
+were launched as PIDs 549207/549227; verify current identities. Both were verified
+reparented to PID 1 with separate sessions, ignored SIGHUP and `/dev/null` stdin.
+Normal priming, full cache readiness, measured hit checks, all-layer selected-set
+checks, saved-score reference masks and request retirement remain mandatory.
+19 CPU/CUDA selector checks and the 11 original CPU tests passed before launch.
+Final reporting requires 400 validated measurements and verified engine exit.
+Output: `prophetkv_with_expansion_results.txt` plus `final/` raw records and CSVs.
+The initial 18 records lacked a required separate artifact-export duration. That
+run was stopped, all 18 records and its sources/protocol/logs preserved under
+`timing-recovery/`, and the worker/validator corrected before restarting fresh.
+Those incomplete-schema records do not count toward the 400. Selection, inference
+and TTFT arithmetic did not change; cache readiness/export/retirement durations are
+now explicit. See protocol `instrumentation_recovery` and preservation receipts.
+
+The preceding 32B supervisor/reporter were stopped under this authorization at
+**2583/3850 validated records**. Its engines exited and caches were removed.
+7,752 pre-transition immutable artifacts were verified unchanged. State/log copies,
+identities, signals and preservation receipts are in the new run's `transition/`.
+Do not resume the old 32B scheduler or any other historical experiment.
+
+Completed: **400/400 validated**, final report and artifact hashes verified.
+Supervisor/reporter and owned engine groups exited; worker caches were removed.
+Baseline vs expansion20: aggregate accuracy 56.75% vs 50.30%, mean TTFT
+18.134934s vs 7.378366s (2.4579x), length-limited outputs 67 vs 84 of 200.
+The 30/40/50% extension above retains these results; do not restart this run.
+
 ## Qwen3-32B YaRN 2x expansion to 50 samples (2026-09-22)
 
 Latest authorized scope: 50 samples each of the preceding eight NIAH/QA tasks
