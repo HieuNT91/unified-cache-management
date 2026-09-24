@@ -20,6 +20,19 @@ from selection_reference import expansion_reference
 
 
 class RemoteTests(unittest.TestCase):
+    def test_native_thinking_template_validation(self):
+        class Tokenizer:
+            def __init__(self, thinking_tail, off_tail='<think>\n\n</think>\n\n'):
+                self.thinking_tail, self.off_tail = thinking_tail, off_tail
+            def apply_chat_template(self, messages, **kwargs):
+                return ('<|im_start|>user\nTest<|im_end|>\n<|im_start|>assistant\n' +
+                        (self.thinking_tail if kwargs['enable_thinking'] else self.off_tail))
+        for tail in ('', '<think>\n'):
+            suite.validate_thinking_template(Tokenizer(tail))
+        for tokenizer in (Tokenizer('<think>\n</think>'), Tokenizer('', ''), Tokenizer('answer')):
+            with self.assertRaisesRegex(ValueError, 'thinking chat mode'):
+                suite.validate_thinking_template(tokenizer)
+
     def test_restricted_pairs_and_scope(self):
         environment=dict(MODEL_PATH='/model',RESULT_ROOT='/results',CACHE_ROOT='/cache',
                          RULER_ROOT='/ruler',LONGBENCH_DATA='/lb.json')
@@ -164,7 +177,7 @@ class RemoteTests(unittest.TestCase):
             pad_token_id=0
             def apply_chat_template(self,messages,**kwargs):
                 assert kwargs['enable_thinking'] is True
-                return '<user>'+messages[0]['content']+'<assistant><think>\n'
+                return '<user>'+messages[0]['content']+'<|im_start|>assistant\n'
             def encode(self,text,**kwargs):return [ord(c)+1 for c in text]
             def __call__(self,text,**kwargs):
                 result={'input_ids':self.encode(text)}

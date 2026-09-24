@@ -51,6 +51,23 @@ def locked(root):
         yield
 
 
+def validate_thinking_template(tokenizer):
+    """Qwen3 may generate the opening think tag instead of prefilling it."""
+    messages = [dict(role='user', content='Test')]
+    off = tokenizer.apply_chat_template(messages, tokenize=False,
+        add_generation_prompt=True, enable_thinking=False)
+    on = tokenizer.apply_chat_template(messages, tokenize=False,
+        add_generation_prompt=True, enable_thinking=True)
+    header = '<|im_start|>assistant\n'
+    on_prefix, on_header, on_tail = on.rpartition(header)
+    off_prefix, off_header, off_tail = off.rpartition(header)
+    if (not on_header or not off_header or on_prefix != off_prefix or
+            on_tail.strip() not in ('', '<think>') or
+            re.fullmatch(r'\s*<think>\s*</think>\s*', off_tail) is None):
+        raise ValueError('Tokenizer did not apply Qwen3 thinking chat mode; '
+                         f'assistant suffixes: thinking={on_tail!r}, non_thinking={off_tail!r}')
+
+
 def preflight(cfg):
     if os.environ.get('CUDA_VISIBLE_DEVICES') != '' or 'PYTHONPATH' in os.environ:
         raise RuntimeError('Invoke via the shell entry points, which hide GPUs from the supervisor')
@@ -85,12 +102,7 @@ def preflight(cfg):
     tokenizer = AutoTokenizer.from_pretrained(model, local_files_only=True)
     if not tokenizer.is_fast or tokenizer.pad_token_id is None:
         raise ValueError('A fast tokenizer and pad token are required')
-    off = tokenizer.apply_chat_template([dict(role='user', content='Test')], tokenize=False,
-                                        add_generation_prompt=True, enable_thinking=False)
-    on = tokenizer.apply_chat_template([dict(role='user', content='Test')], tokenize=False,
-                                       add_generation_prompt=True, enable_thinking=True)
-    if on == off or not on.rstrip().endswith('<think>'):
-        raise ValueError('Tokenizer did not apply Qwen3 thinking chat mode')
+    validate_thinking_template(tokenizer)
     listing, devices = selected_devices(cfg['indices'])
     # Lower bound only; eager activations/allocator overhead need further space.
     max_target = cfg['max_model_len']
