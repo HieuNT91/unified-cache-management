@@ -1,5 +1,298 @@
 # Agent instructions
 
+## Oracle target recomputation, then high-budget ProphetKV (2026-09-25, latest scope)
+
+User cancelled all previous jobs and authorized two sequential experiments.
+Query-key run stopped at87/264 validated; supervisor/reporter/engines exited,
+owned caches removed, accepted hashes verified and incomplete artifacts separately
+preserved in `.analysis/oracle-highbudget-transition-20260925/`. Do not resume it
+or any historical scheduler. No other GPU experiment processes remained.
+
+Current driver: `benchmarks/oracle_highbudget_prophetkv32b/run.py` (`detach`,
+`status`). Root: `.results/oracle-highbudget-prophetkv32b-20260925/`.
+One detached CPU supervisor/reporter, launched as PIDs1439646/1439656; verify live
+identities. Read root and stage progress/supervisor/reporter/active, launch and
+detachment receipts and active log before action. Never duplicate processes.
+Physical GPUs1–4 by UUID only; GPU0 and dummy jobs forbidden.
+
+Stage1 `oracle/`:ten exact source rows0–9 each MK1/MK2/MK3 (CWE explicitly removed
+by user). **330 fresh measurements**:target-only once per30 prompts, then unions
+at10/30/50/70/90%, using BOTH all64 and selected5 [45,48,50,56,58]. User explicitly
+chose UNION:all eligible target key/value tokens plus native ProphetKV top budget%,
+deduplicated; actual recomputation can exceed nominal budget. References identify
+the oracle spans; label this diagnostic as oracle-assisted, not ordinary retrieval.
+Target-only skips attention scoring and still recomputes fresh256. One MK2 row8
+has10 target tokens in the exact first chunk; user explicitly chose keeping that
+prefix reused and reporting those tokens as already exact. Inputs stay immutable.
+
+Stage2 `highbudget/`:fifty exact rows0–49 each MK2/MK3/CWE, **900 fresh measurements**:
+all64 and selected5 at90/80/95%, in that listed order, all64 then selected5 for each.
+Original full-question scoring; no oracle annotations enter inference selection.
+Automatic start only after330 stage1 validations, owned-engine exit and verified
+stage1 final report. Total1230 measurements, no additional baseline inference.
+
+Both use Qwen3-32B BF16 TP4 eager, YaRN2 original65536 RoPE entries unchanged,
+allocation65920,1031 KV blocks, chunk/memory tile4096, fresh256, non-thinking
+greedy256, no truncation or separate qualification. Same existing32B50-row cohort;
+row-major task-interleaved order, persistent engine/configuration. Native ascending
+FP32 all64 sum/64 or selected5 sum, TP sum/4, all-context-key softmax, suffix
+probing/stopping, all64 cache alignment and original-position fusion retained.
+
+All-rank native/union/oracle mask replay, all64-layer selected sets, measured full
+cache hits/readiness, eight committed warmup shards, retirement, bounded caches,
+900-second progress watchdog and one retry remain. Ordinary priming observer is
+removed before timed generation; prior layer captures checked when available.
+New rows without captures use priming/measured exact-score/mask equivalence.
+Fifteen CPU tests passed, including exact oracle spans, prefix exception, both
+layer-set routing/arithmetic, unions/budgets/ties, oracle exclusion in stage2,
+phase handoff gates and synthetic330/900-record reports.8353 prior artifacts pinned.
+
+Startup verified: first MK1 target-only measurement scored1.0, recomputed10 oracle
+tokens, and passed all-rank exact masks, all64-layer sets, eight committed warmup
+shards and retirement checks; no timed capture observer. Supervisor/reporter were
+verified PPID1, independent sessions, ignored SIGHUP, /dev/null stdin and CPU-only
+visibility. See `startup-verification.json` and `detachment.json` in the root.
+Startup verification is complete; leave detached jobs running without polling.
+
+Each stage has independent final TXT/HTML/CSV/JSON and PNG/PDF reports after its
+measurements and engine exit. Include oracle additions/actual ratios/exact-prefix
+targets, raw predictions/token IDs, output caps, lengths, paired accuracy and TTFT,
+and separate construction/readiness/priming/generation/export/retirement timings.
+First five rows/task overlap layer-selection data; timing cohorts differ. Startup
+verification once, then status only on request. Do not poll continually.
+
+## Query-key attention ablation (2026-09-24, latest scope)
+
+User authorized focused final-question scoring on the exact five MK2/MK3/CWE
+prompts per task, with all64 and selected5 layers [45,48,50,56,58], budgets
+5/10/20/30/40/50/60%. **264 new measurements**:210 focused plus54 missing full-
+question controls. Frozen retained inventory:156 controls and15 latest vanilla
+baselines. Combined final scope:420 method records plus15 baselines. No reruns of
+validated controls; no truncation or separate qualification.
+
+Driver: `benchmarks/querykey_prophetkv32b/run.py` (`detach`, `status`). Results:
+`.results/querykey-prophetkv32b-mk2-mk3-cwe-5samples-output256-20260924/`.
+Read progress/supervisor/reporter/active, launch/detachment receipts and the active
+session log before action. Never duplicate processes or historical schedulers.
+Supervisor/reporter launched as PIDs1387512/1387571; verify current identities.
+Both verified PPID1, independent sessions, ignored SIGHUP, /dev/null stdin and
+CPU-only visibility. Worker pinned to physical GPUs1–4 by UUID; GPU0/dummy jobs
+forbidden. Startup verification only, then status only when requested.
+
+Vanilla predecessor was stopped at176/360 validated, with accepted hashes intact,
+incomplete artifacts preserved separately and owned engines/caches released.
+See `transition/`. Do not resume vanilla or any historical scheduler. Selective
+remains completed360/360. `preserved-prior.json` pins7038 prior artifacts.
+
+Private query_scope/layer_scope fields route only scoring query rows. MK2 uses
+complete key phrase; MK3 complete hyphenated UUID; CWE exactly “10 most common
+words” (task phrase). All15 tokenizer-offset mappings verified against every
+frozen token; sidecar spans leave original inputs unchanged. References/evidence
+never enter inference selection. All-context-key normalization, native FP32
+all64 sum/64 or selected5 sum, TP sum/4, sequential suffix probing/stopping,
+all64 cache alignment, exact floors/ascending ties and fresh256 are retained.
+Qwen3-32B BF16 TP4 eager, YaRN2 original65536 table entries bitwise unchanged,
+allocation65920,1031 KV blocks, memory/chunk4096, non-thinking greedy256.
+
+Ascending budgets: focused all64, focused selected5, missing full controls;
+one persistent engine/configuration and row-major MK2/MK3/CWE order. Ordinary
+priming captures per-layer scores; observer removed before timed inference.
+Full controls must match historical scores/masks; focus need not. Exact all-rank
+score replay, all-layer selected sets, readiness/hits, eight committed TP4 warmup
+shards, retirement, bounded caches,900-second watchdog and one retry retained.
+Fourteen CPU tests, immutable span checks, retained-control revalidation and
+synthetic435-record/210-pair/420-mask/eight-plot reporting passed.
+Startup verified: first focused all64/5% MK2 record passed exact all-rank score/
+mask replay, all64 selected sets and retirement; warmup verified8 committed shards.
+Focused per-layer scores differ from historical full-question scores as expected.
+See `startup-verification.json`. No ongoing assistant polling.
+
+CPU reporter publishes TXT/HTML/CSV/JSON/PNG/PDF only after264 fresh validations
+and owned engine exit, checking all retained hashes. Includes key/value mass,
+recall/harmonic/complete statements, CWE word occurrence coverage, mask overlap,
+paired answers/token IDs, output caps and separate timings. Retained/fresh timing
+cohorts differ. Five samples/task come from the layer-selection cohort; evidence
+must not assume dilution succeeds or imply held-out generalization.
+
+## Vanilla all-layer ProphetKV matched comparison (2026-09-24, latest scope)
+
+User authorized an independent directly comparable vanilla ProphetKV run using
+mean attention over all64 layers. **360 fresh measurements**: fresh baseline,
+then ProphetKV5/10/20/30/40/50/60/1%, same40 exact prompts, references and task
+interleaving as the completed selective comparison. Five rows each of
+MK2/MK3/MK1/CWE/VT/QA1/QA2/single3. No truncation or new qualification phase.
+
+Driver: `benchmarks/vanilla_prophetkv32b/run.py` (`detach`, `status`). Results:
+`.results/vanilla-prophetkv32b-40samples-output256-20260924/`. Read progress,
+supervisor, reporter, active, detachment/launch receipts and active session log
+before any action. Never duplicate supervisors/reporters or historical jobs.
+Current supervisor/reporter launched as PIDs1343889/1343894; verify identities.
+Both verified PPID1, independent sessions, SIGHUP ignored, /dev/null stdin and
+CPU-only visibility. Worker restricted to physical GPUs1–4 by UUID; GPU0 and
+dummy jobs forbidden. Startup verification only, status checks on request.
+
+Qwen3-32B BF16 TP4 eager, non-thinking greedy256, YaRN2 table65920 with original
+65536 entries bitwise preserved,1031 KV blocks, memory/chunk4096, fresh256.
+Scoring sums all64 FP32 question/head means in ascending layer order, divides
+by64, then existing TP reduction/divide-by4. Power-of-two scaling preserves
+native all-layer sum rankings. Original all64-layer sequential suffix probing,
+all-context-key normalization, exact floor budgets and ascending ties remain.
+Timed inference has no attention-capture observer. Ordinary priming compares
+all64 layers to prior captures; saved-score replay also verifies historical
+native mask equivalence. Preserve per-rank/all-layer checks, full cache hits,
+TP4 warmup commit wait, retirement, bounded caches,900-second watchdog/one retry.
+
+Eleven CPU tests plus synthetic360-record final-report/comparison checks passed.
+5418 prior artifacts are hash-pinned. Selective experiment completed360/360;
+its supervisor/reporter/engines exited and final artifact hashes were verified.
+Do not restart it. New CPU reporter publishes only after360 validations and
+owned-engine exit. Reports include accuracy, TTFT, cap counts, raw predictions,
+paired vanilla-versus-selective and fresh-versus-earlier baseline comparisons.
+Timing cohorts differ; same small cohort selected the selective layers.
+
+
+## Selective ProphetKV comparison (2026-09-24, latest scope)
+
+Authorized independent **360 fresh measurements** on the exact completed layer
+study's 40 prompts: rows0–4 each MK2/MK3/MK1/CWE/VT/QA1/QA2/single3. Baseline,
+then selective ProphetKV5/10/20/30/40/50/60/1%, identical row-major task-interleaved
+order. Selected zero-based layers **[45,48,50,56,58]**, ascending native FP32 sums,
+existing TP reduction/averaging and all-context-key normalization. Original
+ProphetKV remains implemented. Sequential suffix projection through layer58,
+forward propagation through57, align all64 cached layers before recomputation.
+Exact floor budgets, ascending-position ties, prefix reuse and fresh256 retained.
+
+Driver: `benchmarks/selective_prophetkv32b/run.py` (`detach`, `status`). Results:
+`.results/selective-prophetkv32b-40samples-output256-20260924/`. Read progress,
+supervisor, reporter, active, launch/detachment receipts and current session log
+before acting. Never duplicate processes or launch a historical scheduler.
+Qwen3-32B BF16 TP4 eager, YaRN2, non-thinking greedy256, chunk4096, memory tiling,
+allocation65920,1031 KV blocks. RoPE adds384 unchanged-frequency positions,
+verifying all original65536 entries bitwise. Physical GPUs1–4 by UUID only;
+GPU0 and dummy jobs forbidden. No separate qualification. Ordinary priming
+compares selected-layer attention against prior captures; observer is removed
+before measured generation. Scores/artifacts exported afterward. Per-rank exact
+score replay, all64-layer selected sets, cache readiness/hits, warmup committed
+shards, retirement,900-second progress watchdog and one retry are retained.
+
+Nine CPU tests and a synthetic360-record TXT/HTML/CSV/JSON report check passed.
+`preserved-prior.json` pins1948 completed-study artifacts; implementation and
+inputs are separately pinned. Initial startup was stopped at0 validated to
+correct inherited descriptive protocol metadata; exact sources/logs remain in
+`startup-history/protocol-metadata-correction/`. Current supervisor/reporter
+launched as PIDs1155094/1155112; verify live identities rather than trusting PIDs.
+Both verified PPID1, independent sessions, ignored SIGHUP, /dev/null stdin and
+CPU-only visibility. First configuration is baseline; per-configuration first
+accepted-record receipts are written automatically. Final reporting requires
+360 validated measurements and verified owned-engine exit. Final results concern
+the same cohort used to select layers, not held-out generalization. Include
+output-cap counts, prompt lengths, paired comparisons and separate timings.
+User requests startup verification only, then status only when requested.
+
+
+## Qwen3-32B layer-selection coverage study (2026-09-24, latest scope)
+
+The user authorized cancellation of the active expansion run and a new independent
+40-prompt attention coverage study. Expansion stopped at **5322/6188** validated
+records; supervisor/reporter and engines exited, caches removed, records preserved.
+Do not resume that or any historical scheduler. Cancellation/hash receipts:
+`.analysis/qwen3-32b-layer-search-40samples-20260924/transition/`.
+
+Current study: `.analysis/qwen3-32b-layer-search-40samples-20260924/`.
+Driver: `code/run.py`; README has exact launch command. Read progress, supervisor,
+reporter, active state, launch/detachment receipts and active session log first.
+Never duplicate supervisor/reporter. Initial supervisor/reporter PIDs1094010/1094032;
+verify live identities, never trust historical PIDs. Both were verified PPID1,
+independent sessions, ignored SIGHUP, /dev/null stdin and CPU-only visibility.
+
+Five source rows0–4 each of MK2/MK3/MK1/CWE/VT/QA1/QA2/single3, 40 exact historical
+Qwen3-32B prompts (61376–65664 tokens), no truncation. BF16 TP4 eager, non-thinking,
+YaRN2 with retained 256-position table extension, 65792 allocation, chunk4096,
+fresh256, greedy128. Physical GPUs1–4 UUID-only; GPU0/dummy jobs forbidden.
+One persistent original all-layer ProphetKV20 engine captures one diagnostic
+request/sample. No separate qualification or candidate-combination generation.
+Retain memory adaptation, per-block all-rank readiness/hits, TP4 warmup commit
+wait, every-layer exact selected sets, retirement barriers, bounded caches,
+900-second accepted-capture watchdog and one retry. Historical native masks and
+output tokens must match before acceptance; discrepancies require investigation.
+
+Raw unbinned FP32 layer attention saved per rank; offline equal-head aggregation
+and layer means use float64, exact budgets and ascending-position ties. Search
+all64 singles,2016 pairs,contiguous bands and width8 beams for sizes3–8. Eight
+leave-one-task-out folds; held-out evidence never influences training selection.
+Primary budget20%, task-macro objective, worst-task/fewer-layer/lexicographic ties.
+NIAH harmonic key/value recall; other tasks annotated evidence recall. Exclude
+prefix/suffix evidence; report complete relations and QA document coverage too.
+Fixed winners/final fit evaluated at5/10/30/40/50/60% without retuning.
+
+Eight CPU tests passed. `implementation.json` pins216 source/input/annotation
+artifacts. Automatic CPU reporter waits for40 validated captures and engine exit,
+then writes search manifests, metrics, exact masks, PNG/PDF plots, findings.md,
+index.html and final-validation.json. Conclusions concern small-cohort coverage,
+not demonstrated answer-accuracy gains. Diagnostic TTFT includes capture overhead.
+User prefers startup verification only, then status checks only when requested.
+Startup verified: first capture matched historical native scores, exact mask and
+output token IDs; TP4 warmup verified8 committed shards. Eight CPU unit checks,
+synthetic40-sample eight-fold search/exact-mask/report checks and all nine PNG/PDF
+figure types passed. See startup-verification.json. No ongoing assistant polling.
+
+## Expansion half-budget gap4 output256 (2026-09-23, latest scope)
+
+The user authorized a new independent nohup comparison: **baseline (no UCM,
+prefix caching off) plus expansion10/20/30/40/50/60%**. Anchor ratios are explicitly
+**5/10/15/20/25/30%**, half each total budget; the remainder uses right expansion
+then ranked fallback. `max_gap=4`, score/window exponents .5, window_scale8,
+min/max window8/64. Greedy **256 output tokens**, native non-thinking Qwen3-4B-
+Instruct-2507, BF16 TP1 eager, native RoPE. GPUs **1–4 by UUID** only; GPU0 and
+dummy jobs remain forbidden. No model smoke/qualification is authorized.
+
+Inputs: **100 each** of CWE, NIAH multikey1/2/3, QA1, multivalue and multiquery,
+all existing source rows0–99 without truncation. All503 LongBench v2 rows were
+tokenized with full chat/chunk formatting; **184** have strictly fewer than65536
+tokens and all184 are included. Total **884 distinct prompts ×7 = 6188 fresh
+measurements**. RULER actual lengths61120–65664; LongBench10176–64832. Common
+engine allocation **65920** leaves256 output tokens for the longest RULER prompt.
+Chunks remain4096. Fresh suffix=max(256, complete question/choices and trailing
+instructions); RULER suffix256, LongBench256–871 (45 prompts need >256).
+Only the new private runtime supports this variable suffix; the 256-token
+operations and original selector arithmetic remain unchanged. All old results,
+sources and runtimes are hash-pinned in `preserved-prior.json` and never modified.
+
+Current driver: `benchmarks/prophetkv_expansion_half_gap4/run.sh`.
+Results: `.results/prophetkv-expansion-half-gap4-ruler7x100-longbenchv2-256-20260923/`.
+Read progress, supervisor, reporter, launch/detachment receipts, per-GPU states
+and active logs before acting. Never duplicate a supervisor/reporter or launch
+a historical scheduler. Same prompt/GPU across all methods; method order rotates
+across GPUs. Persistent engines, warmup disk-commit readiness, per-request cache
+readiness/hits, all36-layer selected-set checks, saved-score exact-reference masks,
+retirement barriers, bounded caches, 900-second watchdog and one retry remain.
+The detached CPU reporter writes `prophetkv_expansion_half_gap4_results.txt` and
+`final/` only after6188 validated records and owned-engine exit. Retain output-cap
+counts and actual prompt lengths. User prefers no ongoing assistant polling;
+only startup verification and status checks when requested.
+
+Launched 2026-09-23: supervisor PID900431 and CPU reporter PID900494. Both were
+verified reparented to PID1 with independent sessions, SIGHUP ignored, stdin
+`/dev/null`, and CPU-only GPU visibility. All four workers have explicit allowed
+GPU UUIDs; see `detachment.json`. Verify current identities, not historical PIDs.
+Four CPU checks and 138 exact CUDA/reference mask comparisons passed before
+launch; receipts are `cpu-validation.json` and `selector-validation.json`.
+`preserved-prior.json` pins4789 prior artifacts. No previous run was resumed.
+
+## Expansion ratio comparison completed (2026-09-23 19:20 HKT)
+
+All **600/600 new measurements and 1000/1000 combined measurements** validated.
+Recovery supervisor, CPU reporter and all owned engine groups exited; temporary
+caches were removed. Final artifact hashes and root report were verified. Do not
+restart any expansion scheduler for this completed scope. Results are in
+`.results/prophetkv-with-expansion-ratios-ruler4x50-20260923/final/` and
+`prophetkv_with_expansion_ratios_results.txt`. Every task/method has 50 samples.
+Aggregate baseline/20/30/40/50 accuracy: 56.75/50.30/54.55/54.40/53.95 percent;
+mean TTFT: 18.135/7.378/10.215/12.979/15.636 seconds. Preserve the timing caveat:
+baseline/20% were measured earlier and 389 extension measurements followed the
+warmup recovery. All 400 parent records and 211 pre-recovery extension records
+remain unchanged. Length-limited output counts are included in the final tables.
+
 ## Expansion ratio warmup recovery (2026-09-23, current driver)
 
 The 30/40/50% extension stopped at 16:36 HKT after **211/600** validated new

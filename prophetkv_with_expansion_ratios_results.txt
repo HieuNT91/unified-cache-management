@@ -1,0 +1,43 @@
+Qwen3-4B-Instruct-2507: ProphetKV with expansion 20/30/40/50 percent
+200 distinct prompts, 50/task; 600 new + 400 retained = 1000 validated measurements.
+New parameters: {"prophetkv_with_expansion-30": {"anchor_ratio": 0.225, "max_gap": 2, "max_window": 64, "min_window": 8, "score_exponent": 0.5, "total_ratio": 0.3, "window_exponent": 0.5, "window_scale": 8.0}, "prophetkv_with_expansion-40": {"anchor_ratio": 0.3, "max_gap": 2, "max_window": 64, "min_window": 8, "score_exponent": 0.5, "total_ratio": 0.4, "window_exponent": 0.5, "window_scale": 8.0}, "prophetkv_with_expansion-50": {"anchor_ratio": 0.375, "max_gap": 2, "max_window": 64, "min_window": 8, "score_exponent": 0.5, "total_ratio": 0.5, "window_exponent": 0.5, "window_scale": 8.0}}
+Retained 20% uses 15% anchors; new 30/40/50% use 22.5/30/37.5% anchors.
+Baseline and 20% retained from the completed parent; 30/40/50% measured later. Same prompts/GPU assignments; timing cohorts differ.
+After 211 extension measurements, warmup disk readiness was added before cleanup; remaining measurements resumed later. Warmup readiness is outside TTFT.
+BF16 TP1 eager; GPUs 1–4 by UUID; native RoPE; thinking off; greedy 128-token cap.
+Fully formatted prompts <=65536 tokens, no truncation; engine allocation 65792.
+4096-token chunks and 256 fresh suffix tokens; same inputs/GPU for every method.
+No separate model qualification or smoke. Normal initialization and priming retained.
+TTFT: submission through first token-bearing output; includes probing, selection, cache alignment/transfer and recomputation; excludes loading, cache construction/readiness, priming and post-generation export
+Warm buffered local cache; cache construction is excluded from TTFT and reported separately.
+Speedup: paired arithmetic-mean baseline TTFT / arithmetic-mean method TTFT.
+New method phase order rotates across GPUs; concurrent workloads can affect timings.
+Task scores use official local RULER substring metrics. Length-limited outputs remain included.
+Every measured expansion mask matches the saved-score float64 reference; every layer uses that set.
+
+task | method | n | accuracy % | mean TTFT s | median TTFT s | speedup | prompt tokens | length limited
+cwe | baseline | 50 | 31.000 | 18.336128 | 18.273768 | 1.0000x | 65152–65536 | 38
+cwe | prophetkv_with_expansion-20 | 50 | 37.200 | 7.275883 | 7.268200 | 2.5201x | 65152–65536 | 43
+cwe | prophetkv_with_expansion-30 | 50 | 40.200 | 10.125671 | 10.119263 | 1.8109x | 65152–65536 | 43
+cwe | prophetkv_with_expansion-40 | 50 | 41.600 | 12.879421 | 12.862455 | 1.4237x | 65152–65536 | 46
+cwe | prophetkv_with_expansion-50 | 50 | 43.800 | 15.575536 | 15.560407 | 1.1772x | 65152–65536 | 47
+niah_multikey_2 | baseline | 50 | 56.000 | 18.209195 | 18.148769 | 1.0000x | 64960–65536 | 11
+niah_multikey_2 | prophetkv_with_expansion-20 | 50 | 46.000 | 7.490551 | 7.489285 | 2.4310x | 64960–65536 | 12
+niah_multikey_2 | prophetkv_with_expansion-30 | 50 | 50.000 | 10.300416 | 10.272477 | 1.7678x | 64960–65536 | 13
+niah_multikey_2 | prophetkv_with_expansion-40 | 50 | 50.000 | 13.075286 | 13.073666 | 1.3926x | 64960–65536 | 15
+niah_multikey_2 | prophetkv_with_expansion-50 | 50 | 52.000 | 15.758916 | 15.749669 | 1.1555x | 64960–65536 | 16
+niah_multikey_3 | baseline | 50 | 96.000 | 18.312249 | 18.255020 | 1.0000x | 63552–65536 | 4
+niah_multikey_3 | prophetkv_with_expansion-20 | 50 | 78.000 | 7.645177 | 7.649800 | 2.3953x | 63552–65536 | 11
+niah_multikey_3 | prophetkv_with_expansion-30 | 50 | 84.000 | 10.596692 | 10.590002 | 1.7281x | 63552–65536 | 10
+niah_multikey_3 | prophetkv_with_expansion-40 | 50 | 86.000 | 13.423080 | 13.431460 | 1.3642x | 63552–65536 | 9
+niah_multikey_3 | prophetkv_with_expansion-50 | 50 | 84.000 | 16.118734 | 16.102982 | 1.1361x | 63552–65536 | 7
+qa_1 | baseline | 50 | 44.000 | 17.682163 | 17.775188 | 1.0000x | 61120–65536 | 14
+qa_1 | prophetkv_with_expansion-20 | 50 | 40.000 | 7.101855 | 7.107504 | 2.4898x | 61120–65536 | 18
+qa_1 | prophetkv_with_expansion-30 | 50 | 44.000 | 9.838985 | 9.899564 | 1.7972x | 61120–65536 | 15
+qa_1 | prophetkv_with_expansion-40 | 50 | 40.000 | 12.538459 | 12.636243 | 1.4102x | 61120–65536 | 17
+qa_1 | prophetkv_with_expansion-50 | 50 | 36.000 | 15.092341 | 15.196348 | 1.1716x | 61120–65536 | 17
+aggregate | baseline | 200 | 56.750 | 18.134934 | 18.222464 | 1.0000x | 61120–65536 | 67
+aggregate | prophetkv_with_expansion-20 | 200 | 50.300 | 7.378366 | 7.378223 | 2.4579x | 61120–65536 | 84
+aggregate | prophetkv_with_expansion-30 | 200 | 54.550 | 10.215441 | 10.211277 | 1.7752x | 61120–65536 | 81
+aggregate | prophetkv_with_expansion-40 | 200 | 54.400 | 12.979062 | 12.964612 | 1.3972x | 61120–65536 | 87
+aggregate | prophetkv_with_expansion-50 | 200 | 53.950 | 15.636382 | 15.647056 | 1.1598x | 61120–65536 | 87
