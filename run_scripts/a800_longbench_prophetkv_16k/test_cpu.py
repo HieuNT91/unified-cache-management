@@ -93,6 +93,36 @@ class RemoteTests(unittest.TestCase):
                 self.assertTrue(torch.equal(actual,expected))
                 self.assertEqual(len(actual),int(256*parameters['total_ratio']))
 
+    def test_real_layer_diagnostics_export_native_selected_positions(self):
+        sys.path.insert(0,str(common.HERE/'method'))
+        import importlib
+        with patch.dict(sys.modules, {'ucm.sparse.blend.blend': SimpleNamespace(Blend=object)}):
+            module=importlib.import_module('prophetkv.prophetkv')
+        from prophetkv import attention
+        for method in ('prophetkv', 'prophetkv_with_expansion'):
+            for suffix in (256,875):
+                sparse=object.__new__(module.ProphetKV)
+                sparse.method=method
+                sparse.active=True
+                sparse.audit=False
+                sparse.selection_diagnostics=[]
+                sparse.request=SimpleNamespace(request_id='test',boundaries=(0,128,256,256+suffix))
+                sparse.req=SimpleNamespace(prefix_len=128)
+                positions=torch.tensor([128,131]+list(range(256,256+suffix)))
+                sparse.current_positions=positions
+                sparse.projection_count=len(positions)
+                sparse.full_slots=torch.arange(128,256+suffix)
+                sparse.attn_metadata=SimpleNamespace(block_table=torch.arange(32)[None,:],slot_mapping=positions)
+                context=SimpleNamespace(no_compile_layers={'layer':object()})
+                query=torch.zeros(len(positions),1)
+                with patch.object(attention,'install'):
+                    sparse.attention_begin(query,query,query,'layer',context)
+                event=sparse.selection_diagnostics[0]
+                self.assertEqual(event['selected_positions'].tolist(),[128,131])
+                self.assertEqual(event['attention_tokens'],2+suffix)
+                self.assertEqual(event['projection_tokens'],2+suffix)
+                self.assertEqual(event['ffn_tokens'],2+suffix)
+
     def test_native_reference_ties_and_floor(self):
         sys.path.insert(0,str(common.HERE/'method'))
         from prophetkv.selection import select

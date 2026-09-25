@@ -100,7 +100,7 @@ class ProphetKV(Blend):
         event=dict(kind='layer_counts',layer=layer_name,request_id=self.request.request_id,
             projection_tokens=self.projection_count,attention_tokens=len(query),ffn_tokens=len(query),
             prefix_tokens=self.req.prefix_len,fresh_suffix_tokens=self.request.boundaries[-1]-self.request.boundaries[-2],skipped_tokens=len(self.skipped_slots))
-        if self.method=='prophetkv_with_expansion':
+        if self.method in ('prophetkv', 'prophetkv_with_expansion'):
             # Export after generation; retain device views without host synchronization.
             event['selected_positions']=self.current_positions[:-(self.request.boundaries[-1]-self.request.boundaries[-2])]
         if self.audit:
