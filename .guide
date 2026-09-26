@@ -1,0 +1,79 @@
+# L20 environment setup
+
+Use Python 3.10, UCM 0.3.0, vLLM 0.9.2, Torch 2.7.0/CUDA 12.6 and
+Transformers 4.53.2. Driver 580 supports this CUDA runtime; keep the driver.
+Run the blocks in order. These commands install/check the environment only.
+
+## Update and activate
+
+```bash
+cd /data/jh/unified-cache-management
+git fetch origin
+git switch prophetkv/clean-qwen3-32b-yarn4
+git pull --ff-only origin prophetkv/clean-qwen3-32b-yarn4
+conda activate /data/jh/envs/ucm
+export PYTHON_BIN=/data/jh/envs/ucm/bin/python
+export PYTHONNOUSERSITE=1
+```
+
+## Dependencies
+
+Ubuntu/Debian packages (use distribution equivalents elsewhere):
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential git pkg-config libnuma-dev libaio-dev
+```
+
+Install the toolkit separately, or point CUDA_HOME at an existing complete 12.6
+toolkit. The CUDA version in nvidia-smi does not identify the installed toolkit.
+
+```bash
+conda create -y -p /data/jh/envs/cuda-12.6 -c nvidia 'cuda-toolkit=12.6'
+export CUDA_HOME=/data/jh/envs/cuda-12.6
+export PATH="$CUDA_HOME/bin:$PATH"
+export CUDACXX="$CUDA_HOME/bin/nvcc"
+nvcc --version
+
+"$PYTHON_BIN" -m pip install --upgrade pip
+"$PYTHON_BIN" -m pip install 'setuptools>=77,<80' wheel 'cmake==3.31.6' ninja 'wrapt==1.17.2'
+"$PYTHON_BIN" -m pip install \
+    'torch==2.7.0+cu126' 'torchvision==0.22.0+cu126' 'torchaudio==2.7.0+cu126' \
+    --index-url https://download.pytorch.org/whl/cu126
+"$PYTHON_BIN" -m pip install \
+    'torch==2.7.0+cu126' 'vllm==0.9.2' 'transformers==4.53.2'
+
+PLATFORM=cuda ENABLE_SPARSE=FALSE "$PYTHON_BIN" -m pip install -v \
+    --no-build-isolation --no-deps --no-cache-dir --no-binary=uc-manager \
+    'uc-manager==0.3.0'
+```
+
+UCM builds native storage/metrics libraries and downloads C++ dependencies.
+The build-time sparse flag skips unrelated native extensions; this checkout
+supplies ProphetKV's Python/Triton code. Do not install UCM 0.7.0 for this branch.
+
+## Verify
+
+```bash
+"$PYTHON_BIN" -m pip check
+PYTHONPATH="$PWD" CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" - <<'PY'
+from importlib.metadata import version
+for name, expected in {'torch': '2.7.0', 'vllm': '0.9.2',
+                       'transformers': '4.53.2', 'uc-manager': '0.3.0'}.items():
+    actual = version(name)
+    assert actual.split('+')[0] == expected, (name, actual)
+    print(name, actual)
+import torch
+import vllm._C
+from ucm.store.pcstore import ucmpcstore
+from ucm.shared.metrics import ucmmetrics
+assert torch.version.cuda == '12.6'
+print(ucmpcstore.__file__, ucmmetrics.__file__, sep='\n')
+PY
+CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" -m unittest discover -s tests -v
+"$PYTHON_BIN" -m pip freeze > /data/jh/envs/ucm/packages-installed.txt
+```
+
+Use `bash run.sh ...` for inference so private patches and runtime flags apply.
+See README for model/input preparation and explicit GPU UUID selection. L20
+inference validation is still required before accepting benchmark results.
