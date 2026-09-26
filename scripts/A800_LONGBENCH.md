@@ -21,27 +21,63 @@ remote preparation reports its actual counts and records retained spans.
 Accuracy uses the official LongBench v2 `pred.py` extractor on the answer channel:
 https://github.com/THUDM/LongBench/blob/main/pred.py
 
-## Copy the standalone code
+## Get the code with Git and use the existing dataset
 
-Copy `prophetkv-longbench-a800.tar.gz` to the project directory on the server, then:
+The server already has LongBench v2 under
+`/mnt/sde/jh/projects/unified-cache-management/.data/LongBench-v2`.
+Use its `data.json` directly. No archive transfer or dataset download is needed.
+
+First push the experiment branch from the development machine:
+
+```bash
+git -C /home/thnguyen/spark/unified-cache-management/.worktrees/prophetkv-clean \
+  push -u origin prophetkv/clean-qwen3-32b-yarn4
+```
+
+Then, on the A800 server, fetch the branch and create a separate code worktree:
 
 ```bash
 export PROJECT=/mnt/sde/jh/projects/unified-cache-management
-mkdir -p "$PROJECT/prophetkv-standalone"
-tar -xzf "$PROJECT/prophetkv-longbench-a800.tar.gz" -C "$PROJECT/prophetkv-standalone"
-cd "$PROJECT/prophetkv-standalone"
+export CODE_ROOT="$PROJECT/.worktrees/longbench-a800"
+git -C "$PROJECT" fetch origin
+git -C "$PROJECT" worktree add --detach "$CODE_ROOT" \
+  origin/prophetkv/clean-qwen3-32b-yarn4
+cd "$CODE_ROOT"
+```
+
+Run `worktree add` once. For later code updates, while this experiment is stopped:
+
+```bash
+git -C "$PROJECT" fetch origin
+git -C "$CODE_ROOT" merge --ff-only origin/prophetkv/clean-qwen3-32b-yarn4
+cd "$CODE_ROOT"
+```
+
+Configure the existing model, environment and dataset. Keep these exported
+variables in the shell used for preparation, launch and status commands:
+
+```bash
 export MODEL_PATH=/mnt/sde/jh/ckpts/Qwen3-32B
 export PYTHON_BIN=/mnt/sde/jh/envs/ucm/bin/python
 export LONGBENCH_DATA="$PROJECT/.data/LongBench-v2/data.json"
 export EXPERIMENT_DIR="$PROJECT/outputs/longbench-v2-503-yarn4-thinking16k"
-export PREPARED_DIR="$EXPERIMENT_DIR/prepared"
+export PREPARED_DIR="$PROJECT/.data/LongBench-v2/prepared-qwen3-yarn4"
 export CACHE_ROOT="$PROJECT/.cache/longbench-temporary"
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+
+test -f "$LONGBENCH_DATA"
+test -f "$MODEL_PATH/config.json"
+test -x "$PYTHON_BIN"
 ```
 
-Use a **new EXPERIMENT_DIR** for the sweep. Keep this shell's exported variables
-for the commands below. The environment must contain the repository-compatible
-vLLM0.9.2, torch2.7.0, transformers4.53.2 and CUDA uc-manager0.3.0 native libraries.
-The bundle supplies process-local patches, not a replacement environment installer.
+Use a **new EXPERIMENT_DIR** for each sweep. The separate PREPARED_DIR can be
+reused when its preparation settings and source hashes match. All preparation
+uses the local dataset and Qwen3 tokenizer/configuration; it does not download
+files or compute KV. The model checkpoint must also be local for GPU execution.
+
+The environment must contain the repository-compatible vLLM0.9.2, torch2.7.0,
+transformers4.53.2 and CUDA uc-manager0.3.0 native libraries. This Git branch
+supplies process-local patches; it does not install the Python/CUDA environment.
 
 ## Disk requirements
 
@@ -172,7 +208,7 @@ priming, cache reads, validation and retirement combined:
 | 16384 | 20 | 33.3 days |
 
 These rates and overheads are scenarios, not measured A800 performance or an
-upper bound. Allow additional time for CPU preparation and one-time KV building;
+upper bound. Allow additional time for CPU preparation and per-prompt KV building.
 The retained KV footprint is bounded, but repeated cache reads still make disk
 throughput material. A provisional planning range is
 **roughly 1–3 weeks if average output is 4–8K tokens**, potentially **5 weeks or

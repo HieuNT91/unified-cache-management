@@ -308,8 +308,9 @@ source files before focused edits. License notices are preserved in `licenses/`.
 
 For the all-503 LongBench v2 sweep on the supplied eight-A800 server, see
 [scripts/A800_LONGBENCH.md](scripts/A800_LONGBENCH.md). It includes remote paths,
+Git worktree setup, the existing server dataset path, offline CPU preparation,
 UUID-pinned launch commands, the repository middle-truncation adapter, disk
-estimates and runtime scenarios. This launcher uses `run.sh sweep`: construct one
+estimates and runtime scenarios. No archive transfer or dataset download is needed. This launcher uses `run.sh sweep`: construct one
 prompt's KV, reuse it across all 12 cached configurations, then retire and delete
 it before the next prompt. Two TP4 groups retain at most about56GiB of KV payload
 in total. No collection-wide KV setup is needed. `CACHE_ROOT` controls temporary

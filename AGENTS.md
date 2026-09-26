@@ -64,3 +64,8 @@
   both engines exited. CPU tests cover bounded deletion and dynamic policies;
   `tests/gpu_temporary_sweep.py` is opt-in and has not been run on remote GPUs.
   Existing persistent setups and historical experiments must remain untouched.
+
+- Remote deployment uses Git fetch and a separate server worktree, with existing
+  data at `/mnt/sde/jh/projects/unified-cache-management/.data/LongBench-v2/data.json`.
+  User explicitly wants no archive transfers. Prepare tokens offline with the
+  local Qwen3 model/tokenizer; see the A800 guide for exact paths and commands.
