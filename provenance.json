@@ -1,0 +1,102 @@
+{
+  "ucm/logger.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/logger.py",
+    "sha256": "eb70e8b70c061d06c037e4edcd8a5c5362976bc37d379b43e0ae52c95b505883"
+  },
+  "ucm/observability.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/observability.py",
+    "sha256": "5ef9d6131b7f110926854eb8b3858bbd03028314d28156dd3400e19992bd232f"
+  },
+  "ucm/utils.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/utils.py",
+    "sha256": "09ba60fe1f494ce3c935c4b328adfbd3980d9ce4ed6c8dbae75e83f05412647e"
+  },
+  "ucm/sparse/base.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/sparse/base.py",
+    "sha256": "e986e6bb6e59a3eac751fadca340732068991c96466557a839cba9bcfdf9dc3f"
+  },
+  "ucm/sparse/state.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/sparse/state.py",
+    "sha256": "9db72222ea97d525cda0dc0fdecc2e8deebc13fe48670004794e5d6fced41b86"
+  },
+  "ucm/sparse/utils.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/sparse/utils.py",
+    "sha256": "e2289576fa3f928d492328eb6c55a3189e5b2ba98d8f811682bd2842b768ace0"
+  },
+  "ucm/sparse/factory.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/sparse/factory.py",
+    "sha256": "8299a9f98c1d438a5aa2c3282b2bf56fb3197e5c88b440728320f9c1fa5dab17"
+  },
+  "ucm/sparse/blend/blend.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/sparse/blend/blend.py",
+    "sha256": "aa9503eb7800d7869d3167a34e5070c98eefb11f31290b68ef0fa20812cc98c5"
+  },
+  "ucm/sparse/blend/blockwise_rope.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/sparse/blend/blockwise_rope.py",
+    "sha256": "3d3e20ad74a8a0edb7ff38230c551523e0368c84d1f879849c0739dfc9c50067"
+  },
+  "ucm/integration/vllm/ucm_connector.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/integration/vllm/ucm_connector.py",
+    "sha256": "845be28e26554a7421d89543cedd1d02434adf1df4e7ccc1dada90e05b902b4e"
+  },
+  "ucm/integration/vllm/blend_connector.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/integration/vllm/blend_connector.py",
+    "sha256": "2076932ce43f0179ace72d936d536d9a409bc97e75a01ec5eb9da92e2a4c3705"
+  },
+  "ucm/integration/vllm/persistent_connector.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/integration/vllm/persistent_connector.py",
+    "sha256": "68716ae4b439e63279835519cd3f7de2ce15eb658aaac8ac2c2534cfc20a7c95"
+  },
+  "ucm/integration/vllm/patch/apply_patch.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/integration/vllm/patch/apply_patch.py",
+    "sha256": "968bc1b7eb7177c26bce0289e4ec7085c2b8200730ca66dd990a63179b7d4b38"
+  },
+  "ucm/integration/vllm/patch/patch_funcs/v092/vllm_patch.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/integration/vllm/patch/patch_funcs/v092/vllm_patch.py",
+    "sha256": "9995530f32a6dd4277fb71299c3bcc3020dfac7b16d3d03ef68ae21dfd8a912e"
+  },
+  "ucm/store/factory_v1.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/store/factory_v1.py",
+    "sha256": "78dbb7265c6bd1855dce724699bc91f4a9514fbedc6b7bcc8116203ede0460a6"
+  },
+  "ucm/store/ucmstore_v1.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/store/ucmstore_v1.py",
+    "sha256": "b627f57dd219c0105c8205233984017eae9d776ecb67bbc8ce131144e16f5d41"
+  },
+  "ucm/store/pcstore/pcstore_connector_v1.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/store/pcstore/pcstore_connector_v1.py",
+    "sha256": "9f6686d8ba376452a574cf97edcd748142888abb2f6043bf7156d508aece2ae0"
+  },
+  "ucm/sparse/prophetkv/__init__.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/sparse/prophetkv/__init__.py",
+    "sha256": "83c5943085464bc09c84e1117a22ed2ff945e18dbab3bd65e6357f0b9f5fd779"
+  },
+  "ucm/sparse/prophetkv/attention.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/sparse/prophetkv/attention.py",
+    "sha256": "652b17a9ca9af1bcf5836e4eeb13f6f654dd6905233673f06a36c348ccb877b6"
+  },
+  "ucm/sparse/prophetkv/causal_kernel.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/sparse/prophetkv/causal_kernel.py",
+    "sha256": "21b5724adfd95308eb80091e52926449fc4dc4896e50c86b057978c41af4d89f"
+  },
+  "ucm/sparse/prophetkv/prophetkv.py": {
+    "source": "benchmarks/selective_prophetkv32b/private_ucm/ucm/sparse/prophetkv/prophetkv.py",
+    "sha256": "b960958e54e6bd230d79eeedb484b22d01b2d96fa73d0bdb228e4c896c9441ec"
+  },
+  "ucm/sparse/prophetkv/runtime.py": {
+    "source": "benchmarks/selective_prophetkv32b/private_ucm/ucm/sparse/prophetkv/runtime.py",
+    "sha256": "ee8c5a0aafacba7b09b47bf691e0b45e3f369ee308eaced7facf511c525a5e82"
+  },
+  "ucm/sparse/prophetkv/score_kernel.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/sparse/prophetkv/score_kernel.py",
+    "sha256": "f76e5f4d0fa829d82a75021116e4b5f025a072f819e734279bf25e090a013285"
+  },
+  "ucm/sparse/prophetkv/selection.py": {
+    "source": "benchmarks/selective_prophetkv32b/private_ucm/ucm/sparse/prophetkv/selection.py",
+    "sha256": "3d113b0974aab54bbdd5416e157f29536c5d6ff7efd9e13d9d7ba6079cdb9fc0"
+  },
+  "ucm/sparse/prophetkv/lifecycle.py": {
+    "source": "benchmarks/longbenchv2_qwen3_32b_yarn4/private_ucm/ucm/sparse/prophetkv/lifecycle.py",
+    "sha256": "ea6535670d3db1f6294d9d80632b0007adb99a791535d675459800e11a2ec5b4"
+  }
+}
