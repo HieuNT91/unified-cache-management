@@ -317,3 +317,11 @@ in total. No collection-wide KV setup is needed. `CACHE_ROOT` controls temporary
 storage; live/final per-method reports combine both prompt shards. Its `longbench_v2`
 scoring rule uses the official answer extractor. See `tests/gpu_temporary_sweep.py`
 for the opt-in fresh-construction equivalence check (GPU validation pending).
+
+For the L20 server's eight-task RULER experiment (100 samples/task, exactly64000
+formatted input tokens, thinking/output16384, baseline plus nine ratios for each
+ProphetKV mode), use [scripts/L20_RULER_64000.md](scripts/L20_RULER_64000.md).
+It provides Git-based deployment, official asset downloads, CPU preparation,
+UUID-pinned launch commands, and combined live/final per-task reports for15200
+measurements. Temporary KV is built once per prompt and deleted after all18 cached
+configurations. No environment installation or archive transfer is required.

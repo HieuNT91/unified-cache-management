@@ -15,12 +15,17 @@ from runner.setups import (atomic_json, file_hash, fingerprint, manifest_entries
                            check_environment, start_engine, retirement, runtime_identity)
 
 
-def configurations():
+def configurations(percentages=(1,5,10,15,20,30), layers=(11,12,13,14,15)):
+    if not percentages or len(set(percentages)) != len(percentages) or any(
+            type(p) is not int or not 0 < p <= 100 for p in percentages):
+        raise ValueError("Ratios must be distinct integer percentages in [1,100]")
+    from ucm.sparse.prophetkv.layers import resolve_layers
+    selected = list(resolve_layers("selective_prophetkv", layers))
     return [dict(name='baseline', method='baseline', ratio=None, layers=None)] + [
         dict(name=f'{name}-{pct}', method=method, ratio=pct/100, layers=layers)
         for name, method, layers in [('prophetkv', 'prophetkv', None),
-            ('selective', 'selective_prophetkv', [11,12,13,14,15])]
-        for pct in (1,5,10,15,20,30)]
+            ('selective', 'selective_prophetkv', selected)]
+        for pct in percentages]
 
 
 class SharedReporter:
@@ -134,14 +139,20 @@ def load_inputs(args):
         if index % args.shards != args.shard:
             continue
         sample = json.loads(path.read_text())
-        validate_sample(sample, 4096, 114688)
+        validate_sample(sample, 4096, getattr(args, 'context_length', 114688))
+        exact = getattr(args, 'exact_input_tokens', None)
+        if exact is not None and len(sample['token_ids']) != exact:
+            raise ValueError(f'Expected exactly {exact} formatted input tokens')
         if sample['model_config_sha256'] != config_hash:
             raise ValueError('Prepared input model configuration changed')
         selected.append((index, dict(id=row['id'], evaluation=evaluation, sha256=hashes[-1]), sample))
     if not selected:
         raise ValueError('Empty prompt shard')
     identity = fingerprint(dict(inputs=hashes, manifest=file_hash(args.manifest), model=config_hash,
-                                runtime=runtime_identity(), tp=args.tp, configs=configurations()))
+                                runtime=runtime_identity(), tp=args.tp, configs=configurations(getattr(args, 'percentages', (1,5,10,15,20,30)),
+                                getattr(args, 'layers', (11,12,13,14,15))),
+                                context_length=getattr(args, 'context_length', 114688),
+                                exact_input_tokens=getattr(args, 'exact_input_tokens', None)))
     return expected, selected, identity
 
 
@@ -275,7 +286,7 @@ def run_sweep(args):
     args.model, args.output = args.model.resolve(), args.output.resolve()
     expected, selected, identity = load_inputs(args)
     cache = args.cache_root.resolve()/f'sweep-{uuid.uuid4().hex}'
-    configs = configurations()
+    configs = configurations(args.percentages, args.layers)
     if args.dry_run:
         print(json.dumps(dict(prompts=len(expected), shard_prompts=len(selected),
             shard=args.shard, configs=configs, measurements=len(selected)*len(configs),
@@ -322,6 +333,10 @@ def main():
     parser.add_argument('--memory',type=float,default=.9)
     parser.add_argument('--shard',type=int,default=0)
     parser.add_argument('--shards',type=int,default=1)
+    parser.add_argument('--percentages',type=int,nargs='+',default=[1,5,10,15,20,30])
+    parser.add_argument('--layers',type=int,nargs='+',default=[11,12,13,14,15])
+    parser.add_argument('--context-length',type=int,default=114688)
+    parser.add_argument('--exact-input-tokens',type=int)
     parser.add_argument('--dry-run',action='store_true')
     run_sweep(parser.parse_args())
 

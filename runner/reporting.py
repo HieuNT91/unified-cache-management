@@ -7,7 +7,7 @@ import re
 import statistics
 import time
 
-SCORERS = ('exact_match', 'choice', 'reference_coverage', 'contains_any', 'longbench_v2')
+SCORERS = ('exact_match', 'choice', 'reference_coverage', 'contains_any', 'longbench_v2', 'ruler_all', 'ruler_any')
 EVALUATION_FIELDS = {'subtask', 'references', 'scoring'}
 
 
@@ -54,6 +54,9 @@ def score_answer(answer, evaluation):
     references, scorer = evaluation['references'], evaluation['scoring']
     if not references:
         return None
+    if scorer in ('ruler_all', 'ruler_any'):
+        hits = [reference.lower() in answer.lower() for reference in references]
+        return sum(hits)/len(hits) if scorer == 'ruler_all' else float(any(hits))
     prediction = normalized(answer)
     refs = [normalized(r) for r in references]
     if scorer == 'exact_match':

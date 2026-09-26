@@ -69,3 +69,18 @@
   data at `/mnt/sde/jh/projects/unified-cache-management/.data/LongBench-v2/data.json`.
   User explicitly wants no archive transfers. Prepare tokens offline with the
   local Qwen3 model/tokenizer; see the A800 guide for exact paths and commands.
+
+- L20 RULER commands: `scripts/L20_RULER_64000.md`, `scripts/l20_ruler.sh`.
+  User already installed the environment and cloned the clean branch at
+  `/data/jh/unified-cache-management/ucm`; model `/data/jh/ckpts/Qwen3-32B`,
+  Python `/data/jh/envs/ucm/bin/python`. Git deployment and official downloads only.
+  Eight tasks x100: cwe/fwe/vt/qa_1/qa_2/niah_multivalue/niah_multikey_2/3.
+  Exactly64000 formatted input tokens (not65536), native thinking/output16384,
+  BF16 YaRN4, chunk4096, scheduled prefill16384. Baseline plus vanilla/selective
+  1/5/10/15/20/30/40/60/80%, selected zero-based layers11–15:15200 measurements.
+  Pinned NVIDIA generators retain source tokens; documented newline padding before
+  user text attains exact length. No forced assistant prefix or truncation.
+  Two UUID-pinned TP4 groups on remote0–3/4–7;8–9 stay free. Build each prompt once,
+  reuse across18 cached policies, then retire/delete. No local GPU launch.
+  Per-method live/final and combined status/aggregate report TTFT, answer-only RULER
+  accuracy, thinking/answer content-token lengths per task and overall.
