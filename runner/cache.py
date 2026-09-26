@@ -1,13 +1,9 @@
 """Prompt chunking and UCM 0.3.0 block verification helpers.
 
-Extracted unchanged from benchmarks/prophetkv_full/cacheblend_ruler.py.
+Extracted from benchmarks/prophetkv_full/cacheblend_ruler.py.
 No inference entry point or historical scheduler is included.
 """
-import hashlib
 import json
-import pickle
-import re
-import struct
 import time
 
 
@@ -50,29 +46,23 @@ def verify_cache(args, token_groups):
     kv_heads = config.get("num_key_value_heads", config["num_attention_heads"])
     head_dim = config.get("head_dim", config["hidden_size"] // config["num_attention_heads"])
     expected_bytes = 64 * max(1, kv_heads // args.tensor_parallel_size) * head_dim * 2 * 2 * config["num_hidden_layers"]
-    metas = [f"{args.model_path}:{args.tensor_parallel_size}:torch.bfloat16:{rank}".encode()
-             for rank in range(args.tensor_parallel_size)]
-    def hashed(meta, value):
-        raw = value if isinstance(value, bytes) else pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
-        return hashlib.md5(meta + raw).digest()
-    keys = set()
-    for tokens in token_groups:
-        parent = hashed(metas[0], getattr(args, 'hash_seed', 'UCM_HASH_SEED'))
-        for start in range(0, len(tokens) - 63, 64):
-            parent = hashed(metas[0], (parent, tuple(tokens[start:start + 64])))
-            keys.add(parent)
+    from runner.identity import BlockHasher, block_keys, shard_name
+    identity = getattr(args, 'setup_fingerprint', str(args.model_path))
+    persistent = hasattr(args, 'setup_fingerprint')
+    tp = args.tensor_parallel_size
+    hasher = BlockHasher(identity, tp, 0, persistent)
+    keys = {key for tokens in token_groups
+            for key in block_keys(hasher, tokens, getattr(args, 'hash_seed', 'UCM_HASH_SEED'))}
     missing = []
     for key in keys:
-        for rank, meta in enumerate(metas):
-            name = (key if rank == 0 else hashed(meta, key)).hex()
+        for rank in range(tp):
+            name = shard_name(key, identity, tp, rank, persistent)
             path = args.cache_dir / "kv" / name[:8] / name
             if not path.is_file() or path.stat().st_size != expected_bytes:
                 missing.append((rank, name))
-    from progress import emit
-    emit('cache',str(getattr(args,'hash_seed','warmup')),len(keys)*len(metas)-len(missing))
     if missing:
-        raise RuntimeError(f"Cache incomplete: {len(missing)}/{len(keys) * len(metas)} shards missing or wrong size; examples={missing[:3]}")
-    return {"expected_unique_blocks": len(keys), "verified_shards": len(keys) * len(metas),
+        raise RuntimeError(f"Cache incomplete: {len(missing)}/{len(keys) * tp} shards missing or wrong size; examples={missing[:3]}")
+    return {"expected_unique_blocks": len(keys), "verified_shards": len(keys) * tp,
             "bytes_per_shard": expected_bytes, "complete": True}
 
 

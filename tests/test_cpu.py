@@ -15,9 +15,45 @@ class ConfigurationTests(unittest.TestCase):
                                 cache_dir='/cache', end_token=99)
             self.assertEqual(cfg['rope_scaling'], dict(rope_type='yarn', factor=4., original_max_position_embeddings=32768))
             self.assertEqual(cfg['max_model_len'], 131072)
-            self.assertFalse(cfg['enable_chunked_prefill'])
+            self.assertTrue(cfg['enable_chunked_prefill'])
+            self.assertEqual(cfg['max_num_batched_tokens'], 16384)
             self.assertFalse(cfg['enable_prefix_caching'])
             self.assertEqual('kv_transfer_config' in cfg, method != 'baseline')
+
+    def test_configuration_cli_dry_runs(self):
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / 'model'
+            model.mkdir()
+            config = model / 'config.json'
+            config.write_text(json.dumps(dict(model_type='qwen3',num_hidden_layers=64,hidden_size=5120)))
+            ids = [1] * 384
+            ids[63] = ids[127] = 99
+            sample = root / 'input.json'
+            sample.write_text(json.dumps(dict(token_ids=ids,boundaries=[0,64,128,384],
+                question_positions=[380],max_output_tokens=1,thinking=False,
+                model_config_sha256=hashlib.sha256(config.read_bytes()).hexdigest())))
+            cases = [('baseline', []), ('prophetkv', []),
+                     ('selective_prophetkv', ['--num-layers','5']),
+                     ('selective_prophetkv', ['--layers','45','48','50','56','58'])]
+            for method, extra in cases:
+                result = subprocess.run(['bash','run.sh','run','--model',str(model),
+                    '--input',str(sample),'--output',str(root/'unused'),'--method',method,
+                    '--dry-run',*extra],env=dict(os.environ,PYTHON_BIN=sys.executable,CUDA_VISIBLE_DEVICES=''),
+                    capture_output=True,text=True,check=True)
+                cfg = json.loads(result.stdout)
+                self.assertTrue(cfg['enable_chunked_prefill'])
+                self.assertEqual(cfg['max_num_batched_tokens'],16384)
+                self.assertEqual(cfg['max_model_len'],131072)
+                self.assertFalse(cfg['enable_prefix_caching'])
+                self.assertEqual('kv_transfer_config' in cfg,method!='baseline')
+                self.assertFalse((root/'unused').exists())
 
     def test_layer_policies(self):
         self.assertEqual(resolve_layers('prophetkv'), tuple(range(64)))
@@ -56,9 +92,13 @@ class AlgorithmTests(unittest.TestCase):
         event = dict(kind='prophetkv_selection', scores=scores,
             selected_positions=list(range(64, 96)), scoring_layers=[63],
             fusion='mean_layers_fp32', alignment_count=64)
-        layers = [dict(kind='layer_counts', layer=f'model.layers.{i}.self_attn.attn',
+        positions = list(range(64, 96)) + list(range(128, 384))
+        step = dict(kind='prefill_step', start=64, end=384, scheduled_tokens=320,
+                    recomputed_tokens=288, no_forward=False, prefill_complete=True)
+        layers = [dict(start=64, end=384, selected_positions=positions,
+                       projection_tokens=288, attention_tokens=288, ffn_tokens=288, kind='layer_counts', layer=f'model.layers.{i}.self_attn.attn',
                        selected_set_verified=True) for i in range(64)]
-        workers = [dict(rank=i, diagnostics=[copy.deepcopy(event), *copy.deepcopy(layers)]) for i in range(2)]
+        workers = [dict(rank=i, diagnostics=[copy.deepcopy(event), copy.deepcopy(step), *copy.deepcopy(layers)]) for i in range(2)]
         sample = dict(boundaries=[0, 64, 128, 384])
         verify_diagnostics(workers, sample, 'selective_prophetkv', .5, 2, [63])
         broken = copy.deepcopy(workers)

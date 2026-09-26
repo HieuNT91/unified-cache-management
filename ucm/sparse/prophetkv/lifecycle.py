@@ -55,7 +55,9 @@ def retire(worker):
     if has_ucm_sparse():
         sparse = get_ucm_sparse()
         if sparse.request_state.pending is not None:
-            raise RuntimeError('Unconsumed request metadata at retirement')
+            sparse.request_finished_in_worker(sparse.request_state.pending.request_id)
+        if getattr(sparse, 'request', None) is not None:
+            sparse.request_finished_in_worker(sparse.request.request_id)
         connector = sparse.connector
         transfers = connector.store.drain()
         if connector.rope_store is not None:
@@ -89,6 +91,8 @@ def retire(worker):
         runner.requests.pop(request_id, None)
         runner.encoder_cache.pop(request_id, None)
         runner.input_batch.remove_request(request_id)
+    if hasattr(runner, "prefill_diagnostics"):
+        runner.prefill_diagnostics.clear()
     bookkeeping = len(runner.requests) + len(runner.input_batch.req_id_to_index)
     if bookkeeping: raise RuntimeError('Worker request bookkeeping remains')
     gc.collect()

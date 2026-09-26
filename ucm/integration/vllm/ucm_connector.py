@@ -1,7 +1,5 @@
 import copy
-import hashlib
 import os
-import pickle
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -63,20 +61,17 @@ class UCMConnectorMetadata(KVConnectorMetadata):
 
 
 class RequestHasher:
-    """hash(md5) request to generate ucm block id"""
-
+    """Use the same implementation as offline block inventories."""
     def __init__(self, vllm_config, rank_id):
-        meta = f"{vllm_config.model_config.model}:{vllm_config.parallel_config.tensor_parallel_size}:{vllm_config.model_config.dtype}:{rank_id}"
-        self.meta_bytes = meta.encode("utf-8")
+        from runner.identity import BlockHasher
+        extra = vllm_config.kv_transfer_config.kv_connector_extra_config
+        setup = extra.get('persistent_setup')
+        identity = setup['fingerprint'] if setup else vllm_config.model_config.model
+        self.hasher = BlockHasher(identity, vllm_config.parallel_config.tensor_parallel_size,
+                                  rank_id, persistent=bool(setup))
 
-    def __call__(self, input_data) -> bytes:
-        if isinstance(input_data, bytes):
-            input_bytes = input_data
-        else:
-            input_bytes = pickle.dumps(input_data, protocol=pickle.HIGHEST_PROTOCOL)
-
-        h = hashlib.md5(self.meta_bytes + input_bytes)
-        return h.digest()
+    def __call__(self, input_data):
+        return self.hasher(input_data)
 
 
 class UCMDirectConnector(KVConnectorBase_V1):
@@ -173,22 +168,8 @@ class UCMDirectConnector(KVConnectorBase_V1):
     def generate_hash(
         self, block_size: int, token_ids: List[int], parent_block_hash_value: bytes
     ) -> list[bytes]:
-        ret = []
-        for start in range(0, len(token_ids), block_size):
-            end = start + block_size
-            block_token_ids = token_ids[start:end]
-            # Do not hash the block if it is not full.
-            if len(block_token_ids) < block_size:
-                break
-
-            block_token_ids_tuple = tuple(block_token_ids)
-            hash_value = self.request_hasher(
-                (parent_block_hash_value, block_token_ids_tuple)
-            )
-            parent_block_hash_value = hash_value
-            ret.append(hash_value)
-
-        return ret
+        from runner.identity import chain_keys
+        return chain_keys(self.request_hasher, token_ids, parent_block_hash_value, block_size)
 
     def _create_store(
         self,

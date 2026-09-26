@@ -604,6 +604,11 @@ def _patch_kv_cache_manager() -> None:
         from ucm.sparse.state import get_ucm_sparse
 
         original_allocate_slots = KVCacheManager.allocate_slots
+        # Some UCM 0.3 installations already expose this extra argument. Their
+        # default None takes the sparse path, including for a no-cache baseline.
+        import inspect
+        allocation_kwargs = ({"num_slots_sparsed": INVALID_SLOT}
+            if "num_slots_sparsed" in inspect.signature(original_allocate_slots).parameters else {})
 
         def patched_allocate_slots(
             self,
@@ -631,6 +636,7 @@ def _patch_kv_cache_manager() -> None:
                 num_draft_tokens,
                 num_lookahead_tokens,
                 delay_cache_blocks,
+                **allocation_kwargs,
             )
 
         KVCacheManager.allocate_slots = patched_allocate_slots
@@ -800,31 +806,9 @@ def _patch_scheduler() -> None:
                         num_slots_sparsed=num_slots_sparsed,
                     )
                     if new_blocks is None:
-                        # The request cannot be scheduled.
-                        # Preempt the lowest-priority request.
-                        if self.policy == SchedulingPolicy.PRIORITY:
-                            preempted_req = max(
-                                self.running,
-                                key=lambda r: (r.priority, r.arrival_time),
-                            )
-                            self.running.remove(preempted_req)
-                        else:
-                            preempted_req = self.running.pop()
-
-                        self.kv_cache_manager.free(preempted_req)
-                        preempted_req.status = RequestStatus.PREEMPTED
-                        preempted_req.num_computed_tokens = 0
-                        if self.log_stats:
-                            preempted_req.record_event(
-                                EngineCoreEventType.PREEMPTED, scheduled_timestamp
-                            )
-
-                        self.waiting.prepend_request(preempted_req)
-                        preempted_reqs.append(preempted_req)
-                        if preempted_req == request:
-                            # No more request to preempt.
-                            can_schedule = False
-                            break
+                        raise RuntimeError(
+                            "Preemption is unsupported by this runner; reserve sufficient KV capacity"
+                        )
                     else:
                         # The request can be scheduled.
                         can_schedule = True
@@ -949,12 +933,12 @@ def _patch_scheduler() -> None:
                         )
 
                         # Get externally-cached tokens if using a KVConnector.
-                        # if self.connector is not None:
-                        #     num_external_computed_tokens, load_kv_async = (
-                        #         self.connector.get_num_new_matched_tokens(
-                        #             request, num_new_local_computed_tokens
-                        #         )
-                        #     )
+                        if self.connector is not None:
+                            num_external_computed_tokens, load_kv_async = (
+                                self.connector.get_num_new_matched_tokens(
+                                    request, num_new_local_computed_tokens
+                                )
+                            )
 
                         # Total computed tokens (local + external).
                         num_computed_tokens = (
@@ -1020,9 +1004,15 @@ def _patch_scheduler() -> None:
                                 # The request cannot be scheduled.
                                 break
 
+                    # Reserve the full original-position prompt for global
+                    # cache probing. This is capacity, not scheduled work.
+                    allocation_tokens = num_new_tokens + num_external_computed_tokens
+                    reserve = getattr(self.connector, "reservation_tokens", None)
+                    if reserve is not None:
+                        allocation_tokens = reserve(request, allocation_tokens)
                     new_blocks = self.kv_cache_manager.allocate_slots(
                         request,
-                        num_new_tokens + num_external_computed_tokens,
+                        allocation_tokens,
                         num_new_local_computed_tokens,
                         new_computed_blocks,
                         num_lookahead_tokens=self.num_lookahead_tokens,
@@ -1030,7 +1020,8 @@ def _patch_scheduler() -> None:
                         num_slots_sparsed=num_slots_sparsed,
                     )
                     if new_blocks is None:
-                        # The request cannot be scheduled.
+                        if not self.running:
+                            raise RuntimeError("Insufficient KV capacity for the prompt reservation")
                         break
 
                     # KVTransfer: the connector uses this info to determine
@@ -1872,12 +1863,40 @@ def _patch_gpu_model_runner() -> None:
                 self.maybe_setup_kv_connector(scheduler_output)
                 self.maybe_execute_ucm_sparse_begin(scheduler_output, attn_metadata)
 
-                model_output = self.model(
-                    input_ids=input_ids,
-                    positions=positions,
-                    intermediate_tensors=intermediate_tensors,
-                    inputs_embeds=inputs_embeds,
-                )
+                # Prompt progress, not query length, distinguishes prefill
+                # from decode (including a one-token final prefill range).
+                from ucm.sparse.prophetkv.prefill import prefill_step
+                if len(self.input_batch.req_ids) != 1:
+                    raise RuntimeError("This runtime supports one request at a time")
+                rid = self.input_batch.req_ids[0]
+                request = self.requests[rid]
+                is_prefill, final_prefill = prefill_step(
+                    request.num_computed_tokens, num_scheduled_tokens,
+                    len(request.prompt_token_ids))
+                mask = None
+                if has_ucm_sparse():
+                    mask = get_ucm_sparse().prepare_step(positions)
+                if mask is not None:
+                    input_ids = input_ids[mask]
+                    positions = positions[mask]
+                elif is_prefill:
+                    if not hasattr(self, 'prefill_diagnostics'):
+                        self.prefill_diagnostics = []
+                    self.prefill_diagnostics.append(dict(kind='prefill_step',request_id=rid,
+                        start=request.num_computed_tokens,
+                        end=request.num_computed_tokens+num_scheduled_tokens,
+                        scheduled_tokens=num_scheduled_tokens,recomputed_tokens=num_scheduled_tokens,
+                        no_forward=False,prefill_complete=final_prefill))
+                no_forward = mask is not None and not len(positions)
+                if no_forward and (not is_prefill or final_prefill):
+                    raise RuntimeError("Empty final prefill cannot produce logits")
+                if not no_forward:
+                    model_output = self.model(
+                        input_ids=input_ids,
+                        positions=positions,
+                        intermediate_tensors=intermediate_tensors,
+                        inputs_embeds=inputs_embeds,
+                    )
 
                 self.maybe_wait_for_kv_save()
                 logits_indices = self.maybe_execute_ucm_sparse_finished(logits_indices)
@@ -1885,6 +1904,19 @@ def _patch_gpu_model_runner() -> None:
                 finished_sending, finished_recving = self.get_finished_kv_transfers(
                     scheduler_output
                 )
+
+            if is_prefill and not final_prefill:
+                # Advance scheduler progress without sampling, even for a range
+                # with zero selected queries. KV transfers are still retired.
+                if has_kv_transfer_group():
+                    get_kv_transfer_group().clear_connector_metadata()
+                self.eplb_step()
+                return ModelRunnerOutput(
+                    req_ids=list(self.input_batch.req_ids),
+                    req_id_to_index=dict(self.input_batch.req_id_to_index),
+                    sampled_token_ids=[[]], spec_token_ids=None, logprobs=None,
+                    prompt_logprobs_dict={}, pooler_output=[],
+                    finished_sending=finished_sending, finished_recving=finished_recving)
 
             if self.use_aux_hidden_state_outputs:
                 hidden_states, aux_hidden_states = model_output

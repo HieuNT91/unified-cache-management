@@ -113,6 +113,8 @@ class BlendRequestMeta:
 @dataclass
 class BlendRequestDispatchMeta(RequestDispatchMeta):
     chunks_meta: List[ChunkMetaData]
+    full_block_ids: tuple = ()
+    continuing: bool = False
 
 
 @dataclass

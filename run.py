@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare one immutable prompt, then run any of three methods on it."""
+"""Prepare prompts or a persistent KV collection, then run any of three methods."""
 import argparse
 import hashlib
 import json
@@ -31,13 +31,12 @@ def check_model(path):
         raise ValueError('Use the unquantized BF16 checkpoint')
 
 
-def prepare(args):
+def tokenize_sample(args, tokenizer=None):
     from transformers import AutoTokenizer
     from runner.cache import cacheblend_prompt
     check_model(args.model)
-    if args.output.exists():
-        raise FileExistsError(args.output)
-    tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
+    if tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
     question = args.question.read_text().strip()
     if not question:
         raise ValueError('Empty question')
@@ -57,7 +56,7 @@ def prepare(args):
     marker = tokenizer.convert_tokens_to_ids('<|endoftext|>')
     if marker is None or tokenizer.convert_ids_to_tokens(marker) != '<|endoftext|>':
         raise ValueError('Expected Qwen3 end-of-text delimiter')
-    chunks, formatted = cacheblend_prompt(ids, tokenizer, marker, 4095, suffix)
+    chunks, formatted = cacheblend_prompt(ids, tokenizer, marker, getattr(args, 'kv_chunk_size', 4096) - 1, suffix)
     bounds = [0]
     for chunk in chunks:
         bounds.append(bounds[-1] + len(chunk))
@@ -68,10 +67,17 @@ def prepare(args):
         thinking=args.thinking, max_output_tokens=args.max_output_tokens,
         model_config_sha256=digest(args.model / 'config.json'),
         context_sha256=digest(args.context), question_sha256=digest(args.question))
-    validate_sample(sample)
+    validate_sample(sample, getattr(args, 'kv_chunk_size', 4096), getattr(args, 'context_length', 131072))
+    return sample
+
+
+def prepare(args):
+    if args.output.exists():
+        raise FileExistsError(args.output)
+    sample = tokenize_sample(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     dump(args.output, sample)
-    print(f'Prepared {len(formatted)} tokens, {len(chunks)} chunks, {suffix} fresh suffix tokens')
+    print(f'Prepared {len(sample["token_ids"])} tokens')
 
 
 def generate(engine, tokens, budget, request_id, thinking=False):
@@ -105,8 +111,20 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers):
     common = None
     for worker in workers:
         events = worker['diagnostics']
+        steps = [e for e in events if e['kind'] == 'prefill_step']
+        cursor = 0 if method == 'baseline' else sample['boundaries'][1]
+        for step in steps:
+            if (step['start'] != cursor or step['end'] - cursor != step['scheduled_tokens']
+                    or not 0 < step['scheduled_tokens'] <= 16384
+                    or step['end'] > sample['boundaries'][-1]
+                    or step['prefill_complete'] != (step['end'] == sample['boundaries'][-1])
+                    or step['no_forward'] != (step['recomputed_tokens'] == 0)):
+                raise RuntimeError('Invalid prefill progress or scheduling budget')
+            cursor = step['end']
+        if not steps or cursor != sample['boundaries'][-1]:
+            raise RuntimeError('Incomplete prefill progress')
         if method == 'baseline':
-            if events:
+            if len(events) != len(steps) or any(e['scheduled_tokens'] != e['recomputed_tokens'] for e in steps):
                 raise RuntimeError('Baseline used a sparse method')
             continue
         selections = [e for e in events if e['kind'] == 'prophetkv_selection']
@@ -127,15 +145,29 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers):
         common = reference
         layers = [e for e in events if e['kind'] == 'layer_counts']
         expected = {f'model.layers.{i}.self_attn.attn' for i in range(64)}
-        if len(layers) != 64 or {e['layer'] for e in layers} != expected or not all(
-                e['selected_set_verified'] for e in layers):
+        required = reference + list(range(end, sample['boundaries'][-1]))
+        if len(layers) != 64 * len(steps):
             raise RuntimeError('Missing all-layer selected-set verification')
+        for step in steps:
+            subset = [p for p in required if step['start'] <= p < step['end']]
+            entries = [e for e in layers if (e['start'], e['end']) == (step['start'], step['end'])]
+            if (len(entries) != 64 or {e['layer'] for e in entries} != expected
+                    or step['recomputed_tokens'] != len(subset)):
+                raise RuntimeError('Missing layer or incorrect per-step token count')
+            for entry in entries:
+                if (not entry['selected_set_verified'] or entry['selected_positions'] != subset
+                        or any(entry[k] != len(subset) for k in
+                               ('projection_tokens', 'attention_tokens', 'ffn_tokens'))):
+                    raise RuntimeError('Per-layer selection coverage mismatch or duplicate positions')
 
 
 def run(args):
     from importlib.metadata import version
     check_model(args.model)
-    sample = validate_sample(json.loads(args.input.read_text()))
+    sample = json.loads(args.input.read_text())
+    if args.max_output_tokens is not None:
+        sample['max_output_tokens'] = args.max_output_tokens
+    validate_sample(sample)
     if sample['model_config_sha256'] != digest(args.model / 'config.json'):
         raise ValueError('Input was prepared with a different model configuration')
     cfg = engine_config(args.model, args.method, args.ratio, args.layers, args.num_layers,
@@ -257,20 +289,45 @@ def main():
     prep.add_argument('--max-output-tokens', type=int, default=16384)
     prep.set_defaults(func=prepare)
     launch = sub.add_parser('run')
-    launch.add_argument('--model', type=Path, required=True)
-    launch.add_argument('--input', type=Path, required=True)
+    launch.add_argument('--model', type=Path)
+    inputs = launch.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('--input', type=Path)
+    inputs.add_argument('--setup', type=Path)
+    launch.add_argument('--prompt-ids', nargs='+')
+    launch.add_argument('--max-output-tokens', type=int)
     launch.add_argument('--output', type=Path, required=True)
     launch.add_argument('--method', choices=METHODS, required=True)
     launch.add_argument('--ratio', type=float, default=.2)
     layers = launch.add_mutually_exclusive_group()
     layers.add_argument('--layers', nargs='+', type=int)
     layers.add_argument('--num-layers', type=int)
-    launch.add_argument('--tp', type=int, default=4)
+    launch.add_argument('--tp', type=int)
     launch.add_argument('--memory', type=float, default=.9)
     launch.add_argument('--dry-run', action='store_true', help='Print config without loading GPU libraries')
     launch.set_defaults(func=run)
+    setup_parser = sub.add_parser('setup', help='Freeze a collection and construct persistent context KV')
+    setup_parser.add_argument('--model', type=Path, required=True)
+    setup_parser.add_argument('--manifest', type=Path, required=True)
+    setup_parser.add_argument('--output', type=Path, required=True)
+    setup_parser.add_argument('--tp', type=int, default=4)
+    setup_parser.add_argument('--memory', type=float, default=.9)
+    setup_parser.add_argument('--kv-chunk-size', type=int, default=4096)
+    setup_parser.add_argument('--context-length', type=int, default=131072)
+    setup_parser.add_argument('--thinking', action=argparse.BooleanOptionalAction, default=True)
+    setup_parser.add_argument('--max-output-tokens', type=int)
+    setup_parser.add_argument('--dry-run', action='store_true')
+    from runner.setups import build_setup, run_collection
+    setup_parser.set_defaults(func=build_setup)
     args = parser.parse_args()
-    args.model = args.model.resolve()
+    if args.model is not None:
+        args.model = args.model.resolve()
+    if args.command == 'run':
+        if args.setup is not None:
+            args.func = run_collection
+        else:
+            if args.model is None or args.prompt_ids is not None:
+                parser.error('--input requires --model and does not accept --prompt-ids')
+            args.tp = 4 if args.tp is None else args.tp
     args.func(args)
 
 

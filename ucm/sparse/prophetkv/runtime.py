@@ -65,14 +65,9 @@ def setup(worker):
     if hasattr(connector,'prophet_aligned'):return {'installed':True}
     guard=LayerAlignment()
     connector.prophet_aligned=guard.layers
-    bind=connector.bind_connector_metadata
     wait=connector.wait_for_layer_load
-    def bind_once(meta):
-        guard.reset()
-        return bind(meta)
     def wait_once(name):
         guard.apply(name,wait)
-    connector.bind_connector_metadata=bind_once
     connector.wait_for_layer_load=wait_once
     return {'installed':True,'layers':len(model.layers)}
 
@@ -85,7 +80,9 @@ def set_request(worker,request_id,boundaries,question_positions):
 
 
 @torch.inference_mode()
-def probe(sparse,positions,embeddings):
+def probe(sparse,positions,embeddings,query_budget=16384):
+    if not 0 < query_budget <= 16384:
+        raise ValueError('Probe query batches must be at most 16384 tokens')
     from vllm.forward_context import get_forward_context
     from torch.nn.attention.bias import causal_lower_right
     context=get_forward_context()
@@ -109,20 +106,38 @@ def probe(sparse,positions,embeddings):
         sparse.connector.wait_for_layer_load(name)
         cache=context.no_compile_layers[name].kv_cache[context.virtual_engine]
         ck=cache[0,slots//64,slots%64];cv=cache[1,slots//64,slots%64]
-        q,k,v,residual=project(layer,hidden,residual,suffix_positions)
+        # Project the complete saved suffix in bounded batches. No context KV
+        # is changed by the probe; attention uses all context keys per query.
+        projected = [project(layer, hidden[a:a+query_budget],
+            None if residual is None else residual[a:a+query_budget],
+            suffix_positions[a:a+query_budget])
+            for a in range(0, suffix_tokens, query_budget)]
+        q,k,v,residual = (torch.cat([part[j] for part in projected]) for j in range(4))
+        del projected
         if i in scoring_layers:
-            scores+=context_importance(q[qp],ck)
+            # Tile means must be weighted by their question-query counts.
+            layer_scores=torch.zeros_like(scores)
+            for a in range(0, len(qp), query_budget):
+                indices = qp[a:a+query_budget]
+                layer_scores.add_(context_importance(q[indices],ck), alpha=len(indices)/len(qp))
+            scores.add_(layer_scores)
+            del layer_scores
         if sparse.method == "selective_prophetkv" and i == scoring_layers[-1]:
             del ck,cv,q,k,v
             break
         full_k=torch.cat((ck,k));full_v=torch.cat((cv,v))
-        output=torch.nn.functional.scaled_dot_product_attention(q.transpose(0,1)[None],
-            full_k.transpose(0,1)[None],full_v.transpose(0,1)[None],
-            attn_mask=causal_lower_right(suffix_tokens,len(full_k)),enable_gqa=True,dropout_p=0.)
-        hidden,_=layer.self_attn.o_proj(output[0].transpose(0,1).reshape(suffix_tokens,-1))
-        hidden,residual=layer.post_attention_layernorm(hidden,residual)
-        hidden=layer.mlp(hidden)
-        del ck,cv,full_k,full_v,q,k,v,output
+        next_hidden, next_residual = [], []
+        for a in range(0, suffix_tokens, query_budget):
+            z = min(a + query_budget, suffix_tokens)
+            key_end = len(ck) + z
+            output=torch.nn.functional.scaled_dot_product_attention(q[a:z].transpose(0,1)[None],
+                full_k[:key_end].transpose(0,1)[None],full_v[:key_end].transpose(0,1)[None],
+                attn_mask=causal_lower_right(z-a,key_end),enable_gqa=True,dropout_p=0.)
+            h,_=layer.self_attn.o_proj(output[0].transpose(0,1).reshape(z-a,-1))
+            h,r=layer.post_attention_layernorm(h,residual[a:z])
+            next_hidden.append(layer.mlp(h));next_residual.append(r)
+        hidden=torch.cat(next_hidden);residual=torch.cat(next_residual)
+        del ck,cv,full_k,full_v,q,k,v,output,next_hidden,next_residual
     # All remaining cached layers must be loaded and rotated before recomputation.
     for i in range(len(sparse.model.layers)):
         sparse.connector.wait_for_layer_load(f"model.layers.{i}.self_attn.attn")
@@ -135,7 +150,7 @@ def probe(sparse,positions,embeddings):
         scores=eligible,selected_positions=selected,eligible_count=len(eligible),selected_count=len(selected),
         question_positions=list(meta.question_positions),prefix_tokens=b[1],suffix_tokens=suffix_tokens,
         probe_layers=len(scoring_layers),scoring_layers=list(scoring_layers),sequential_project_layers=scoring_layers[-1]+1,
-        suffix_forward_layers=scoring_layers[-1] if sparse.method == "selective_prophetkv" else len(sparse.model.layers),probe_tokens_per_layer=suffix_tokens,probe_seconds=time.perf_counter()-started,
+        suffix_forward_layers=scoring_layers[-1] if sparse.method == "selective_prophetkv" else len(sparse.model.layers),probe_tokens_per_layer=suffix_tokens,probe_query_budget=query_budget,probe_seconds=time.perf_counter()-started,
         normalization='all_context_keys',fusion='mean_layers_fp32',ratio=sparse.ratio,
         selection_stage='before_layer_0_qkv',alignment_count=len(sparse.connector.prophet_aligned)))
     return selected
