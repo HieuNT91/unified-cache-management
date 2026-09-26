@@ -99,6 +99,12 @@ def apply_all_patches() -> None:
                 f"Supported versions: {', '.join(supported_versions)}. "
             )
 
+        # Resolve UUIDs before importing attention backends that query NVML.
+        if version == "0.9.2" and not _patch_ascend():
+            from .patch_funcs.v092.cuda_uuid import patch_cuda_uuid_mapping
+
+            patch_cuda_uuid_mapping()
+
         # Apply version-specific patches
         match version:
             case "0.9.2" if vllm_use_rerope:

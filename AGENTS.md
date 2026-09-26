@@ -40,6 +40,10 @@
 - GPU execution needs a user request and explicit UUIDs. Never start, stop or
   resume historical experiments from other branches/worktrees; never use dummy jobs.
 - Keep data, weights, caches, logs and results out of Git. See README for commands.
+- vLLM 0.9.2 UUID compatibility is installed by `apply_all_patches` before
+  attention backend imports, in drivers and spawned workers. Keep UUID visibility
+  unchanged; NVML resolves UUIDs to physical indices only for metadata queries.
+  Do not rely on manually modified site-packages or replace UUIDs with ordinals.
 
 - 2026-09-26 focused GPU check is complete: two exact 64000-token NIAH single-3
   prompts × three modes, six validated measurements, all UUIDs correct. Both
