@@ -123,7 +123,19 @@ result checks still take time; fast mode is not an instant-start guarantee.
 Compatibility includes released sweep runtimes c45e92e, 966b5cf, bcc132c, 501fc70
 and the original continuation runtime 16c1f75 (also used by 2ae7f30). Upgrading an
 existing continuation to this fast-resume release preserves both old and new
-result provenance. Unknown code/input changes still fail without rerunning anything.
+result provenance. The fast-resume runtime 45a3f3a is also pinned for upgrades.
+Unknown code/input changes still fail without rerunning anything.
+
+If the original fingerprint is not recognized, resume writes
+`$EXPERIMENT_DIR/resume-compatibility.json` before stopping. It includes the current
+input/manifest/model hashes, runtime file hashes and candidate fingerprints for
+supported releases. The original combined hash cannot identify which field changed.
+Check `git rev-parse HEAD`, `git status --short --untracked-files=all`, and ignored
+Python files (`git ls-files --others --ignored --exclude-standard runner ucm`).
+Runtime hashing includes every Python file under `runner/` and `ucm/`, including
+untracked files. Preserve the original inputs and results; do not edit receipt
+hashes or bypass compatibility checks. The report diagnoses the failure and does
+not authorize an unknown runtime.
 
 Completed `result.json` plus diagnostics are the commit boundary. This recovers a
 crash after result publication but before reporting. An incomplete prompt directory

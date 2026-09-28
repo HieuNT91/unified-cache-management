@@ -26,9 +26,10 @@ def resolve_scope(output):
     return attempt/'reports', attempt, scope
 
 
-def compatible_identity(spec, original):
+def compatible_identity(spec, original, diagnostic_path=None):
     if fingerprint(spec) == original:
         return 'current runtime'
+    candidates = []
     for version in json.loads((ROOT/'runner/legacy_sweep_runtimes.json').read_text()):
         candidate = dict(spec, runtime=version['runtime'])
         if version['legacy_lengths']:
@@ -38,9 +39,21 @@ def compatible_identity(spec, original):
             if spec['context_length'] != 114688 or spec['exact_input_tokens'] is not None:
                 continue
             candidate.pop('context_length'); candidate.pop('exact_input_tokens')
-        if fingerprint(candidate) == original:
+        digest = fingerprint(candidate)
+        candidates.append(dict(commit=version['commit'], fingerprint=digest,
+            runtime_differences=[name for name in sorted(spec['runtime'].keys() | version['runtime'].keys())
+                                 if spec['runtime'].get(name) != version['runtime'].get(name)]))
+        if digest == original:
             return version['commit']
-    raise RuntimeError('Original sweep fingerprint does not match these inputs/settings or a supported runtime')
+    message = 'Original sweep fingerprint does not match these inputs/settings or a supported runtime'
+    if diagnostic_path is not None:
+        atomic_json(diagnostic_path, dict(original_fingerprint=original,
+            current_fingerprint=fingerprint(spec), current_spec=spec, candidates=candidates,
+            explanation='The original receipt stores a combined hash, so the differing original field '
+                        'cannot be recovered from it. Compare source revision, local Python files, '
+                        'manifest and prepared inputs; no compatibility check has been bypassed.'))
+        message += f'. Diagnostic report: {diagnostic_path}'
+    raise RuntimeError(message)
 
 
 def validate_record(path, config, entry, sample, model, tp, devices, validation='full'):
@@ -140,10 +153,12 @@ def _prepare(args):
             raise RuntimeError('Original engine configuration differs')
     if len({p['identity'] for p in plans}) != 1:
         raise RuntimeError('Original shards have different fingerprints')
-    source = compatible_identity(args.identity_spec, plans[0]['identity'])
+    source = compatible_identity(args.identity_spec, plans[0]['identity'],
+                                 args.output/'resume-compatibility.json')
     previous_source = None
     if previous and previous['current_identity'] != current:
-        previous_source = compatible_identity(args.identity_spec, previous['current_identity'])
+        previous_source = compatible_identity(args.identity_spec, previous['current_identity'],
+                                              args.output/'resume-compatibility.json')
     accepted_fingerprints = set()
     if previous:
         accepted_fingerprints.update(previous.get('accepted_fingerprints', []))

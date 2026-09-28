@@ -134,6 +134,23 @@ class ResumeTests(unittest.TestCase):
         path.write_text(path.read_text()+'\n')
         with self.assertRaisesRegex(RuntimeError,'artifact changed'):resume.prepare(self.args)
 
+    def test_identity_failure_reports_candidates_without_touching_saved_results(self):
+        self.manifest.write_text(self.manifest.read_text()+'\n')
+        with self.assertRaisesRegex(RuntimeError, 'resume-compatibility.json'):
+            resume.prepare(self.args)
+        report=json.loads((self.output/'resume-compatibility.json').read_text())
+        self.assertEqual(report['current_fingerprint'],fingerprint(report['current_spec']))
+        self.assertEqual(report['original_fingerprint'],
+                         json.loads((self.output/'group-0/plan.json').read_text())['identity'])
+        self.assertTrue(report['candidates'])
+        self.assertTrue(any(row['commit'].startswith('45a3f3a') for row in report['candidates']))
+        self.assertTrue(all(row['fingerprint'] != report['original_fingerprint']
+                            for row in report['candidates']))
+        for name,digest in self.original.items():
+            self.assertEqual(file_hash(self.output/name),digest)
+        self.assertFalse((self.output/'continuation').exists())
+        self.assertTrue(list(self.cache.iterdir()))
+
     def test_counts_precede_input_loading_and_exclude_partial_directories(self):
         import io
         from contextlib import redirect_stdout
