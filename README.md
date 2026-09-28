@@ -325,3 +325,8 @@ It provides Git-based deployment, official asset downloads, CPU preparation,
 UUID-pinned launch commands, and combined live/final per-task reports for15200
 measurements. Temporary KV is built once per prompt and deleted after all18 cached
 configurations. No environment installation or archive transfer is required.
+
+For an interrupted A800/L20 sweep with completed baselines, see
+[ProphetKV-only continuation](scripts/RESUME_PROPHETKV.md). Existing launchers
+can stop the owned sweep and resume only missing vanilla results while retaining
+completed baseline, ProphetKV and discontinued selective artifacts.

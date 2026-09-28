@@ -88,3 +88,13 @@
   reuse across18 cached policies, then retire/delete. No local GPU launch.
   Per-method live/final and combined status/aggregate report TTFT, answer-only RULER
   accuracy, thinking/answer content-token lengths per task and overall.
+
+- A800/L20 mid-run scope change: `resume` on the existing launchers stops scheduling
+  selective and runs only missing vanilla ratios; baselines must be complete.
+  See `scripts/RESUME_PROPHETKV.md`. Never delete completed records or restart
+  baseline. Stop only the exact output-owned process tree before updating code.
+  Resume validates original fingerprints, all-rank diagnostics, retirement and
+  retained hashes; keep original reports and raw artifacts unchanged. New report
+  state/session receipts live in `continuation/attempt-*`, selected by
+  `continuation.json`. Final scope is3521 A800/8000 L20, selective discontinued.
+  CPU-only recovery/locking/stop tests passed; remote GPU continuation is pending.

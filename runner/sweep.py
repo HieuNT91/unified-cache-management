@@ -15,7 +15,7 @@ from runner.setups import (atomic_json, file_hash, fingerprint, manifest_entries
                            check_environment, start_engine, retirement, runtime_identity)
 
 
-def configurations(percentages=(1,5,10,15,20,30), layers=(11,12,13,14,15)):
+def configurations(percentages=(1,5,10,15,20,30), layers=(11,12,13,14,15), skip_selective=False):
     if not percentages or len(set(percentages)) != len(percentages) or any(
             type(p) is not int or not 0 < p <= 100 for p in percentages):
         raise ValueError("Ratios must be distinct integer percentages in [1,100]")
@@ -25,7 +25,7 @@ def configurations(percentages=(1,5,10,15,20,30), layers=(11,12,13,14,15)):
         dict(name=f'{name}-{pct}', method=method, ratio=pct/100, layers=layers)
         for name, method, layers in [('prophetkv', 'prophetkv', None),
             ('selective', 'selective_prophetkv', selected)]
-        for pct in percentages]
+        for pct in percentages if not (skip_selective and method == 'selective_prophetkv')]
 
 
 class SharedReporter:
@@ -148,15 +148,21 @@ def load_inputs(args):
         selected.append((index, dict(id=row['id'], evaluation=evaluation, sha256=hashes[-1]), sample))
     if not selected:
         raise ValueError('Empty prompt shard')
-    identity = fingerprint(dict(inputs=hashes, manifest=file_hash(args.manifest), model=config_hash,
+    args.identity_spec = dict(inputs=hashes, manifest=file_hash(args.manifest), model=config_hash,
                                 runtime=runtime_identity(), tp=args.tp, configs=configurations(getattr(args, 'percentages', (1,5,10,15,20,30)),
                                 getattr(args, 'layers', (11,12,13,14,15))),
                                 context_length=getattr(args, 'context_length', 114688),
-                                exact_input_tokens=getattr(args, 'exact_input_tokens', None)))
-    return expected, selected, identity
+                                exact_input_tokens=getattr(args, 'exact_input_tokens', None))
+    return expected, selected, fingerprint(args.identity_spec)
 
 
 def execute_phase(args, selected, configs, reporters, group, cache, devices):
+    completed = getattr(args, 'completed', {})
+    selected = [row for row in selected if any(row[0] not in completed.get(c['name'], []) for c in configs)]
+    if not selected:
+        for config in configs:
+            reporters[config['name']].finish()
+        return
     from run import generate, verify_diagnostics
     from runner.worker import setup, arm, drain, configure
     from ucm.sparse.prophetkv.layers import resolve_layers
@@ -173,6 +179,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
     started = time.perf_counter()
     llm = start_engine(cfg)
     session = dict(model_load_seconds=time.perf_counter()-started)
+    warmed = set()
     try:
         session['setup'] = llm.collective_rpc(setup)
         analyzer = OutputAnalyzer(llm.get_tokenizer())
@@ -182,6 +189,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
             retirement(llm,args.tp)
             session['warmup_seconds'] = time.perf_counter()-started
         for index, entry, sample in selected:
+            pending = [c for c in configs if index not in completed.get(c['name'], [])]
             namespace, tag = uuid.uuid4().hex, f'prompt-{index}'
             bounds, ids = sample['boundaries'], sample['token_ids']
             prompt_cache, construction = None, None
@@ -194,9 +202,9 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                 readiness = prompt_cache.ready()
                 construction = dict(prompt_id=entry['id'], namespace=namespace,
                     seconds=time.perf_counter()-started, readiness=readiness,
-                    unique_chunks=len(prompt_cache.chunks), reused_by=[c['name'] for c in configs])
+                    unique_chunks=len(prompt_cache.chunks), reused_by=[c['name'] for c in pending])
                 atomic_json(group/'construction'/f'{index:06d}.json', construction)
-            for config in configs:
+            for config in pending:
                 method, ratio = config['method'], config['ratio']
                 scoring = resolve_layers(method,config['layers']) if cached else ()
                 if cached:
@@ -215,11 +223,12 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
 
                 timings = {}
                 # Warm each policy once, and prime every measured request separately.
-                if cached and index == selected[0][0]:
+                if cached and config['name'] not in warmed:
                     started = time.perf_counter()
                     infer('warmup',1)
                     retirement(llm,args.tp)
                     session.setdefault('policy_warmup_seconds',{})[config['name']] = time.perf_counter()-started
+                    warmed.add(config['name'])
                 started = time.perf_counter()
                 if cached:
                     prompt_cache.unchanged()
@@ -261,6 +270,8 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                     finish_reason=output.finish_reason, num_cached_tokens=result.num_cached_tokens,
                     timings=timings, retirement=retired, construction=construction, **lengths, **evaluation,
                     accuracy=accuracy, output_cap_reached=len(output.token_ids)>=sample['max_output_tokens'])
+                if getattr(args, 'continuation_fingerprint', None):
+                    record['continuation_fingerprint'] = args.continuation_fingerprint
                 atomic_json(output_dir/'result.json',record)
                 reporters[config['name']].accept(record)
                 print(f"{entry['id']} {config['name']}: TTFT {ttft:.3f}s",flush=True)
@@ -287,9 +298,19 @@ def run_sweep(args):
     expected, selected, identity = load_inputs(args)
     cache = args.cache_root.resolve()/f'sweep-{uuid.uuid4().hex}'
     configs = configurations(args.percentages, args.layers)
+    resume = getattr(args, 'resume', False)
+    if resume != getattr(args, 'skip_selective', False):
+        raise ValueError('Use --resume and --skip-selective together for a ProphetKV continuation')
+    if resume:
+        from runner.resume import attach
+        configs, identity, report_root, group = attach(args, identity)
+    else:
+        report_root, group = args.output, args.output/f'group-{args.shard}'
     if args.dry_run:
         print(json.dumps(dict(prompts=len(expected), shard_prompts=len(selected),
             shard=args.shard, configs=configs, measurements=len(selected)*len(configs),
+            pending_measurements=sum(i not in getattr(args, 'completed', {}).get(c['name'], [])
+                                     for i, _, _ in selected for c in configs),
             cache_policy='construct one prompt, reuse all cached methods, retire and delete',
             max_retained_context_tokens=max(s['boundaries'][-2] for _,_,s in selected),
             baseline=engine_config(args.model,'baseline',tp=args.tp,memory=args.memory),
@@ -297,21 +318,25 @@ def run_sweep(args):
                 cache_dir=cache,end_token=selected[0][2]['token_ids'][selected[0][2]['boundaries'][1]-1])),indent=2))
         return
     devices = check_environment(args.tp)
-    group = args.output/f'group-{args.shard}'
     group.mkdir(parents=True,exist_ok=False)  # no ambiguous resume or duplicate group
     cache.mkdir(parents=True,exist_ok=False)
     os.environ['PROPHETKV_SCHEDULER_RECEIPT'] = str(group/'scheduler.json')
     atomic_json(group/'plan.json',dict(identity=identity,gpu_uuids=devices,cache=str(cache),
         prompt_ids=[e['id'] for _,e,_ in selected],configurations=configs,shard=args.shard,shards=args.shards))
-    reporters = {c['name']:SharedReporter(args.output/c['name'],expected,
+    reporters = {c['name']:SharedReporter(report_root/c['name'],expected,
         dict(method=c['method'],ratio=c['ratio'],
              scoring_layers=(c['layers'] or list(range(64))) if c['method'] != 'baseline' else [],
              sweep_fingerprint=identity,
              cache_policy='temporary per prompt; construction excluded from TTFT'),args.shard,args.shards)
         for c in configs}
     try:
-        execute_phase(args,selected,configs[:1],reporters,group,cache,devices)
+        if resume:
+            reporters['baseline'].finish()  # validated original engine-exit receipts
+        else:
+            execute_phase(args,selected,configs[:1],reporters,group,cache,devices)
         execute_phase(args,selected,configs[1:],reporters,group,cache,devices)
+        if resume and cache.exists():
+            cache.rmdir()  # all cached results may already be complete; no engine started
         atomic_json(group/'complete.json',dict(engine_shutdown=True,cache_deleted=not cache.exists(),
                     measurements=len(selected)*len(configs)))
     except BaseException as error:
@@ -338,6 +363,8 @@ def main():
     parser.add_argument('--context-length',type=int,default=114688)
     parser.add_argument('--exact-input-tokens',type=int)
     parser.add_argument('--dry-run',action='store_true')
+    parser.add_argument('--resume',action='store_true')
+    parser.add_argument('--skip-selective',action='store_true')
     run_sweep(parser.parse_args())
 
 

@@ -235,3 +235,7 @@ It uses greedy one-token generation while preserving input token IDs.
     GPU-73ecc591-94c9-c261-412c-5e0cf51fa103 \
     GPU-5224ff6c-63bb-3a1e-249c-15de01751b5d
 ```
+
+To discontinue selective during an existing run and retain completed results,
+follow [Stop and resume ProphetKV only](RESUME_PROPHETKV.md). The same launcher
+supports `stop`, `resume`, `status`, and `aggregate`; do not delete result directories.

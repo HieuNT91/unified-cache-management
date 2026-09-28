@@ -37,19 +37,31 @@ case "${1:-}" in
         worker 0 '' --dry-run
         worker 1 '' --dry-run
         ;;
-    run)
+    run|resume)
         mkdir -p "$EXPERIMENT_DIR"
         exec 9>"$EXPERIMENT_DIR/sweep.lock"
         flock -n 9 || { echo 'A coordinator already owns this sweep.' >&2; exit 1; }
-        for name in group-0 group-1 baseline prophetkv-{1,5,10,15,20,30,40,60,80} selective-{1,5,10,15,20,30,40,60,80}; do
-            [[ ! -e "$EXPERIMENT_DIR/$name" ]] || { echo "Existing result: $name; use a new EXPERIMENT_DIR." >&2; exit 1; }
-        done
-        prepare
+        export UCM_SWEEP_COORDINATOR_PID=$$
+        cd "$CODE_ROOT"
+        resume_flags=()
+        if [[ "$1" == resume ]]; then
+            CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" -m runner.resume \
+                --model "$MODEL_PATH" --manifest "$PREPARED_DIR/manifest.jsonl" \
+                --output "$EXPERIMENT_DIR" --cache-root "$CACHE_ROOT" --tp 4 --shards 2 --percentages "${percentages[@]}" --context-length 64000 --exact-input-tokens 64000
+            resume_flags=(--resume --skip-selective)
+        else
+            for name in group-0 group-1 baseline prophetkv-{1,5,10,15,20,30,40,60,80} selective-{1,5,10,15,20,30,40,60,80}; do
+                [[ ! -e "$EXPERIMENT_DIR/$name" ]] || { echo "Existing result: $name; use a new EXPERIMENT_DIR." >&2; exit 1; }
+            done
+            prepare
+        fi
         CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/longbench_v2.py" disk \
             --prepared "$PREPARED_DIR" --cache-root "$CACHE_ROOT" --groups 2
-        worker 0 "$GPU_A" >"$EXPERIMENT_DIR/group-a.log" 2>&1 & pid_a=$!
-        worker 1 "$GPU_B" >"$EXPERIMENT_DIR/group-b.log" 2>&1 & pid_b=$!
-        echo "Group A PID=$pid_a; Group B PID=$pid_b; expected measurements=15200"
+        log_suffix=""
+        [[ "$1" != resume ]] || log_suffix="-resume-$(date +%Y%m%d-%H%M%S)"
+        worker 0 "$GPU_A" "${resume_flags[@]}" >"$EXPERIMENT_DIR/group-a${log_suffix}.log" 2>&1 & pid_a=$!
+        worker 1 "$GPU_B" "${resume_flags[@]}" >"$EXPERIMENT_DIR/group-b${log_suffix}.log" 2>&1 & pid_b=$!
+        echo "Group A PID=$pid_a; Group B PID=$pid_b"
         status_a=0; status_b=0
         wait "$pid_a" || status_a=$?
         wait "$pid_b" || status_b=$?
@@ -62,5 +74,6 @@ case "${1:-}" in
         ;;
     status) report ;;
     aggregate) report --final ;;
-    *) echo "Usage: bash scripts/l20_ruler.sh {download|prepare|dry-run|run|status|aggregate}" >&2; exit 2 ;;
+    stop) "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_control.py" stop --output "$EXPERIMENT_DIR" ;;
+    *) echo "Usage: bash scripts/l20_ruler.sh {download|prepare|dry-run|run|stop|resume|status|aggregate}" >&2; exit 2 ;;
 esac

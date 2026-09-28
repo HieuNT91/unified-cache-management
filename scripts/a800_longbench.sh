@@ -15,35 +15,54 @@ prepare() {
         --model "$MODEL_PATH" --data "$LONGBENCH_DATA" --output "$PREPARED_DIR"
 }
 worker() {
-    local shard="$1" devices="$2"
+    local shard="$1" devices="$2"; shift 2
     cd "$CODE_ROOT"
     CUDA_VISIBLE_DEVICES="$devices" bash "$CODE_ROOT/run.sh" sweep \
         --model "$MODEL_PATH" --manifest "$PREPARED_DIR/manifest.jsonl" \
         --output "$EXPERIMENT_DIR" --cache-root "$CACHE_ROOT" --tp 4 \
-        --shard "$shard" --shards 2
+        --shard "$shard" --shards 2 "$@"
+}
+report() {
+    CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_report.py" \
+        --output "$EXPERIMENT_DIR" --manifest "$PREPARED_DIR/manifest.jsonl" \
+        --percentages 1 5 10 15 20 30 --shards 2 "$@"
 }
 case "${1:-}" in
     prepare) prepare ;;
-    run)
+    run|resume)
         mkdir -p "$EXPERIMENT_DIR"
         exec 9>"$EXPERIMENT_DIR/sweep.lock"
         flock -n 9 || { echo 'This sweep already has a live coordinator.' >&2; exit 1; }
+        export UCM_SWEEP_COORDINATOR_PID=$$
         # Refuse partial/completed sweeps before acquiring GPUs.
-        for name in group-0 group-1 baseline prophetkv-{1,5,10,15,20,30} selective-{1,5,10,15,20,30}; do
-            [[ ! -e "$EXPERIMENT_DIR/$name" ]] || { echo "Existing result: $name; use a new EXPERIMENT_DIR." >&2; exit 1; }
-        done
-        prepare
+        cd "$CODE_ROOT"
+        resume_flags=()
+        if [[ "$1" == resume ]]; then
+            CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" -m runner.resume \
+                --model "$MODEL_PATH" --manifest "$PREPARED_DIR/manifest.jsonl" \
+                --output "$EXPERIMENT_DIR" --cache-root "$CACHE_ROOT" --tp 4 --shards 2
+            resume_flags=(--resume --skip-selective)
+        else
+            for name in group-0 group-1 baseline prophetkv-{1,5,10,15,20,30} selective-{1,5,10,15,20,30}; do
+                [[ ! -e "$EXPERIMENT_DIR/$name" ]] || { echo "Existing result: $name; use a new EXPERIMENT_DIR." >&2; exit 1; }
+            done
+            prepare
+        fi
         CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/longbench_v2.py" disk \
             --prepared "$PREPARED_DIR" --cache-root "$CACHE_ROOT" --groups 2
-        worker 0 "$GPU_A" >"$EXPERIMENT_DIR/group-a.log" 2>&1 & pid_a=$!
-        worker 1 "$GPU_B" >"$EXPERIMENT_DIR/group-b.log" 2>&1 & pid_b=$!
+        log_suffix=""
+        [[ "$1" != resume ]] || log_suffix="-resume-$(date +%Y%m%d-%H%M%S)"
+        worker 0 "$GPU_A" "${resume_flags[@]}" >"$EXPERIMENT_DIR/group-a${log_suffix}.log" 2>&1 & pid_a=$!
+        worker 1 "$GPU_B" "${resume_flags[@]}" >"$EXPERIMENT_DIR/group-b${log_suffix}.log" 2>&1 & pid_b=$!
         echo "Group A PID=$pid_a; Group B PID=$pid_b"
         status_a=0; status_b=0
         wait "$pid_a" || status_a=$?
         wait "$pid_b" || status_b=$?
         [[ "$status_a" == 0 && "$status_b" == 0 ]] || { echo "Sweep failed: A=$status_a B=$status_b" >&2; exit 1; }
-        echo 'Finished all 6539 measurements. Per-method final_aggregation.{json,csv,md} are ready.'
+        report --final
         ;;
-    status) "$PYTHON_BIN" "$CODE_ROOT/scripts/longbench_v2.py" status --output "$EXPERIMENT_DIR" ;;
-    *) echo "Usage: bash scripts/a800_longbench.sh {prepare|run|status}" >&2; exit 2 ;;
+    status) report ;;
+    aggregate) report --final ;;
+    stop) "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_control.py" stop --output "$EXPERIMENT_DIR" ;;
+    *) echo "Usage: bash scripts/a800_longbench.sh {prepare|run|stop|resume|status|aggregate}" >&2; exit 2 ;;
 esac

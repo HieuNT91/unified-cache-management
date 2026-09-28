@@ -212,14 +212,26 @@ class SweepTests(unittest.TestCase):
                                         self.cache,['GPU-a','GPU-b'])
                 self.assertEqual(sentinel.exists(),shutdown_fails)
 
-    def test_two_prompts_construct_once_reuse_twelve_policies_then_delete(self):
+    def test_resume_skips_committed_ratios_and_warms_late_first_policy(self):
+        self.test_two_prompts_construct_once_reuse_twelve_policies_then_delete(resuming=True)
+
+    def test_two_prompts_construct_once_reuse_twelve_policies_then_delete(self, resuming=False):
         group=self.root/'group';group.mkdir()
         evaluation=dict(subtask='task',references=['B'],scoring='choice')
         selected=[(i,dict(id=str(i),sha256='input',evaluation=evaluation),copy.deepcopy(self.sample)) for i in range(2)]
         expected=[dict(prompt_id=str(i),subtask='task') for i in range(2)]
-        configs=sweep.configurations()
+        configs=sweep.configurations(skip_selective=resuming)
         reporters={c['name']:sweep.SharedReporter(self.args.output/c['name'],expected,
                    {'method':c['method']},0,1) for c in configs}
+        preserved={}
+        if resuming:
+            self.args.completed={'baseline':[0,1], 'prophetkv-1':[0]}
+            for name,indices in self.args.completed.items():
+                for index in indices:
+                    reporters[name].accept(self.record(str(index)))
+                    path=self.args.output/name/f'{index:06d}'/'result.json'
+                    atomic_json(path, {'preserved':True})
+                    preserved[path]=file_hash(path)
         events=[]; policy={}
         worker=NS(setup=Mock(),arm=Mock(),drain=Mock(),configure=Mock(),retire=Mock())
         class Tokenizer:
@@ -261,9 +273,16 @@ class SweepTests(unittest.TestCase):
             sweep.execute_phase(self.args,selected,configs[:1],reporters,group,self.cache,['GPU-a','GPU-b'])
             self.assertFalse(list(self.cache.iterdir()))  # baseline made no cache lookup/population
             sweep.execute_phase(self.args,selected,configs[1:],reporters,group,self.cache,['GPU-a','GPU-b'])
-        self.assertEqual([e for e in events if e[0]=='start'],[('start',False),('start',True)])
+        self.assertEqual([e for e in events if e[0]=='start'], [('start',True)] if resuming else [('start',False),('start',True)])
         self.assertEqual(len([e for e in events if e[0]=='generate' and ':populate:' in e[1]]),4)
-        self.assertEqual(verify.call_count,26)
+        self.assertEqual(verify.call_count,11 if resuming else 26)
+        for path,digest in preserved.items():self.assertEqual(file_hash(path),digest)
+        if resuming:
+            measured=[e[1] for e in events if e[0]=='generate' and e[1].endswith('-measured')]
+            self.assertFalse(any(':baseline-' in rid or ':prompt-0:read:prophetkv-1-' in rid for rid in measured))
+            warm=[e[1] for e in events if e[0]=='generate' and e[1].endswith('-warmup')]
+            self.assertEqual(len(warm),6)
+            self.assertTrue(any(':prompt-1:read:prophetkv-1-warmup' in rid for rid in warm))
         self.assertFalse(self.cache.exists())
         for i in range(2):
             self.assertEqual(json.loads((group/'cleanup'/f'{i:06d}.json').read_text())['remaining_shards'],0)

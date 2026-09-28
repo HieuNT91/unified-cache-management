@@ -15,22 +15,26 @@ from runner.sweep import configurations
 
 
 def collect(output, manifest, percentages, final=False, shards=2):
-    configs=configurations(percentages)
+    from runner.resume import resolve_scope
+    report_root, group_root, continuation = resolve_scope(output)
+    configs=configurations(percentages, skip_selective=continuation is not None)
+    if continuation and configs != continuation['configurations']:
+        raise RuntimeError('Summary ratios differ from continuation')
     rows=manifest_entries(manifest)
     expected=[dict(prompt_id=r['id'],subtask=r['subtask']) for r in rows]
     kind='final' if final else 'live'
     if final:
         for shard in range(shards):
-            receipt=json.loads((output/f'group-{shard}'/'complete.json').read_text())
+            receipt=json.loads((group_root/f'group-{shard}'/'complete.json').read_text())
             if not receipt['engine_shutdown'] or not receipt['cache_deleted']:
                 raise RuntimeError('Final summary requires engine exit and cache deletion')
-        if sum(json.loads((output/f'group-{i}'/'complete.json').read_text())['measurements']
+        if sum(json.loads((group_root/f'group-{i}'/'complete.json').read_text())['measurements']
                for i in range(shards)) != len(expected)*len(configs):
             raise RuntimeError('Final measurement count differs from requested scope')
     reports={}
     fingerprints=set()
     for config in configs:
-        path=output/config['name']/f'{kind}_aggregation.json'
+        path=report_root/config['name']/f'{kind}_aggregation.json'
         if path.exists():
             report=json.loads(path.read_text())
             if report['overall']['expected'] != len(expected):
@@ -47,11 +51,19 @@ def collect(output, manifest, percentages, final=False, shards=2):
         reports[config['name']]=report
     if len(fingerprints)>1:
         raise RuntimeError('Reports came from different sweep configurations')
+    if continuation and fingerprints and fingerprints != {continuation['fingerprint']}:
+        raise RuntimeError('Reports differ from continuation fingerprint')
     completed=sum(r['overall']['completed'] for r in reports.values())
     summary=dict(kind=kind,completed=completed,expected=len(expected)*len(configs),methods=reports)
+    if continuation:
+        summary['discontinued'] = continuation['discontinued']
+        summary['continuation_fingerprint'] = continuation['fingerprint']
     stream=io.StringIO(newline='');writer=csv.writer(stream)
     writer.writerow(['configuration','scope','subtask',*COLUMNS])
     lines=[f'{kind.title()} summary: {completed}/{summary["expected"]} validated measurements', '']
+    if continuation:
+        lines += ['Selective runs discontinued; their existing artifacts remain in the original directories.',
+                  'Retained and resumed measurements span different timing sessions.', '']
     tasks=sorted({r['subtask'] for r in expected})
     for task in [None,*tasks]:
         lines.extend([f'### {task or "Overall"}', '',
