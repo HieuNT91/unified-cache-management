@@ -39,12 +39,22 @@ def compatible_identity(spec, original, diagnostic_path=None):
             if spec['context_length'] != 114688 or spec['exact_input_tokens'] is not None:
                 continue
             candidate.pop('context_length'); candidate.pop('exact_input_tokens')
-        digest = fingerprint(candidate)
-        candidates.append(dict(commit=version['commit'], fingerprint=digest,
-            runtime_differences=[name for name in sorted(spec['runtime'].keys() | version['runtime'].keys())
-                                 if spec['runtime'].get(name) != version['runtime'].get(name)]))
-        if digest == original:
-            return version['commit']
+        variants = [(version['commit'], candidate)]
+        # Historical runtime_identity() recursively included local vendor checkouts.
+        # Reconstruct that exact payload; never discard their hashes or overwrite
+        # pinned release files. Changed/missing vendor files still fail the hash.
+        vendor = {name: digest for name, digest in spec['runtime'].items()
+                  if name.startswith('ucm/vendor/') and name not in version['runtime']}
+        if vendor:
+            variants.append((version['commit'] + ' with preserved ucm/vendor files',
+                             dict(candidate, runtime={**version['runtime'], **vendor})))
+        for source, payload in variants:
+            digest = fingerprint(payload)
+            candidates.append(dict(commit=source, fingerprint=digest,
+                runtime_differences=[name for name in sorted(spec['runtime'].keys() | payload['runtime'].keys())
+                                     if spec['runtime'].get(name) != payload['runtime'].get(name)]))
+            if digest == original:
+                return source
     message = 'Original sweep fingerprint does not match these inputs/settings or a supported runtime'
     if diagnostic_path is not None:
         atomic_json(diagnostic_path, dict(original_fingerprint=original,

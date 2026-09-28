@@ -137,6 +137,13 @@ untracked files. Preserve the original inputs and results; do not edit receipt
 hashes or bypass compatibility checks. The report diagnoses the failure and does
 not authorize an unknown runtime.
 
+Older runs with a local RULER checkout under `ucm/vendor/` also hashed that
+checkout's Python files. Resume tries the pinned release runtime with the current
+vendor file hashes included and requires an exact match to the original combined
+fingerprint. Keep that directory in place and unchanged. Changed, missing or added
+vendor Python files prevent this match; other untracked runtime files are not
+admitted by this compatibility rule. No hashes or saved results are rewritten.
+
 Completed `result.json` plus diagnostics are the commit boundary. This recovers a
 crash after result publication but before reporting. An incomplete prompt directory
 without a result is moved to the new attempt’s `incomplete/` directory, then retried.

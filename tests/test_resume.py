@@ -134,6 +134,51 @@ class ResumeTests(unittest.TestCase):
         path.write_text(path.read_text()+'\n')
         with self.assertRaisesRegex(RuntimeError,'artifact changed'):resume.prepare(self.args)
 
+    def test_resume_preserves_original_vendor_hashes_and_repeats(self):
+        released=next(row for row in json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())
+                      if row['commit'].startswith('501fc70'))
+        vendor={'ucm/vendor/RULER/scripts/data/synthetic/niah.py':'vendor-digest'}
+        original=fingerprint(dict(self.args.identity_spec,runtime={**released['runtime'],**vendor}))
+        for shard in (0,1):
+            path=self.output/f'group-{shard}/plan.json'
+            plan=json.loads(path.read_text());plan['identity']=original;atomic_json(path,plan)
+        preserved={str(p.relative_to(self.output)):file_hash(p) for p in self.output.rglob('*.json')}
+        runtime={**sweep.runtime_identity(),**vendor}
+        self.args.validation='fast'
+        with patch.object(sweep,'runtime_identity',return_value=runtime):
+            scope=resume.prepare(self.args)
+            self.assertEqual(scope['source_revision'],released['commit']+' with preserved ucm/vendor files')
+            again=resume.prepare(self.args)
+            self.assertEqual(scope['pending'],again['pending'])
+        for name,digest in preserved.items():
+            self.assertEqual(file_hash(self.output/name),digest)
+
+    def test_vendor_compatibility_rejects_changed_missing_or_extra_files_and_inputs(self):
+        released=next(row for row in json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())
+                      if row['commit'].startswith('501fc70'))
+        name='ucm/vendor/RULER/generator.py'
+        spec=copy.deepcopy(self.args.identity_spec)
+        spec['runtime'][name]='original-vendor'
+        original=fingerprint(dict(spec,runtime={**released['runtime'],name:'original-vendor'}))
+        self.assertIn('preserved ucm/vendor',resume.compatible_identity(spec,original))
+        cases=[]
+        changed=copy.deepcopy(spec);changed['runtime'][name]='changed';cases.append(changed)
+        missing=copy.deepcopy(spec);del missing['runtime'][name];cases.append(missing)
+        extra=copy.deepcopy(spec);extra['runtime']['ucm/vendor/RULER/extra.py']='extra';cases.append(extra)
+        inputs=copy.deepcopy(spec);inputs['inputs'][0]='changed';cases.append(inputs)
+        manifest=copy.deepcopy(spec);manifest['manifest']='changed';cases.append(manifest)
+        for index,candidate in enumerate(cases):
+            with self.subTest(case=index),self.assertRaisesRegex(RuntimeError,'fingerprint'):
+                resume.compatible_identity(candidate,original)
+
+    def test_vendor_compatibility_does_not_admit_arbitrary_local_runtime_files(self):
+        released=json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())[-1]
+        spec=copy.deepcopy(self.args.identity_spec)
+        spec['runtime']['ucm/local.py']='unreviewed'
+        original=fingerprint(dict(spec,runtime={**released['runtime'],'ucm/local.py':'unreviewed'}))
+        with self.assertRaisesRegex(RuntimeError,'fingerprint'):
+            resume.compatible_identity(spec,original)
+
     def test_identity_failure_reports_candidates_without_touching_saved_results(self):
         self.manifest.write_text(self.manifest.read_text()+'\n')
         with self.assertRaisesRegex(RuntimeError, 'resume-compatibility.json'):
