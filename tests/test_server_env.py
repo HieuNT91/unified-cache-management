@@ -59,7 +59,7 @@ class ServerEnvTests(unittest.TestCase):
         config.write_text(f'PYTHON_BIN="{executable}"\nEXPERIMENT_DIR="/existing run"\n'
                           'PREPARED_DIR="/prepared inputs"\nGPU_A="GPU-custom"\n')
         for launcher in ('l20_ruler.sh','a800_longbench.sh'):
-            for command in ('status','stop'):
+            for command in ('status','stop','counts'):
                 with self.subTest(launcher=launcher,command=command):
                     result=subprocess.run(['bash',str(ROOT/'scripts'/launcher),command],cwd='/tmp',
                         env=dict(self.env,UCM_ENV_FILE=str(config)),capture_output=True,text=True)
@@ -67,9 +67,27 @@ class ServerEnvTests(unittest.TestCase):
                     data=json.loads(result.stdout)
                     self.assertEqual(data['gpu_a'],'GPU-custom')
                     self.assertEqual(data['argv'][data['argv'].index('--output')+1],'/existing run')
-                    self.assertTrue(data['argv'][0].endswith('sweep_control.py' if command=='stop' else 'sweep_report.py'))
-                    if command=='status':
+                    expected={'stop':'sweep_control.py','status':'sweep_report.py','counts':'sweep_counts.py'}[command]
+                    self.assertTrue(data['argv'][0].endswith(expected))
+                    if command!='stop':
                         self.assertEqual(data['argv'][data['argv'].index('--manifest')+1],'/prepared inputs/manifest.jsonl')
+
+    def test_both_launchers_pass_fast_validation_before_any_gpu_work(self):
+        executable=self.root/'fake-python'
+        executable.write_text('#!/usr/bin/env python3\nimport json,sys\n'
+                              'print(json.dumps(sys.argv[1:]))\nsys.exit(17)\n')
+        executable.chmod(0o755)
+        config=self.root/'server.env'
+        config.write_text(f'PYTHON_BIN="{executable}"\nEXPERIMENT_DIR="{self.root}/out"\n'
+                          'PREPARED_DIR="/prepared inputs"\nRESUME_VALIDATION=fast\n')
+        for launcher in ('l20_ruler.sh','a800_longbench.sh'):
+            with self.subTest(launcher=launcher):
+                result=subprocess.run(['bash',str(ROOT/'scripts'/launcher),'resume'],cwd='/tmp',
+                    env=dict(self.env,UCM_ENV_FILE=str(config)),capture_output=True,text=True)
+                self.assertEqual(result.returncode,17,result.stderr)
+                args=json.loads(result.stdout)
+                self.assertEqual(args[:2],['-m','runner.resume'])
+                self.assertEqual(args[args.index('--validation')+1],'fast')
 
 
 if __name__=='__main__':unittest.main()

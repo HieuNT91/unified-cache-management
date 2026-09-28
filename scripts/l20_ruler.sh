@@ -49,7 +49,8 @@ case "${1:-}" in
         if [[ "$1" == resume ]]; then
             CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" -m runner.resume \
                 --model "$MODEL_PATH" --manifest "$PREPARED_DIR/manifest.jsonl" \
-                --output "$EXPERIMENT_DIR" --cache-root "$CACHE_ROOT" --tp 4 --shards 2 --percentages "${percentages[@]}" --context-length 64000 --exact-input-tokens 64000
+                --output "$EXPERIMENT_DIR" --cache-root "$CACHE_ROOT" --tp 4 --shards 2 --percentages "${percentages[@]}" --context-length 64000 --exact-input-tokens 64000 \
+                --validation "${RESUME_VALIDATION:-full}"
             resume_flags=(--resume --skip-selective)
         else
             for name in group-0 group-1 baseline prophetkv-{1,5,10,15,20,30,40,60,80} selective-{1,5,10,15,20,30,40,60,80}; do
@@ -74,8 +75,13 @@ case "${1:-}" in
         fi
         report --final
         ;;
+    counts)
+        CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_counts.py" \
+            --output "$EXPERIMENT_DIR" --manifest "$PREPARED_DIR/manifest.jsonl" \
+            --percentages "${percentages[@]}" --shards 2
+        ;;
     status) report ;;
     aggregate) report --final ;;
     stop) "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_control.py" stop --output "$EXPERIMENT_DIR" ;;
-    *) echo "Usage: bash scripts/l20_ruler.sh {download|prepare|dry-run|run|stop|resume|status|aggregate}" >&2; exit 2 ;;
+    *) echo "Usage: bash scripts/l20_ruler.sh {download|prepare|dry-run|run|stop|resume|counts|status|aggregate}" >&2; exit 2 ;;
 esac

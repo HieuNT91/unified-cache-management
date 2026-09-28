@@ -90,12 +90,40 @@ echo "Coordinator PID: $!"
 tail -f "$RESUME_LOG"
 ```
 
-CPU validation runs first and prints the number of missing measurements. It
-checks both original shard fingerprints, model/engine settings, token hashes,
-all-rank diagnostic replay, retirement and output accounting before starting GPUs.
-Compatibility includes the released sweep runtimes at c45e92e, 966b5cf, bcc132c
-and 501fc70. Unrecognized code/input changes fail without rerunning anything.
-Subsequent resumes require the same continuation runtime.
+Before input loading or validation, resume prints saved result counts per ratio,
+per GPU group, and for the baseline+ProphetKV scope, plus the number of prompts
+complete at every vanilla ratio. These initial counts use committed result-file
+presence and are explicitly labeled not yet revalidated. `counts` prints the same
+read-only snapshot without stopping jobs or starting preparation:
+
+```bash
+bash "$LAUNCHER" counts
+```
+
+To avoid repeated saved-attention replay, set this in the server's `.env`:
+
+```bash
+RESUME_VALIDATION=fast
+```
+
+Fast mode checks original fingerprints, model/engine settings, input token hashes,
+result metadata, prior result hashes, retirement, output accounting, and nonempty
+diagnostic-file presence. It trusts the diagnostic validation performed before
+the original result was committed; it does not parse, replay or hash saved
+attention diagnostics. Existing diagnostic hashes remain available for a later
+full audit, but are not verified during fast startup. This mode cannot detect
+corruption inside those skipped diagnostic files. New measurements always receive
+the normal full validation, cache checks and retirement.
+
+`RESUME_VALIDATION=full` also replays and hashes saved diagnostics; it remains the
+launcher default if the variable is absent. The template uses `fast` explicitly.
+Receipts and live/final JSON/Markdown record which resume mode was used. Input and
+result checks still take time; fast mode is not an instant-start guarantee.
+
+Compatibility includes released sweep runtimes c45e92e, 966b5cf, bcc132c, 501fc70
+and the original continuation runtime 16c1f75 (also used by 2ae7f30). Upgrading an
+existing continuation to this fast-resume release preserves both old and new
+result provenance. Unknown code/input changes still fail without rerunning anything.
 
 Completed `result.json` plus diagnostics are the commit boundary. This recovers a
 crash after result publication but before reporting. An incomplete prompt directory
@@ -134,5 +162,6 @@ verifies retained hashes, and skips any newly completed answers as well.
 
 CPU regression coverage includes compatibility rejection, exact diagnostic replay,
 missing baseline rejection, partial-ratio skipping, first-use warmup, repeated
-resume, two-shard finalization, locks and stopping scoped CPU subprocesses while
+resume, counts before input loading, fast-mode diagnostic I/O exclusion, compatible
+continuation upgrades, two-shard finalization, locks and stopping scoped CPU subprocesses while
 leaving an unrelated process alive. No GPU resume has been run locally.

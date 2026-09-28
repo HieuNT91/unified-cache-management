@@ -134,6 +134,93 @@ class ResumeTests(unittest.TestCase):
         path.write_text(path.read_text()+'\n')
         with self.assertRaisesRegex(RuntimeError,'artifact changed'):resume.prepare(self.args)
 
+    def test_counts_precede_input_loading_and_exclude_partial_directories(self):
+        import io
+        from contextlib import redirect_stdout
+        from scripts.sweep_counts import saved_counts
+        partial=self.output/'prophetkv-5/000001/diagnostics.json'
+        atomic_json(partial, {'incomplete':True})
+        with redirect_stdout(io.StringIO()) as stream:
+            counts=saved_counts(self.output,self.manifest,[1,5])
+        self.assertEqual(counts['saved'],7)
+        self.assertEqual(counts['expected'],12)
+        self.assertEqual(counts['complete_prompts'],1)
+        self.assertEqual(counts['methods']['selective-1'],1)
+        self.assertIn('Group 0: baseline 2/2, ProphetKV 3/4 saved.',stream.getvalue())
+        with redirect_stdout(io.StringIO()) as stream, \
+                patch.object(sweep,'load_inputs',side_effect=RuntimeError('input check reached')):
+            with self.assertRaisesRegex(RuntimeError,'input check reached'):
+                resume.prepare(self.args)
+        self.assertIn('Baseline + ProphetKV: 7/12 saved; 5 remaining.',stream.getvalue())
+        self.assertLess(stream.getvalue().index('7/12 saved'),stream.getvalue().index('Checking prepared inputs'))
+
+    def test_fast_mode_never_reads_or_hashes_saved_diagnostics(self):
+        # Fast resume relies on original per-request validation, even when a
+        # diagnostic file is now unreadable as JSON. It still requires presence.
+        resume.prepare(self.args)
+        path=self.output/'prophetkv-1/000000/diagnostics.json'
+        path.write_text('deliberately invalid diagnostics for the fast-mode regression')
+        self.args.validation='fast'
+        real_read=Path.read_text
+        def read(path,*args,**kwargs):
+            if path.name=='diagnostics.json':
+                raise AssertionError('Fast mode read a diagnostic payload')
+            return real_read(path,*args,**kwargs)
+        def digest(path):
+            if Path(path).name=='diagnostics.json':
+                raise AssertionError('Fast mode hashed a diagnostic payload')
+            return file_hash(path)
+        with patch.object(Path,'read_text',read),patch.object(resume,'file_hash',side_effect=digest), \
+                patch('run.verify_diagnostics',side_effect=AssertionError('Unexpected saved replay')):
+            scope=resume.prepare(self.args)
+        self.assertEqual(scope['validation']['mode'],'fast')
+        self.assertFalse(scope['validation']['diagnostic_replay'])
+        report=collect(self.output,self.manifest,[1,5])
+        self.assertEqual(report['resume_validation']['mode'],'fast')
+        self.assertIn('not replayed or rehashed',(self.output/'live_summary.md').read_text())
+        # Fast mode preserves prior hashes, so a later full audit catches drift.
+        self.args.validation='full'
+        with self.assertRaisesRegex(RuntimeError,'artifact changed'):resume.prepare(self.args)
+
+    def test_fast_mode_keeps_result_metadata_hash_and_diagnostic_presence_checks(self):
+        self.args.validation='fast'
+        diag=self.output/'prophetkv-1/000000/diagnostics.json'
+        content=diag.read_bytes();diag.unlink()
+        with self.assertRaisesRegex(RuntimeError,'Missing retained diagnostics'):resume.prepare(self.args)
+        diag.write_bytes(content)
+        record=self.output/'prophetkv-1/000000/result.json'
+        content=record.read_bytes();data=json.loads(content);data['input_sha256']='wrong'
+        atomic_json(record,data)
+        with self.assertRaisesRegex(RuntimeError,'incompatible metadata'):resume.prepare(self.args)
+        record.write_bytes(content)
+        scope=resume.prepare(self.args)
+        self.assertNotIn(str(diag.relative_to(self.output)),scope['retained_files'])
+        record.write_bytes(content+b'\n')
+        with self.assertRaisesRegex(RuntimeError,'artifact changed'):resume.prepare(self.args)
+
+    def test_fast_upgrade_accepts_old_continuation_cohort_and_repeated_resume(self):
+        scope=resume.prepare(self.args)
+        # Emulate the released resume runtime (also used by the .env release).
+        runtime=next(row for row in json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())
+                     if row['commit'].startswith('16c1f75'))
+        old_current=fingerprint(dict(self.args.identity_spec,runtime=runtime['runtime']))
+        old_fingerprint=fingerprint(dict(original=scope['original_identity'],current=old_current,
+                                         configs=scope['configurations']))
+        scope.update(current_identity=old_current,fingerprint=old_fingerprint,
+                     accepted_fingerprints=[old_fingerprint])
+        atomic_json(self.output/'continuation.json',scope)
+        self.write_record(1,self.configs[1],old_fingerprint)
+        self.args.validation='fast'
+        upgraded=resume.prepare(self.args)
+        self.assertEqual(upgraded['previous_source_revision'],runtime['commit'])
+        self.assertIn(old_fingerprint,upgraded['accepted_fingerprints'])
+        self.assertEqual(upgraded['pending']['prophetkv-1'],[3])
+        self.write_record(3,self.configs[1],upgraded['fingerprint'])
+        repeated=resume.prepare(self.args)
+        self.assertEqual(repeated['pending']['prophetkv-1'],[])
+        self.assertIn(old_fingerprint,repeated['accepted_fingerprints'])
+        self.assertIn(upgraded['fingerprint'],repeated['accepted_fingerprints'])
+
     def test_diagnostic_replay_and_engine_configuration_are_required(self):
         path=self.output/'prophetkv-1/000000/diagnostics.json'
         original=path.read_bytes(); value=json.loads(original); value.pop()

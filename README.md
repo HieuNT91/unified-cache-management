@@ -334,3 +334,8 @@ completed baseline, ProphetKV and discontinued selective artifacts.
 A800/L20 launchers automatically load server paths and settings from a local
 Git-ignored `.env`. Copy `.env.example` and keep the original run paths when
 resuming. See [server configuration and update commands](scripts/SERVER_ENV.md).
+
+Use `counts` on either launcher for a quick saved-result count. Resume prints these
+counts before checking inputs. Set `RESUME_VALIDATION=fast` in `.env` to trust prior
+saved diagnostic validation and skip its repeated replay/hashing; new answers
+still receive full validation. Use `full` for the complete saved-diagnostic audit.

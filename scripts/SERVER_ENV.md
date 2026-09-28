@@ -31,6 +31,7 @@ RULER_SOURCE="$PROJECT/.cache/vendor/RULER"
 PREPARED_DIR="$PROJECT/.cache/ruler-64000-thinking-prepared"
 CACHE_ROOT="$PROJECT/.cache/ruler-temporary"
 EXPERIMENT_DIR="$PROJECT/outputs/REPLACE_WITH_YOUR_EXISTING_RUN_DIRECTORY"
+RESUME_VALIDATION=fast
 ```
 
 Replace the last value with the real timestamped directory used at launch.
@@ -51,6 +52,7 @@ LONGBENCH_DATA="$PROJECT/.data/LongBench-v2/data.json"
 PREPARED_DIR="$PROJECT/.data/LongBench-v2/prepared-qwen3-yarn4"
 CACHE_ROOT="$PROJECT/.cache/longbench-temporary"
 EXPERIMENT_DIR="$PROJECT/outputs/longbench-v2-503-yarn4-thinking16k"
+RESUME_VALIDATION=fast
 ```
 
 Keep your actual original paths if they differ. The cache path in
@@ -97,6 +99,7 @@ On **L20**:
 nohup setsid bash scripts/l20_ruler.sh resume \
   >"l20-resume-$(date +%Y%m%d-%H%M%S).log" 2>&1 </dev/null &
 
+bash scripts/l20_ruler.sh counts  # quick saved-result counts; also printed at resume startup
 bash scripts/l20_ruler.sh status
 # After completion:
 bash scripts/l20_ruler.sh aggregate
@@ -108,6 +111,7 @@ On **A800**:
 nohup setsid bash scripts/a800_longbench.sh resume \
   >"a800-resume-$(date +%Y%m%d-%H%M%S).log" 2>&1 </dev/null &
 
+bash scripts/a800_longbench.sh counts  # quick saved-result counts; also printed at resume startup
 bash scripts/a800_longbench.sh status
 # After completion:
 bash scripts/a800_longbench.sh aggregate
@@ -128,7 +132,12 @@ git pull --ff-only origin prophetkv/clean-qwen3-32b-yarn4
 # Then use the resume command above, keeping the existing .env paths.
 ```
 
-Resume after an interruption requires the same compatible runtime; arbitrary
-future inference changes are not automatically approved by a code pull. The
-`.env` integration changes launcher configuration loading only, so it does not
-change the continuation's runtime fingerprint.
+Fast resume (`RESUME_VALIDATION=fast`) skips repeated parsing/replay/hashing of
+saved attention diagnostics, while checking compatible settings, saved answers,
+retirement and diagnostic-file presence. New measurements retain full validation.
+Use `full` for diagnostic replay and hashing as well. The chosen mode is recorded
+in receipts and reports. Existing exports override the `.env` setting.
+
+The fast-resume update recognizes the previous 16c1f75/2ae7f30 continuation runtime
+and preserves results from it. Arbitrary future inference changes are not
+implicitly approved by pulling code.

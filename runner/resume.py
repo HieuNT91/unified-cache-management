@@ -43,7 +43,9 @@ def compatible_identity(spec, original):
     raise RuntimeError('Original sweep fingerprint does not match these inputs/settings or a supported runtime')
 
 
-def validate_record(path, config, entry, sample, model, tp, devices):
+def validate_record(path, config, entry, sample, model, tp, devices, validation='full'):
+    if validation not in ('full', 'fast'):
+        raise ValueError('Resume validation must be full or fast')
     from run import verify_diagnostics
     from ucm.sparse.prophetkv.layers import resolve_layers
     record = json.loads(path.read_text())
@@ -64,8 +66,12 @@ def validate_record(path, config, entry, sample, model, tp, devices):
     if config['method'] == 'baseline' and record['num_cached_tokens'] != 0:
         raise RuntimeError(f'Baseline reused cache: {path}')
     aggregate([record], [dict(prompt_id=entry['id'], subtask=entry['evaluation']['subtask'])], {}, 'completed')
-    verify_diagnostics(json.loads(path.with_name('diagnostics.json').read_text()), sample,
-                       config['method'], config['ratio'], tp, layers)
+    diagnostics = path.with_name('diagnostics.json')
+    if not diagnostics.is_file() or diagnostics.stat().st_size == 0:
+        raise RuntimeError(f'Missing retained diagnostics: {diagnostics}')
+    if validation == 'full':
+        verify_diagnostics(json.loads(diagnostics.read_text()), sample,
+                           config['method'], config['ratio'], tp, layers)
     return record
 
 
@@ -94,6 +100,14 @@ def _prepare(args):
     from runner.sweep import load_inputs, configurations, SharedReporter
     from scripts.sweep_control import assert_stopped
     args.output = args.output.resolve(); args.model = args.model.resolve()
+    from scripts.sweep_counts import saved_counts
+    counts = saved_counts(args.output, args.manifest, args.percentages, args.shards)
+    validation = getattr(args, 'validation', 'full')
+    if validation not in ('full', 'fast'):
+        raise ValueError('Resume validation must be full or fast')
+    print(f'Resume validation: {validation}. '
+          + ('Saved diagnostic replay and hashing are skipped; new measurements remain fully validated.'
+             if validation == 'fast' else 'Saved diagnostics will be replayed and hashed.'), flush=True)
     assert_stopped(args.output)
     if args.shards != 2:
         raise ValueError('This continuation supports the existing two-shard launchers')
@@ -102,12 +116,15 @@ def _prepare(args):
     report_root, old_attempt, previous = resolve_scope(args.output)
     if previous:
         for relative, digest in previous['retained_files'].items():
+            if validation == 'fast' and Path(relative).name == 'diagnostics.json':
+                continue
             if file_hash(args.output/relative) != digest:
                 raise RuntimeError(f'Retained artifact changed: {relative}')
     entries = []
     plans = []
     for shard in range(args.shards):
         args.shard = shard
+        print(f'Checking prepared inputs and original settings for group {shard}...', flush=True)
         expected, selected, current = load_inputs(args)
         plan = json.loads((args.output/f'group-{shard}/plan.json').read_text())
         if (plan['prompt_ids'] != [e['id'] for _, e, _ in selected] or plan['shard'] != shard
@@ -124,12 +141,20 @@ def _prepare(args):
     if len({p['identity'] for p in plans}) != 1:
         raise RuntimeError('Original shards have different fingerprints')
     source = compatible_identity(args.identity_spec, plans[0]['identity'])
+    previous_source = None
     if previous and previous['current_identity'] != current:
-        raise RuntimeError('Continuation code or inputs changed; use the same committed runtime to resume')
+        previous_source = compatible_identity(args.identity_spec, previous['current_identity'])
+    accepted_fingerprints = set()
+    if previous:
+        accepted_fingerprints.update(previous.get('accepted_fingerprints', []))
+        accepted_fingerprints.add(previous['fingerprint'])
     attempt = args.output/'continuation'/('attempt-'+uuid.uuid4().hex)
     pending = {c['name']: [] for c in configs}
     records = {c['name']: [] for c in configs}
-    retained = {}
+    # Keep prior diagnostic pins for a later full audit, but do not read those
+    # large files in fast mode. The receipt explicitly records that distinction.
+    retained = {name:digest for name,digest in previous['retained_files'].items()
+                if Path(name).name == 'diagnostics.json'} if previous and validation == 'fast' else {}
     incomplete = []
     for index, entry, sample in sorted(entries):
         shard = index % args.shards
@@ -143,14 +168,16 @@ def _prepare(args):
                     incomplete.append(folder)
                 pending[config['name']].append(index)
                 continue
-            record = validate_record(path, config, entry, sample, args.model, args.tp, plans[shard]['gpu_uuids'])
+            record = validate_record(path, config, entry, sample, args.model, args.tp,
+                                     plans[shard]['gpu_uuids'], validation)
             cohort = record.get('continuation_fingerprint')
-            if cohort and (not previous or cohort != previous['fingerprint']):
+            if cohort and cohort not in accepted_fingerprints:
                 raise RuntimeError(f'Result belongs to a different continuation: {path}')
             keys = ('prompt_id','subtask','accuracy','thinking_tokens','answer_tokens','control_tokens',
                     'output_tokens','output_cap_reached','unfinished_thinking','timings')
             records[config['name']].append({key:record[key] for key in keys})
-            for artifact in (path, path.with_name('diagnostics.json')):
+            artifacts = (path, path.with_name('diagnostics.json')) if validation == 'full' else (path,)
+            for artifact in artifacts:
                 retained[str(artifact.relative_to(args.output))] = file_hash(artifact)
         if (index+1) % 50 == 0:
             print(f'Validated retained results through prompt {index+1}/{len(entries)}', flush=True)
@@ -175,12 +202,18 @@ def _prepare(args):
                 raise RuntimeError(f'Symlink in owned cache path: {path}')
             shutil.rmtree(path)
     identity = fingerprint(dict(original=plans[0]['identity'], current=current, configs=configs))
+    accepted_fingerprints.add(identity)
     scope = dict(schema_version=1, fingerprint=identity, original_identity=plans[0]['identity'],
                  source_revision=source, current_identity=current, attempt=str(attempt.relative_to(args.output)),
                  configurations=configs, discontinued=[c['name'] for c in all_configs if c not in configs],
                  retained_files=retained, pending=pending, gpu_uuids=[p['gpu_uuids'] for p in plans],
                  created_at=time.time(), prior_attempt=previous['attempt'] if previous else None,
-                 cache_cleanup=list(cache_paths), expected=len(entries)*len(configs))
+                 cache_cleanup=list(cache_paths), expected=len(entries)*len(configs),
+                 validation=dict(mode=validation, diagnostic_replay=validation == 'full',
+                                 diagnostic_hashes_verified=validation == 'full',
+                                 result_hashes_verified=True, new_measurements='full'),
+                 saved_counts=counts, accepted_fingerprints=sorted(accepted_fingerprints),
+                 previous_source_revision=previous_source)
     # Rebuild reporting from committed, validated result files; this also handles
     # a crash between atomic result publication and acceptance by the old ledger.
     for config in configs:
@@ -229,4 +262,5 @@ if __name__ == '__main__':
     parser.add_argument('--layers', type=int, nargs='+', default=[11,12,13,14,15])
     parser.add_argument('--context-length', type=int, default=114688)
     parser.add_argument('--exact-input-tokens', type=int)
+    parser.add_argument('--validation', choices=['full', 'fast'], default='full')
     prepare(parser.parse_args())

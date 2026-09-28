@@ -58,12 +58,16 @@ def collect(output, manifest, percentages, final=False, shards=2):
     if continuation:
         summary['discontinued'] = continuation['discontinued']
         summary['continuation_fingerprint'] = continuation['fingerprint']
+        summary['resume_validation'] = continuation.get('validation', {'mode':'full'})
     stream=io.StringIO(newline='');writer=csv.writer(stream)
     writer.writerow(['configuration','scope','subtask',*COLUMNS])
     lines=[f'{kind.title()} summary: {completed}/{summary["expected"]} validated measurements', '']
     if continuation:
         lines += ['Selective runs discontinued; their existing artifacts remain in the original directories.',
                   'Retained and resumed measurements span different timing sessions.', '']
+        if continuation.get('validation', {}).get('mode') == 'fast':
+            lines += ['Fast resume trusted prior diagnostic validation; saved diagnostics were not replayed or rehashed.',
+                      'New measurements receive full validation.', '']
     tasks=sorted({r['subtask'] for r in expected})
     for task in [None,*tasks]:
         lines.extend([f'### {task or "Overall"}', '',

@@ -105,3 +105,13 @@
   Both launchers load it before defaults. Optional `UCM_ENV_FILE` selects another
   file. Keep existing run/prepared/cache paths and UUID groups for a continuation.
   See `scripts/SERVER_ENV.md` for fetch-before-stop/update/resume commands.
+
+- Resume first prints saved-file counts per method/shard and complete vanilla
+  prompts; `counts` is read-only and does not load token files or diagnostics.
+  `RESUME_VALIDATION=fast` skips saved diagnostic replay/hashing, retains result
+  metadata/hash/input/config/retirement checks and requires diagnostic presence.
+  Record the mode in receipts/reports; existing diagnostic pins are preserved
+  but not verified in fast mode. Every NEW measurement remains fully validated.
+  Full remains the absent-variable default; .env.example explicitly selects fast.
+  Accept the pinned 16c1f75/2ae7f30 continuation runtime on upgrade, preserving
+  accepted cohort fingerprints for repeated resumes. Unknown runtime drift fails.
