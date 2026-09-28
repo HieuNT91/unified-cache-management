@@ -330,3 +330,7 @@ For an interrupted A800/L20 sweep with completed baselines, see
 [ProphetKV-only continuation](scripts/RESUME_PROPHETKV.md). Existing launchers
 can stop the owned sweep and resume only missing vanilla results while retaining
 completed baseline, ProphetKV and discontinued selective artifacts.
+
+A800/L20 launchers automatically load server paths and settings from a local
+Git-ignored `.env`. Copy `.env.example` and keep the original run paths when
+resuming. See [server configuration and update commands](scripts/SERVER_ENV.md).

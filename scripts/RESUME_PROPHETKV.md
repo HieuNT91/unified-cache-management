@@ -1,5 +1,9 @@
 # Continue A800 or L20 without selective runs
 
+**Preferred setup:** use a Git-ignored `.env` on each server. See
+[Server settings and exact fetch/stop/resume commands](SERVER_ENV.md) to avoid
+repeating exports. The export-based instructions below remain supported.
+
 Use the existing launcher’s `resume` command. It keeps every completed baseline
 and ProphetKV result, skips selective, and runs only missing ProphetKV answers.
 It does not regenerate prepared inputs. Baseline must already be complete on both

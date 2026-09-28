@@ -1,5 +1,9 @@
 # A800: all 503 LongBench v2 prompts, 13 configurations
 
+Both launchers now load a Git-ignored `.env` automatically. See
+[Server-local configuration](SERVER_ENV.md) for examples and safe update/stop/resume
+commands. A `.env` can replace the export blocks below.
+
 This launcher uses the user-specified server paths and all eight GPU UUIDs.
 It starts no historical scheduler. GPU execution has not been validated by the
 local preparation task. CPU lifecycle checks exercise the temporary-cache sweep;

@@ -98,3 +98,10 @@
   state/session receipts live in `continuation/attempt-*`, selected by
   `continuation.json`. Final scope is3521 A800/8000 L20, selective discontinued.
   CPU-only recovery/locking/stop tests passed; remote GPU continuation is pending.
+
+- Server-local launcher settings live in Git-ignored `.env`; `.env.example` is
+  tracked. `scripts/server_env.sh` loads one trusted Bash assignment per line,
+  preserving existing environment values before expanding later assignments.
+  Both launchers load it before defaults. Optional `UCM_ENV_FILE` selects another
+  file. Keep existing run/prepared/cache paths and UUID groups for a continuation.
+  See `scripts/SERVER_ENV.md` for fetch-before-stop/update/resume commands.

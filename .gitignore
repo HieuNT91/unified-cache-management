@@ -6,3 +6,8 @@ __pycache__/
 inputs/
 outputs/
 *.log
+
+# Server-local configuration (templates remain tracked).
+.env
+.env.*
+!.env.example

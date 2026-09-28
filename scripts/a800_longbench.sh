@@ -2,14 +2,16 @@
 # Remote-only commands. This script never selects local GPUs by numeric index.
 set -euo pipefail
 CODE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$CODE_ROOT/scripts/server_env.sh"
+ucm_load_server_env "$CODE_ROOT"
 export MODEL_PATH="${MODEL_PATH:-/mnt/sde/jh/ckpts/Qwen3-32B}"
 export PYTHON_BIN="${PYTHON_BIN:-/mnt/sde/jh/envs/ucm/bin/python}"
 export LONGBENCH_DATA="${LONGBENCH_DATA:-/mnt/sde/jh/projects/unified-cache-management/.data/LongBench-v2/data.json}"
 export EXPERIMENT_DIR="${EXPERIMENT_DIR:-$CODE_ROOT/outputs/longbench-v2-503-yarn4-thinking16k}"
 export PREPARED_DIR="${PREPARED_DIR:-$EXPERIMENT_DIR/prepared}"
 export CACHE_ROOT="${CACHE_ROOT:-$CODE_ROOT/.cache/longbench-temporary}"
-GPU_A='GPU-6f2a33e5-aa6e-6681-3d49-1de956c38b3e,GPU-87070a52-3745-1eae-7b16-69594603f277,GPU-73ecc591-94c9-c261-412c-5e0cf51fa103,GPU-5224ff6c-63bb-3a1e-249c-15de01751b5d'
-GPU_B='GPU-1d441d83-c33c-4797-23be-b7355d92e3b6,GPU-83ea256b-cf28-6476-ce48-f34e04955379,GPU-b6ece736-772f-8ff9-e3a6-f4a0b369e7b4,GPU-9eed921f-1ef7-c923-f4ec-acf7181237a9'
+GPU_A="${GPU_A:-GPU-6f2a33e5-aa6e-6681-3d49-1de956c38b3e,GPU-87070a52-3745-1eae-7b16-69594603f277,GPU-73ecc591-94c9-c261-412c-5e0cf51fa103,GPU-5224ff6c-63bb-3a1e-249c-15de01751b5d}"
+GPU_B="${GPU_B:-GPU-1d441d83-c33c-4797-23be-b7355d92e3b6,GPU-83ea256b-cf28-6476-ce48-f34e04955379,GPU-b6ece736-772f-8ff9-e3a6-f4a0b369e7b4,GPU-9eed921f-1ef7-c923-f4ec-acf7181237a9}"
 prepare() {
     CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/longbench_v2.py" prepare \
         --model "$MODEL_PATH" --data "$LONGBENCH_DATA" --output "$PREPARED_DIR"
