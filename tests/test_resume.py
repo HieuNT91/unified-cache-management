@@ -137,7 +137,8 @@ class ResumeTests(unittest.TestCase):
     def test_resume_preserves_original_vendor_hashes_and_repeats(self):
         released=next(row for row in json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())
                       if row['commit'].startswith('501fc70'))
-        vendor={'ucm/vendor/RULER/scripts/data/synthetic/niah.py':'vendor-digest'}
+        vendor={'ucm/vendor/RULER/scripts/data/synthetic/niah.py':'vendor-digest',
+                'ucm/.cache/vendor/RULER/scripts/data/synthetic/niah.py':'vendor-digest'}
         original=fingerprint(dict(self.args.identity_spec,runtime={**released['runtime'],**vendor}))
         for shard in (0,1):
             path=self.output/f'group-{shard}/plan.json'
@@ -178,6 +179,25 @@ class ResumeTests(unittest.TestCase):
         original=fingerprint(dict(spec,runtime={**released['runtime'],'ucm/local.py':'unreviewed'}))
         with self.assertRaisesRegex(RuntimeError,'fingerprint'):
             resume.compatible_identity(spec,original)
+
+    def test_hidden_vendor_layout_requires_exact_hashes_for_each_copy(self):
+        released=json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())[-1]
+        hidden='ucm/.cache/vendor/RULER/generator.py'
+        visible='ucm/vendor/RULER/generator.py'
+        for paths in ((hidden,), (visible,hidden)):
+            with self.subTest(paths=paths):
+                spec=copy.deepcopy(self.args.identity_spec)
+                vendor=dict.fromkeys(paths,'same-original-content')
+                spec['runtime'].update(vendor)
+                original=fingerprint(dict(spec,runtime={**released['runtime'],**vendor}))
+                self.assertIn('preserved ucm/vendor',resume.compatible_identity(spec,original))
+                for name in paths:
+                    changed=copy.deepcopy(spec);changed['runtime'][name]='modified'
+                    with self.assertRaisesRegex(RuntimeError,'fingerprint'):
+                        resume.compatible_identity(changed,original)
+                    missing=copy.deepcopy(spec);del missing['runtime'][name]
+                    with self.assertRaisesRegex(RuntimeError,'fingerprint'):
+                        resume.compatible_identity(missing,original)
 
     def test_identity_failure_reports_candidates_without_touching_saved_results(self):
         self.manifest.write_text(self.manifest.read_text()+'\n')

@@ -115,7 +115,8 @@
   Full remains the absent-variable default; .env.example explicitly selects fast.
   Accept the pinned 16c1f75/2ae7f30 continuation runtime on upgrade, preserving
   accepted cohort fingerprints for repeated resumes. Unknown runtime drift fails.
-- Historical remote fingerprints may include an untracked `ucm/vendor/RULER`
+- Historical remote fingerprints may include untracked `ucm/vendor/RULER` and
+  `ucm/.cache/vendor/RULER` directories (both can coexist). Preserve both in the
   checkout. Resume can reconstruct a pinned release plus current vendor hashes,
   accepting only an exact original fingerprint match. Never remove vendor hashes
   or rewrite original receipts to force compatibility. Keep those files unchanged.

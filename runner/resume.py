@@ -44,7 +44,7 @@ def compatible_identity(spec, original, diagnostic_path=None):
         # Reconstruct that exact payload; never discard their hashes or overwrite
         # pinned release files. Changed/missing vendor files still fail the hash.
         vendor = {name: digest for name, digest in spec['runtime'].items()
-                  if name.startswith('ucm/vendor/') and name not in version['runtime']}
+                  if name.startswith(('ucm/vendor/', 'ucm/.cache/vendor/')) and name not in version['runtime']}
         if vendor:
             variants.append((version['commit'] + ' with preserved ucm/vendor files',
                              dict(candidate, runtime={**version['runtime'], **vendor})))
