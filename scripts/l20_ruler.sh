@@ -81,7 +81,8 @@ case "${1:-}" in
             --percentages "${percentages[@]}" --shards 2
         ;;
     status) report ;;
+    status_same_count) report --same-count ;;
     aggregate) report --final ;;
     stop) "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_control.py" stop --output "$EXPERIMENT_DIR" ;;
-    *) echo "Usage: bash scripts/l20_ruler.sh {download|prepare|dry-run|run|stop|resume|counts|status|aggregate}" >&2; exit 2 ;;
+    *) echo "Usage: bash scripts/l20_ruler.sh {download|prepare|dry-run|run|stop|resume|counts|status|status_same_count|aggregate}" >&2; exit 2 ;;
 esac

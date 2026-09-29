@@ -1,17 +1,29 @@
-"""One configuration shared by all three methods; importable without CUDA."""
+"""Shared clean method configuration; importable without CUDA."""
 from ucm.sparse.prophetkv.layers import resolve_layers
 
-METHODS = ('baseline', 'prophetkv', 'selective_prophetkv')
+METHODS = ('baseline', 'prophetkv', 'selective_prophetkv', 'router')
 WINDOW = 131072
 PREFILL_BUDGET = 16384
 ROPE = dict(rope_type='yarn', factor=4.0, original_max_position_embeddings=32768)
 VERSIONS = {'vllm': '0.9.2', 'torch': '2.7.0', 'transformers': '4.53.2', 'uc-manager': '0.3.0'}
 
 
-def engine_config(model, method, ratio=.2, layers=None, count=None, tp=4,
-                  memory=.9, cache_dir=None, end_token=None, persistent=None):
+def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
+                  memory=.9, cache_dir=None, end_token=None, persistent=None, router_policy=None, router_id="router1", router_profile=False):
     if method not in METHODS:
         raise ValueError('Unknown method')
+    if method == 'router':
+        from runner.router_policy import load_policy
+        if ratio is not None or layers is not None or count is not None:
+            raise ValueError('Router requests reject manual ratio/layer overrides')
+        if router_policy is None or router_id not in ('router1','router2','router3'):
+            raise ValueError('Router requires --router-policy and a valid --router-id')
+        load_policy(router_policy)
+        router_profile = True
+        ratio = .01
+    elif router_policy is not None:
+        raise ValueError('--router-policy requires --method router')
+    ratio = .2 if ratio is None else ratio
     if not 0 <= ratio <= 1 or tp not in (1, 2, 4, 8) or not 0 < memory < 1:
         raise ValueError('Invalid ratio, tensor parallel size or memory utilization')
     if method == 'baseline' and (layers is not None or count is not None):
@@ -25,11 +37,16 @@ def engine_config(model, method, ratio=.2, layers=None, count=None, tp=4,
                generation_config='vllm', seed=0, quantization=None,
                cpu_offload_gb=0, swap_space=0, rope_scaling=dict(ROPE),
                worker_cls='runner.worker.Worker')
+    if router_profile:
+        if tp != 4:
+            raise ValueError('Frozen router profile requires TP4')
+        cfg.update(max_model_len=65920, num_gpu_blocks_override=1031,
+                   hf_overrides={'max_position_embeddings':32768})
     if method != 'baseline':
         selected = resolve_layers(method, layers, count)
         if cache_dir is None or type(end_token) is not int:
             raise ValueError('Cached methods require a cache directory and delimiter')
-        sparse = dict(method=method, ratio=ratio, chunk_end_token_id=end_token,
+        sparse = dict(method='prophetkv' if method == 'router' else method, ratio=ratio, chunk_end_token_id=end_token,
                       component_audit=False, compute_meta={})
         if method == 'selective_prophetkv':
             sparse['scoring_layers'] = list(selected)

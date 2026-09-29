@@ -31,6 +31,8 @@ def install(layer, sparse):
     impl._prophetkv_original_forward=original
     def forward(layer,query,key,value,kv_cache,attn_metadata,output=None,output_scale=None):
         if not sparse.active:
+            if getattr(sparse.connector, 'router_dense_id', None):
+                sparse.router_native_layers.add(layer.layer_name)
             return original(layer,query,key,value,kv_cache,attn_metadata,output,output_scale)
         from vllm.v1.attention.backends.flash_attn import reshape_and_cache_flash
         from .causal_kernel import ragged_positions_attention_fwd

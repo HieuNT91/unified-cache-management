@@ -243,3 +243,6 @@ It uses greedy one-token generation while preserving input token IDs.
 To discontinue selective during an existing run and retain completed results,
 follow [Stop and resume ProphetKV only](RESUME_PROPHETKV.md). The same launcher
 supports `stop`, `resume`, `status`, and `aggregate`; do not delete result directories.
+
+For metrics over the same accepted prompts across methods, use
+`status_same_count`; see [matched status](STATUS_SAME_COUNT.md).

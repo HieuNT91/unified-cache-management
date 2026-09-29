@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare prompts or a persistent KV collection, then run any of three methods."""
+"""Prepare prompts or a persistent KV collection, then run a native clean method."""
 import argparse
 import hashlib
 import json
@@ -109,6 +109,7 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers):
     if sorted(w['rank'] for w in workers) != list(range(tp)):
         raise RuntimeError('Missing tensor-parallel rank')
     common = None
+    common_scores = None
     for worker in workers:
         events = worker['diagnostics']
         steps = [e for e in events if e['kind'] == 'prefill_step']
@@ -135,6 +136,9 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers):
         prefix, end = sample['boundaries'][1], sample['boundaries'][-2]
         if len(scores) != end - prefix or not all(math.isfinite(s) for s in scores):
             raise RuntimeError('Invalid selection scores')
+        if common_scores is not None and scores != common_scores:
+            raise RuntimeError('TP ranks disagree on native attention scores')
+        common_scores = scores
         count = math.floor(len(scores) * ratio)
         reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
         if (event['selected_positions'] != reference or event['scoring_layers'] != list(expected_layers)
@@ -172,7 +176,11 @@ def run(args):
         raise ValueError('Input was prepared with a different model configuration')
     cfg = engine_config(args.model, args.method, args.ratio, args.layers, args.num_layers,
         args.tp, args.memory, args.output.resolve() / 'cache',
-        sample['token_ids'][sample['boundaries'][1] - 1])
+        sample['token_ids'][sample['boundaries'][1] - 1],
+        router_policy=args.router_policy, router_id=args.router_id)
+    if args.method == 'router':
+        from runner.router_measure import validate_profile
+        validate_profile(sample,args.tp)
     if args.dry_run:
         print(json.dumps(cfg, indent=2))
         return
@@ -233,17 +241,35 @@ def run(args):
         metadata(namespace + ':prime')
         generate(llm.llm_engine, ids, 1, namespace + ':prime')
         llm.collective_rpc(drain)
+        llm.collective_rpc(retire)
         timings['priming_seconds'] = time.perf_counter() - started
         before = {str(p.relative_to(cache)): (p.stat().st_size, p.stat().st_mtime_ns)
                   for p in (cache / 'kv').glob('*/*') if p.is_file()}
-        metadata(namespace + ':measured')
-        result, ttft, elapsed = generate(llm.llm_engine, ids, sample['max_output_tokens'],
-                                         namespace + ':measured', sample['thinking'])
+        routing = None
+        if args.method == 'router':
+            from runner.router_measure import measure
+            from runner.router_policy import load_policy
+            def unchanged():
+                current = {str(p.relative_to(cache)): (p.stat().st_size,p.stat().st_mtime_ns)
+                           for p in (cache/'kv').glob('*/*') if p.is_file()}
+                if current != before:
+                    raise RuntimeError('Offline KV changed during routing')
+            result, ttft, elapsed, routing = measure(llm,sample,namespace+':measured',
+                load_policy(args.router_policy),args.router_id,args.output/'routing',args.tp,unchanged,
+                scheduler_path=args.output/'scheduler.json')
+        else:
+            metadata(namespace + ':measured')
+            result, ttft, elapsed = generate(llm.llm_engine, ids, sample['max_output_tokens'],
+                                             namespace + ':measured', sample['thinking'])
         timings.update(ttft_seconds=ttft, generation_seconds=elapsed)
         started = time.perf_counter()
         diagnostics = llm.collective_rpc(drain)
         scoring_layers = resolve_layers(args.method, args.layers, args.num_layers) if cached else ()
-        verify_diagnostics(diagnostics, sample, args.method, args.ratio, args.tp, scoring_layers)
+        if routing:
+            from runner.router_measure import validate_answer
+            validate_answer(llm,diagnostics,result,sample,routing,args.tp)
+        else:
+            verify_diagnostics(diagnostics, sample, args.method, args.ratio, args.tp, scoring_layers)
         if not cached and result.num_cached_tokens != 0:
             raise RuntimeError('Baseline reused cached tokens')
         after = {str(p.relative_to(cache)): (p.stat().st_size, p.stat().st_mtime_ns)
@@ -259,7 +285,7 @@ def run(args):
             raise RuntimeError('Request retirement failed')
         if cached:
             receipt = json.loads((args.output / 'scheduler.json').read_text())
-            if receipt != dict(request_id=namespace + ':measured', requests_blend_meta=0, requests_meta=0):
+            if receipt != dict(request_id=routing['answer_request_id'] if routing else namespace + ':measured', requests_blend_meta=0, requests_meta=0):
                 raise RuntimeError('Scheduler request not retired')
             delete_retired_files(cache, before)
         timings['retirement_seconds'] = time.perf_counter() - started
@@ -270,7 +296,7 @@ def run(args):
             prompt_tokens=len(ids), output_token_ids=list(output.token_ids), prediction=output.text,
             max_output_tokens=sample['max_output_tokens'], thinking=sample['thinking'],
             finish_reason=output.finish_reason, num_cached_tokens=result.num_cached_tokens,
-            timings=timings, setup=setup_receipts, readiness=readiness, retirement=retirement)
+            timings=timings, setup=setup_receipts, readiness=readiness, retirement=retirement, routing=routing)
     finally:
         llm.llm_engine.engine_core.shutdown()
     dump(args.output / 'result.json', record)
@@ -297,7 +323,9 @@ def main():
     launch.add_argument('--max-output-tokens', type=int)
     launch.add_argument('--output', type=Path, required=True)
     launch.add_argument('--method', choices=METHODS, required=True)
-    launch.add_argument('--ratio', type=float, default=.2)
+    launch.add_argument('--ratio', type=float)
+    launch.add_argument('--router-policy', type=Path)
+    launch.add_argument('--router-id', choices=('router1','router2','router3'), default='router1')
     layers = launch.add_mutually_exclusive_group()
     layers.add_argument('--layers', nargs='+', type=int)
     layers.add_argument('--num-layers', type=int)
@@ -322,6 +350,10 @@ def main():
     if args.model is not None:
         args.model = args.model.resolve()
     if args.command == 'run':
+        if args.method != 'router' and args.ratio is None:
+            args.ratio = .2
+        if args.method == 'router' and (args.ratio is not None or args.layers is not None or args.num_layers is not None):
+            parser.error('Router rejects manual ratio and layer overrides')
         if args.setup is not None:
             args.func = run_collection
         else:

@@ -101,6 +101,8 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     slots=blocks[cp//64]*64+cp%64
     started=time.perf_counter()
     scoring_layers = sparse.scoring_layers
+    capture = getattr(sparse, 'router_capture', False)
+    captured = []
     for i,layer in enumerate(sparse.model.layers):
         name=f'model.layers.{i}.self_attn.attn'
         sparse.connector.wait_for_layer_load(name)
@@ -121,6 +123,8 @@ def probe(sparse,positions,embeddings,query_budget=16384):
                 indices = qp[a:a+query_budget]
                 layer_scores.add_(context_importance(q[indices],ck), alpha=len(indices)/len(qp))
             scores.add_(layer_scores)
+            if capture:
+                captured.append(layer_scores.detach().clone())
             del layer_scores
         if sparse.method == "selective_prophetkv" and i == scoring_layers[-1]:
             del ck,cv,q,k,v
@@ -145,6 +149,7 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     # Each rank owns an equal number of Q heads. Average local head means
     # across the TP group before ranking, so every rank repairs the same tokens.
     scores.div_(len(scoring_layers))
+    local_mean = scores.detach().clone() if capture else None
     eligible, selected = global_selection(scores, b[1], sparse.ratio)
     sparse.selection_diagnostics.append(dict(kind='prophetkv_selection',request_id=meta.request_id,
         scores=eligible,selected_positions=selected,eligible_count=len(eligible),selected_count=len(selected),
@@ -153,4 +158,6 @@ def probe(sparse,positions,embeddings,query_budget=16384):
         suffix_forward_layers=scoring_layers[-1] if sparse.method == "selective_prophetkv" else len(sparse.model.layers),probe_tokens_per_layer=suffix_tokens,probe_query_budget=query_budget,probe_seconds=time.perf_counter()-started,
         normalization='all_context_keys',fusion='mean_layers_fp32',ratio=sparse.ratio,
         selection_stage='before_layer_0_qkv',alignment_count=len(sparse.connector.prophet_aligned)))
+    if capture:
+        sparse.router_arrays = (torch.stack(captured), eligible.detach().clone(), local_mean)
     return selected

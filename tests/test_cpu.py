@@ -139,7 +139,7 @@ class AlgorithmTests(unittest.TestCase):
                     post_attention_layernorm=lambda x, r: (x, r), mlp=lambda x: x) for i in range(64)]
                 aligned = set()
                 sparse = types.SimpleNamespace(method=method, scoring_layers=chosen, ratio=.2,
-                    model=types.SimpleNamespace(layers=layers), selection_diagnostics=[],
+                    model=types.SimpleNamespace(layers=layers), selection_diagnostics=[],router_capture=method=='prophetkv',
                     request=RequestMetadata('test', (0, 64, 128, 384), (380, 381)),
                     attn_metadata=types.SimpleNamespace(block_table=torch.arange(6)[None]),
                     connector=types.SimpleNamespace(wait_for_layer_load=aligned.add, prophet_aligned=aligned))
@@ -169,6 +169,14 @@ class AlgorithmTests(unittest.TestCase):
                 event = sparse.selection_diagnostics[0]
                 torch.testing.assert_close(event['scores'], torch.full((64,), sum(i + 1 for i in chosen) / len(chosen)))
                 self.assertEqual(event['fusion'], 'mean_layers_fp32')
+                if method == 'prophetkv':
+                    captured, global_scores, local_mean = sparse.router_arrays
+                    self.assertEqual(tuple(captured.shape),(64,128))
+                    replay=torch.zeros(128,dtype=torch.float32)
+                    for values in captured:replay.add_(values)
+                    replay.div_(64)
+                    self.assertTrue(torch.equal(replay,local_mean))
+                    self.assertTrue(torch.equal(global_scores,event['scores']))
 
     def test_delta_rotation_does_not_double_yarn_amplitude(self):
         import torch

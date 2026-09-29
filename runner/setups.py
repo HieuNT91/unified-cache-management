@@ -500,7 +500,12 @@ def run_collection(args):
         cfg = engine_config(model, args.method, args.ratio, args.layers, args.num_layers,
             tp, args.memory, root / 'cache',
             samples[0][1]['token_ids'][samples[0][1]['boundaries'][1]-1],
-            persistent=persistent_config(root, descriptor, True, layouts) if cached else None)
+            persistent=persistent_config(root, descriptor, True, layouts) if cached else None,
+            router_policy=getattr(args,'router_policy',None),router_id=getattr(args,'router_id','router1'))
+        if args.method == 'router':
+            from runner.router_measure import validate_profile
+            for _,sample in samples:
+                validate_profile(sample,tp)
         if args.dry_run:
             print(json.dumps(dict(setup_fingerprint=descriptor['fingerprint'],
                 prompt_ids=[entry['id'] for entry, _ in samples], engine=cfg), indent=2))
@@ -552,6 +557,9 @@ def execute_collection(args, root, descriptor, samples, cfg, devices, receipt, r
     def infer(sample, tag, purpose, budget, thinking=False):
         rid = f'{namespace}:{tag}:{purpose}'
         if cached:
+            if args.method == 'router':
+                from runner.router_measure import sync_mode
+                sync_mode(llm,rid,'prophetkv-all64-1',tp)
             llm.collective_rpc(arm, kwargs=dict(request_id=rid, boundaries=sample['boundaries'],
                                                question_positions=sample['question_positions']))
         return generate(llm.llm_engine, sample['token_ids'], budget, rid, thinking)
@@ -583,11 +591,26 @@ def execute_collection(args, root, descriptor, samples, cfg, devices, receipt, r
             llm.collective_rpc(drain)
             retirement(llm, tp)
             timings['priming_seconds'] = time.perf_counter()-started
-            result, ttft, elapsed = infer(sample, tag, 'measured', sample['max_output_tokens'], sample['thinking'])
+            routing = None
+            if args.method == 'router':
+                from runner.router_measure import measure
+                from runner.router_policy import load_policy
+                def unchanged():
+                    if before != snapshot(root/'cache', inventory, entry['chunks']):
+                        raise RuntimeError('Persistent KV changed during routing')
+                result,ttft,elapsed,routing = measure(llm,sample,f'{namespace}:{tag}:measured',
+                    load_policy(args.router_policy),args.router_id,output_dir/'routing',tp,unchanged,
+                    args.output/'scheduler.json')
+            else:
+                result, ttft, elapsed = infer(sample, tag, 'measured', sample['max_output_tokens'], sample['thinking'])
             timings.update(ttft_seconds=ttft, generation_seconds=elapsed)
             started = time.perf_counter()
             diagnostics = llm.collective_rpc(drain)
-            verify_diagnostics(diagnostics, sample, args.method, args.ratio, tp, scoring)
+            if routing:
+                from runner.router_measure import validate_answer
+                validate_answer(llm,diagnostics,result,sample,routing,tp)
+            else:
+                verify_diagnostics(diagnostics, sample, args.method, args.ratio, tp, scoring)
             if not cached and result.num_cached_tokens != 0:
                 raise RuntimeError('Baseline reused cached tokens')
             atomic_json(output_dir / 'diagnostics.json', diagnostics)
@@ -596,7 +619,7 @@ def execute_collection(args, root, descriptor, samples, cfg, devices, receipt, r
             retired = retirement(llm, tp)
             if cached:
                 scheduler = json.loads((args.output / 'scheduler.json').read_text())
-                if scheduler != dict(request_id=f'{namespace}:{tag}:measured', requests_blend_meta=0, requests_meta=0):
+                if scheduler != dict(request_id=routing['answer_request_id'] if routing else f'{namespace}:{tag}:measured', requests_blend_meta=0, requests_meta=0):
                     raise RuntimeError('Scheduler request not retired')
                 if before != snapshot(root / 'cache', inventory, entry['chunks']):
                     raise RuntimeError('Persistent KV changed during inference or retirement')
@@ -615,7 +638,7 @@ def execute_collection(args, root, descriptor, samples, cfg, devices, receipt, r
                 output_token_ids=list(output.token_ids), prediction=output.text,
                 max_output_tokens=sample['max_output_tokens'], thinking=sample['thinking'],
                 finish_reason=output.finish_reason, num_cached_tokens=result.num_cached_tokens,
-                timings=timings, retirement=retired, **output_metrics, **evaluation, accuracy=accuracy,
+                timings=timings, retirement=retired, routing=routing, **output_metrics, **evaluation, accuracy=accuracy,
                 output_cap_reached=len(output.token_ids) >= sample['max_output_tokens'])
             atomic_json(output_dir / 'result.json', record)
             records.append(record)

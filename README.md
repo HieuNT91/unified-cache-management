@@ -1,18 +1,25 @@
 # ProphetKV · Qwen3-32B
 
-A focused runtime with three modes: no-cache baseline, original all-layer
-ProphetKV, and selective ProphetKV with configurable attention-scoring layers.
-No experiment schedulers, datasets, results or model weights are included.
+A focused runtime with four modes: no-cache baseline, original all-layer
+ProphetKV, selective ProphetKV with configurable scoring layers, and a frozen
+attention router. Results and model weights are not included.
+
+Native attention router deployment starts at [scripts/A800_ROUTER.md](scripts/A800_ROUTER.md).
+It adds `--method router --router-policy PATH --router-id router1` for prepared
+inputs and persistent setups. The three learned policies remain frozen; the A800
+workflow regenerates the 1300-row test cohort and validates all 9100 answers.
 
 All modes use Qwen3-32B BF16, YaRN **4×** with an original 32768-position window
-and a **131072-token** total window. All three modes use **chunked prefill**,
+and a **131072-token** total window. All modes use **chunked prefill**,
 with at most **16384 scheduled tokens per step**. This budget does not reduce
 the context window or the full-prompt KV allocation. Prefix caching is disabled;
 baseline also omits the UCM connector entirely. Normal autoregressive KV caching
 within a request remains enabled.
 
 The default is TP4, eager execution, native thinking and a 16384-token output
-cap. Input plus output must fit the window; preparation rejects oversized inputs
+cap for the fixed methods. The router uses non-thinking256 and independent
+KV65920/1031-block capacity beneath the same 131072-position YaRN table.
+Input plus output must fit the window; preparation rejects oversized inputs
 without truncation. `prepare --no-thinking --max-output-tokens 256` selects
 non-thinking generation. Every method reads the same prepared token IDs.
 
@@ -248,9 +255,11 @@ transfers before retiring requests. Legacy runs delete their temporary cache;
 collection runs preserve setup KV. `result.json` contains predictions, token IDs,
 finish reason, input hash, scoring layers, configuration and separate timings.
 TTFT includes all measured prefill steps and probing/recomputation, but excludes
-model loading, warmup, offline cache construction, priming, validation and export.
+model loading, warmup, offline cache construction and priming. Router total TTFT
+also includes its routing-required export, features, retirement, decision and TP
+synchronization; post-answer validation/export remain outside TTFT.
 `diagnostics.json` retains global scores, per-layer positions, and scheduled/
-recomputed counts for every prefill step in all three modes. Collection runs add
+recomputed counts for every prefill step. Collection runs add
 the per-prompt scoring and aggregation described above; legacy single-input runs
 retain their existing output schema.
 
@@ -339,3 +348,12 @@ Use `counts` on either launcher for a quick saved-result count. Resume prints th
 counts before checking inputs. Set `RESUME_VALIDATION=fast` in `.env` to trust prior
 saved diagnostic validation and skip its repeated replay/hashing; new answers
 still receive full validation. Use `full` for the complete saved-diagnostic audit.
+
+Reusable RULER collection and task-independent tree routers are documented in
+[scripts/RULER_CORPUS_COLLECTION.md](scripts/RULER_CORPUS_COLLECTION.md),
+[scripts/RULER_CORPUS_TRAINING.md](scripts/RULER_CORPUS_TRAINING.md), and
+[scripts/TREE_INFERENCE.md](scripts/TREE_INFERENCE.md). The new corpus defaults to
+nocache plus all64 1/20/40%, supports partial collection and versioned pooled
+training, and exports individual trees for RULER or LongBench v2 inference on
+A800/L20. This is separate from the frozen 1/20/50% router workflow. CPU verification
+is separate from GPU acceptance; no GPU launch is implied by these interfaces.

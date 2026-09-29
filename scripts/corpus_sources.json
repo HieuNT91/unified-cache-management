@@ -1,0 +1,193 @@
+{
+  "definitions": {
+    "cwe": {
+      "args": {
+        "freq_cw": 30,
+        "freq_ucw": 3,
+        "num_cw": 10
+      },
+      "task": "common_words_extraction"
+    },
+    "fwe": {
+      "args": {
+        "alpha": 2.0
+      },
+      "task": "freq_words_extraction"
+    },
+    "niah_multikey_1": {
+      "args": {
+        "num_needle_k": 4,
+        "num_needle_q": 1,
+        "num_needle_v": 1,
+        "type_haystack": "essay",
+        "type_needle_k": "words",
+        "type_needle_v": "numbers"
+      },
+      "task": "niah"
+    },
+    "niah_multikey_2": {
+      "args": {
+        "num_needle_k": 1,
+        "num_needle_q": 1,
+        "num_needle_v": 1,
+        "type_haystack": "needle",
+        "type_needle_k": "words",
+        "type_needle_v": "numbers"
+      },
+      "task": "niah"
+    },
+    "niah_multikey_3": {
+      "args": {
+        "num_needle_k": 1,
+        "num_needle_q": 1,
+        "num_needle_v": 1,
+        "type_haystack": "needle",
+        "type_needle_k": "uuids",
+        "type_needle_v": "uuids"
+      },
+      "task": "niah"
+    },
+    "niah_multiquery": {
+      "args": {
+        "num_needle_k": 1,
+        "num_needle_q": 4,
+        "num_needle_v": 1,
+        "type_haystack": "essay",
+        "type_needle_k": "words",
+        "type_needle_v": "numbers"
+      },
+      "task": "niah"
+    },
+    "niah_multivalue": {
+      "args": {
+        "num_needle_k": 1,
+        "num_needle_q": 1,
+        "num_needle_v": 4,
+        "type_haystack": "essay",
+        "type_needle_k": "words",
+        "type_needle_v": "numbers"
+      },
+      "task": "niah"
+    },
+    "niah_single_1": {
+      "args": {
+        "num_needle_k": 1,
+        "num_needle_q": 1,
+        "num_needle_v": 1,
+        "type_haystack": "noise",
+        "type_needle_k": "words",
+        "type_needle_v": "numbers"
+      },
+      "task": "niah"
+    },
+    "niah_single_2": {
+      "args": {
+        "num_needle_k": 1,
+        "num_needle_q": 1,
+        "num_needle_v": 1,
+        "type_haystack": "essay",
+        "type_needle_k": "words",
+        "type_needle_v": "numbers"
+      },
+      "task": "niah"
+    },
+    "niah_single_3": {
+      "args": {
+        "num_needle_k": 1,
+        "num_needle_q": 1,
+        "num_needle_v": 1,
+        "type_haystack": "essay",
+        "type_needle_k": "words",
+        "type_needle_v": "uuids"
+      },
+      "task": "niah"
+    },
+    "qa_1": {
+      "args": {
+        "dataset": "squad"
+      },
+      "task": "qa"
+    },
+    "qa_2": {
+      "args": {
+        "dataset": "hotpotqa"
+      },
+      "task": "qa"
+    },
+    "vt": {
+      "args": {
+        "num_chains": 1,
+        "num_hops": 4,
+        "type_haystack": "noise"
+      },
+      "task": "variable_tracking"
+    }
+  },
+  "output_reserve": {
+    "cwe": 120,
+    "fwe": 50,
+    "niah_multikey_1": 128,
+    "niah_multikey_2": 128,
+    "niah_multikey_3": 128,
+    "niah_multiquery": 128,
+    "niah_multivalue": 128,
+    "niah_single_1": 128,
+    "niah_single_2": 128,
+    "niah_single_3": 128,
+    "qa_1": 32,
+    "qa_2": 32,
+    "vt": 30
+  },
+  "source_files": {
+    "LICENSE": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
+    "README.md": "f3aae5bbd58fcd7de32aab099c455dd2bbc1da23a2efee9db3071eb9fbf894a3",
+    "docker/requirements.txt": "6c366d2f47a50683e66e3d0b1e17aa9901dc313d5374f17e70909d2b5766d8b5",
+    "scripts/config_models.sh": "f59f5dd0a2e61ba430840f156af534f32a011db640881642d0093a885130cf34",
+    "scripts/config_tasks.sh": "bd2b228b303951ff6e1dba2dd551270744b50d78f5d51493b0c4abfb41a0c544",
+    "scripts/data/manifest_utils.py": "ecac79322f28ce9a12388b12e35d560ecb7cdad6b9888467a5a13b0eff2db91e",
+    "scripts/data/prepare.py": "f2d210860fbf5c640cb41ed104c7a923c9f4043f6e6c354277daacc73afc643d",
+    "scripts/data/synthetic/common_words_extraction.py": "2671d4a84a383acef2d9e8f691a0bea4da03f1632ca3f4ad3c1de6d27ccbc6b9",
+    "scripts/data/synthetic/constants.py": "6296e901d495ec6200dc3f68993ea13d8282e3c0dbe1a8c47967f111105d1fde",
+    "scripts/data/synthetic/freq_words_extraction.py": "29b7af97ffdd2122fde348df20cd02add390a21cd6d64b6fd66c8663dc487f67",
+    "scripts/data/synthetic/json/PaulGrahamEssays.json": "8d31e1b660e0f2180bcca6d238e18f77921df9d158611582b860da1762b6d3dd",
+    "scripts/data/synthetic/json/PaulGrahamEssays_URLs.txt": "9862c06b4303b7bb6fe4c4a88671c51d2d36ec65757db54730c703d9cf474099",
+    "scripts/data/synthetic/json/download_paulgraham_essay.py": "d89622edfe08d4011718bb2634da742d69a56728139fa5e236e00cca703cc84c",
+    "scripts/data/synthetic/json/download_qa_dataset.sh": "368ff4bef09af0fc94205ea4dd8559a2d051c0e33215ca92d45e31e50ea750ac",
+    "scripts/data/synthetic/json/english_words.json": "affcd6d45fdf3cc843d585c99c97ad615094e760e6c4756b654bab6c73bc2eca",
+    "scripts/data/synthetic/json/hotpotqa.json": "e3da074df24e8369009918aa5cdbdd254dadcde4c63f7569d36afd6f2268caa8",
+    "scripts/data/synthetic/json/squad.json": "80a5225e94905956a6446d296ca1093975c4d3b3260f1d6c8f68bc2ab77182d8",
+    "scripts/data/synthetic/niah.py": "e9cada0a7660d274fe73a1338a90a7087e17b630169f1aaf14a8d3221c6805b5",
+    "scripts/data/synthetic/qa.py": "f00c0b59cf8698e90831bbf461c2c4f40f2a30f2469534c27455808c717281d0",
+    "scripts/data/synthetic/variable_tracking.py": "9aac483420e158d116ab63fc43b9606bdb284ac0c053288c30776d5c365530e5",
+    "scripts/data/template.py": "2e82d85152212136fffcd5624b158a2c75fd5036ec1c537f4b21eeb78fd18069",
+    "scripts/data/tokenizer.py": "c2e4bfab607eef87a86334558303c1811bc8e93f22a5c4b129f302726d2357a4",
+    "scripts/eval/evaluate.py": "b9a5fcbded7209663d97670496c74dbcd6358ddbe3d9887a0c5f0c4f974bfe1c",
+    "scripts/eval/synthetic/constants.py": "6740467c17b8dc06b6b30f4f97e54ce8de81db0dd879f1538d0b6b5727f4bd5f",
+    "scripts/pred/call_api.py": "949d06ae8a19266c637064c2dd18c7b3d21a0a7064bfc2ac52fe274b84d19e48",
+    "scripts/pred/client_wrappers.py": "4530a6b53f451d1af8f29f6ee794fca789feffa92b2e838af2c67a4568244b2c",
+    "scripts/pred/model_wrappers.py": "78def2b2b619e2095dee3ff8fc52e038c531c6c3bb11735e9ac4ce38cf2e0cd7",
+    "scripts/pred/serve_trt.py": "4d785ace0cfa9ea320ea351db96dcfc422ed0ad21107ec49086d0131668d529a",
+    "scripts/pred/serve_vllm.py": "57ded4db3e84b5c0f9d5394b45a965ae470282fcbbc4b13674763f4340f9e81a",
+    "scripts/run.sh": "221f90046bc39c24a357c7847ca2203e3fcacd6f8601f62ec8fbf1413006c67f",
+    "scripts/synthetic.yaml": "34bc71dcacdc41a829a170f04b528fbf48d62c616338005ab4991680fbf8cb0b"
+  },
+  "model_fingerprints": {
+    "config.json": "97e295b63283935788fac5e4f8860862a56d4089538cafc93f0431f2ebe483bb",
+    "generation_config.json": "2325da0f15bb848e018c5ae071b7943332e9f871d6b60e2ed22ca97d4cb993d2",
+    "merges.txt": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+    "model.safetensors.index.json": "bed42c6c55274bc08a1f616bceb3bcb84b3f02cb6584c573bd18c6519291ecd0",
+    "tokenizer.json": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+    "tokenizer_config.json": "d5d09f07b48c3086c508b30d1c9114bd1189145b74e982a265350c923acd8101",
+    "vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+  },
+  "versions": {
+    "matplotlib": "3.10.6",
+    "nltk": "3.10.3",
+    "numpy": "2.2.6",
+    "scipy": "1.15.3",
+    "transformers": "4.53.2",
+    "wonderwords": "3.0.1"
+  },
+  "schema": "ruler-corpus-sources-v1",
+  "revision": "c3f5e3b4f87f97e048793bb510a3a6b19a46bf3a"
+}

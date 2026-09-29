@@ -6,6 +6,7 @@ from pathlib import Path
 from ucm.integration.vllm.blend_connector import (UCMBlendConnector,
     UCMBlendConnectorMetadata, BlendRequestDispatchMeta, ChunkMetaData, BlendStage)
 from ucm.sparse.prophetkv.lifecycle import namespace_from_id, seed_value, TrackedStore
+from runner.router_guard import is_dense_request
 
 
 class PersistentBlendConnector(UCMBlendConnector):
@@ -40,6 +41,10 @@ class PersistentBlendConnector(UCMBlendConnector):
 
     def get_num_new_matched_tokens(self, request, num_computed_tokens):
         namespace = namespace_from_id(request.request_id)
+        if is_dense_request(request.request_id):
+            if self.requests_blend_meta:
+                raise RuntimeError('Dense bypass requires retired cache request')
+            return 0, False
         if request.request_id in self.requests_blend_meta:
             # Allocation may have failed after lookup on the previous tick.
             meta = self.requests_blend_meta[request.request_id]
@@ -102,6 +107,8 @@ class PersistentBlendConnector(UCMBlendConnector):
         dispatch = {}
         for request in scheduler_output.scheduled_new_reqs:
             rid = request.req_id
+            if is_dense_request(rid):
+                continue
             meta = self.requests_blend_meta.get(rid)
             if meta is None:
                 raise RuntimeError('Missing external-cache lookup')
@@ -119,6 +126,8 @@ class PersistentBlendConnector(UCMBlendConnector):
         for i, rid in enumerate(cached.req_ids):
             if cached.resumed_from_preemption[i]:
                 raise RuntimeError('ProphetKV preemption is unsupported')
+            if is_dense_request(rid):
+                continue
             # A final one-token prefill is not decode. Keep layout metadata,
             # but never load stale KV or rotate keys again on a continuation.
             if cached.num_computed_tokens[i] < self.prompt_lengths[rid]:
@@ -147,9 +156,23 @@ class PersistentBlendConnector(UCMBlendConnector):
         super().bind_connector_metadata(metadata)
 
     def start_load_kv(self, *args, **kwargs):
+        if getattr(self, 'router_dense_id', None):
+            if self._get_connector_metadata().request_meta:
+                raise RuntimeError('Dense fallback has transfer metadata')
+            return
         super().start_load_kv(*args, **kwargs)
         if self._invalid_block_ids:
             raise RuntimeError('Incomplete external cache load')
+
+    def save_kv_layer(self, *args, **kwargs):
+        if getattr(self, 'router_dense_id', None):
+            return
+        return super().save_kv_layer(*args, **kwargs)
+
+    def wait_for_layer_load(self, name):
+        if getattr(self, 'router_dense_id', None):
+            return
+        return super().wait_for_layer_load(name)
 
     def retire_worker_request(self, request_id):
         if self.worker_request_id == request_id:
@@ -161,7 +184,7 @@ class PersistentBlendConnector(UCMBlendConnector):
                 self.store.writable = False
 
     def request_finished(self, request, block_ids):
-        result = super().request_finished(request, block_ids)
+        result = (False, None) if is_dense_request(request.request_id) else super().request_finished(request, block_ids)
         if result[0]:
             raise RuntimeError('Unexpected deferred request completion')
         self.requests_blend_meta.pop(request.request_id, None)

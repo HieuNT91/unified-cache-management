@@ -20,14 +20,25 @@ class TrackedStore:
         self.store = store
         self.pending = {}
         self.completed = 0
+        self.router_dense = False
+        self.operations = dict(lookup=0,load=0,store=0)
 
     def __getattr__(self, name):
         return getattr(self.store, name)
 
     def _submit(self, operation, *args, **kwargs):
+        if getattr(self, 'router_dense', False):
+            raise RuntimeError('UCM transfer attempted during dense fallback')
+        self.operations['load' if operation == 'load_data' else 'store'] += 1
         task = getattr(self.store, operation)(*args, **kwargs)
         self.pending[id(task)] = task
         return task
+
+    def lookup(self, *args, **kwargs):
+        if getattr(self, 'router_dense', False):
+            raise RuntimeError('UCM lookup attempted during dense fallback')
+        self.operations['lookup'] += 1
+        return self.store.lookup(*args, **kwargs)
 
     def load_data(self, *args, **kwargs):
         return self._submit('load_data', *args, **kwargs)
@@ -72,6 +83,11 @@ def retire(worker):
         connector.req2rag_load_chunks.clear()
         sparse.selection_diagnostics.clear()
         sparse.active = False
+        sparse.router_capture = False
+        sparse.router_arrays = None
+        sparse.router_native_layers = set()
+        connector.router_dense_id = None
+        connector.store.router_dense = False
         sparse.pending_audit = None
         sparse.layer_index = 0
         # Release per-request tensors but retain model, preallocated masks and hooks.

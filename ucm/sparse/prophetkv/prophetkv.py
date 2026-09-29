@@ -34,6 +34,12 @@ class ProphetKV(Blend):
             raise RuntimeError('One request per worker is supported')
         rid,count=next(iter(scheduler_output.num_scheduled_tokens.items()))
         worker_request=requests[rid]
+        from runner.router_guard import is_dense_request
+        if is_dense_request(rid):
+            if (self.request_state.pending is not None or self.prefill_state is not None
+                    or getattr(self.connector, 'router_dense_id', None) != rid):
+                raise RuntimeError('Unarmed or stale dense bypass')
+            return self.blend_req_metas
         start=worker_request.num_computed_tokens
         is_prefill,_=prefill_step(start,count,len(worker_request.prompt_token_ids))
         if not is_prefill:

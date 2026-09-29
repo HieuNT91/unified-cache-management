@@ -21,6 +21,9 @@ class SetupStore(TrackedStore):
                 and path.stat().st_size == self.config['bytes_per_shard'])
 
     def lookup(self, keys):
+        if self.router_dense:
+            raise RuntimeError("Persistent lookup attempted during dense fallback")
+        self.operations["lookup"] += 1
         # Scheduler rank-0 keys are reusable only when EVERY TP shard is committed.
         return [all(self._valid(shard_name(key, self.config['fingerprint'],
                     self.config['tp'], rank, True)) for rank in range(self.config['tp']))

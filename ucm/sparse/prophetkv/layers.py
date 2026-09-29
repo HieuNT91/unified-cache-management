@@ -2,9 +2,9 @@
 
 
 def resolve_layers(method, layers=None, count=None):
-    if method not in ('prophetkv', 'selective_prophetkv'):
+    if method not in ('prophetkv', 'selective_prophetkv', 'router'):
         raise ValueError('Unsupported ProphetKV method')
-    if method == 'prophetkv':
+    if method in ('prophetkv', 'router'):
         if layers is not None or count is not None:
             raise ValueError('Use selective_prophetkv to configure scoring layers')
         return tuple(range(64))

@@ -1,7 +1,15 @@
 # Agent instructions
 
+- This worktree (`.worktrees/prophetkv-clean`) is the current codebase for new
+  implementation, inference, launchers, and deployment. Use code under
+  `.worktrees/` for current work.
+- The parent repository's `benchmarks/` contains old/outdated code, preserved
+  unchanged as reference for old experiments only. Do not import or invoke it
+  for new work or restart its historical schedulers. Leave existing authorized
+  training/export processes untouched; finalized artifacts may be read as data.
+
 - Scope: Qwen3-32B BF16, YaRN 4× (32768 → 131072), TP configurable (default 4).
-- Exactly three public modes: `baseline`, `prophetkv`, `selective_prophetkv`.
+- Four public modes: `baseline`, `prophetkv`, `selective_prophetkv`, `router`.
 - All modes use chunked prefill with at most 16384 scheduled tokens per step.
   Prefix caching stays disabled. Baseline has no UCM connector.
 - Cached requests reserve full original-position prompt KV, load/align once,
@@ -120,3 +128,19 @@
   checkout. Resume can reconstruct a pinned release plus current vendor hashes,
   accepting only an exact original fingerprint match. Never remove vendor hashes
   or rewrite original receipts to force compatibility. Keep those files unchanged.
+
+- Native router workflow: `scripts/A800_ROUTER.md`, `scripts/a800_router.sh`.
+  It supersedes the benchmark deployment adapter for clean inference. Keep active
+  training and its existing exporter untouched; never import benchmark code.
+  `runner.router_export` is a one-shot CPU consumer of finalized training data.
+  Preserve three policies and router1 primary, with no A800 refit/recalibration.
+  Router profile: BF16 TP4, YaRN4 table131072, separate KV65920/1031 blocks,
+  chunk/tile4096, scheduled prefill<=16384, full question suffix>=256, greedy
+  non-thinking256. Each answer has its own all64/1% single-token probe, exported
+  native attention features, retirement, decision and TP barrier. Missing features
+  fall back dense; corrupt data halts. Dense bypass is request-scoped; baseline
+  remains connector-free. Total TTFT includes the full routing interval.
+  Configure/prepare/verify/detach/status and missing-record resume use new paths,
+  two disjoint A800 UUID groups, frozen1300 inputs,9100 answers/3900 probes.
+  CPU suite and full frozen-input reconstruction are required; scheduled remote
+  GPU gates remain unverified until an explicitly requested A800 run.

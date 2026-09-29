@@ -138,11 +138,11 @@ def query_span(content, task):
     return start+1, content[start+1:]
 
 
-def format_sample(tokenizer, row, task, target=INPUT):
+def format_sample(tokenizer, row, task, target=INPUT, thinking=True, output=OUTPUT):
     content = row['input']
     begin, question = query_span(content,task)
     rendered = tokenizer.apply_chat_template([dict(role='user',content=content)],tokenize=False,
-                add_generation_prompt=True,enable_thinking=True)
+                add_generation_prompt=True,enable_thinking=thinking)
     offset = rendered.index(content)
     encoded = tokenizer(rendered,add_special_tokens=False,return_offsets_mapping=True)
     ids, offsets = encoded['input_ids'],encoded['offset_mapping']
@@ -184,11 +184,12 @@ def format_sample(tokenizer, row, task, target=INPUT):
     if tokens[-suffix:] != ids[-suffix:] or [tokens[p] for p in query] != [ids[p] for p in positions]:
         raise RuntimeError('Question or fresh suffix changed')
     sample = dict(token_ids=tokens,boundaries=bounds,question_positions=query,
-        thinking=True,max_output_tokens=OUTPUT,task=task,question=question,
+        thinking=thinking,max_output_tokens=output,task=task,question=question,
         original_chat_tokens=len(ids),source_index=row['index'],source_row_sha256=fingerprint(row),
         padding=dict(kind='newline tokens before user text',token_id=newline[0],count=low,
                      original_insertion_position=insertion),truncated=False,
-        answer_prefix_policy='native thinking template; no forced assistant answer prefix')
+        answer_prefix_policy=('native thinking template; no forced assistant answer prefix' if thinking else
+                              'native non-thinking template; no forced assistant answer prefix'))
     validate_sample(sample,4096,target)
     return sample
 

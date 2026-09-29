@@ -14,7 +14,9 @@ from runner.setups import atomic_json, manifest_entries
 from runner.sweep import configurations
 
 
-def collect(output, manifest, percentages, final=False, shards=2):
+def collect(output, manifest, percentages, final=False, shards=2, same_count=False):
+    if final and same_count:
+        raise ValueError('Matched status is a live snapshot, not a final report')
     from runner.resume import resolve_scope
     report_root, group_root, continuation = resolve_scope(output)
     configs=configurations(percentages, skip_selective=continuation is not None)
@@ -53,8 +55,26 @@ def collect(output, manifest, percentages, final=False, shards=2):
         raise RuntimeError('Reports came from different sweep configurations')
     if continuation and fingerprints and fingerprints != {continuation['fingerprint']}:
         raise RuntimeError('Reports differ from continuation fingerprint')
+    matching = None
+    if same_count:
+        from runner.matched_status import match_records
+        records = {}
+        for config in configs:
+            name = config['name']
+            path = report_root/name/'aggregation_state.json'
+            records[name] = json.loads(path.read_text())['records'] if path.exists() else []
+            # Validate all ledger rows before selecting the shared cohort.
+            aggregate(records[name], expected, {}, 'running')
+        records, matching = match_records(records, expected)
+        for config in configs:
+            name = config['name']
+            reports[name] = aggregate(records[name], expected,
+                dict(method=config['method'],ratio=config['ratio']), 'running')
+        kind = 'same_count'
     completed=sum(r['overall']['completed'] for r in reports.values())
     summary=dict(kind=kind,completed=completed,expected=len(expected)*len(configs),methods=reports)
+    if matching is not None:
+        summary['matching'] = matching
     if continuation:
         summary['discontinued'] = continuation['discontinued']
         summary['continuation_fingerprint'] = continuation['fingerprint']
@@ -62,6 +82,9 @@ def collect(output, manifest, percentages, final=False, shards=2):
     stream=io.StringIO(newline='');writer=csv.writer(stream)
     writer.writerow(['configuration','scope','subtask',*COLUMNS])
     lines=[f'{kind.title()} summary: {completed}/{summary["expected"]} validated measurements', '']
+    if matching is not None:
+        lines += [f'Matched samples per method: {matching["matched_samples"]}. '
+                  'Metrics use the exact prompt IDs shared by all active methods.', '']
     if continuation:
         lines += ['Selective runs discontinued; their existing artifacts remain in the original directories.',
                   'Retained and resumed measurements span different timing sessions.', '']
@@ -98,7 +121,8 @@ def main():
     parser.add_argument('--percentages',type=int,nargs='+',default=[1,5,10,15,20,30,40,60,80])
     parser.add_argument('--shards',type=int,default=2)
     parser.add_argument('--final',action='store_true')
+    parser.add_argument('--same-count',action='store_true')
     args=parser.parse_args()
-    collect(args.output,args.manifest,args.percentages,args.final,args.shards)
+    collect(args.output,args.manifest,args.percentages,args.final,args.shards,args.same_count)
 
 if __name__=='__main__':main()

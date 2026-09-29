@@ -70,7 +70,8 @@ case "${1:-}" in
             --percentages 1 5 10 15 20 30 --shards 2
         ;;
     status) report ;;
+    status_same_count) report --same-count ;;
     aggregate) report --final ;;
     stop) "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_control.py" stop --output "$EXPERIMENT_DIR" ;;
-    *) echo "Usage: bash scripts/a800_longbench.sh {prepare|run|stop|resume|counts|status|aggregate}" >&2; exit 2 ;;
+    *) echo "Usage: bash scripts/a800_longbench.sh {prepare|run|stop|resume|counts|status|status_same_count|aggregate}" >&2; exit 2 ;;
 esac
