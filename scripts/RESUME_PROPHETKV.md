@@ -1,5 +1,10 @@
 # Continue A800 or L20 without selective runs
 
+For A800 with only GPUs 0–3 and without ProphetKV 15%, use
+[single-group continuation](A800_SINGLE_GROUP_RESUME.md). It preserves completed
+results, revises the active total to 3018 and keeps both status commands working.
+That workflow explicitly overrides the default two-group/six-ratio scope below.
+
 **Preferred setup:** use a Git-ignored `.env` on each server. See
 [Server settings and exact fetch/stop/resume commands](SERVER_ENV.md) to avoid
 repeating exports. The export-based instructions below remain supported.

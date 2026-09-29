@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -88,6 +89,49 @@ class ServerEnvTests(unittest.TestCase):
                 args=json.loads(result.stdout)
                 self.assertEqual(args[:2],['-m','runner.resume'])
                 self.assertEqual(args[args.index('--validation')+1],'fast')
+
+    def test_a800_single_group_waits_for_each_shard_and_never_uses_gpu_b(self):
+        executable=self.root/'fake-python'
+        executable.write_text(f'#!{sys.executable}\n'+'''import json,os,sys,time
+from pathlib import Path
+args=sys.argv[1:]
+if args[0]=='-c':
+    os.execv(sys.executable,[sys.executable,*args])
+def event(kind,**data):
+    with open(os.environ['EVENT_LOG'],'a') as out:
+        out.write(json.dumps(dict(kind=kind,devices=os.environ.get('CUDA_VISIBLE_DEVICES'),**data))+'\\n')
+if args[:2]==['-m','runner.resume']:
+    root=Path(args[args.index('--output')+1])
+    devices=args[args.index('--single-group-gpus')+1].split(',')
+    assert args[args.index('--exclude-percentages')+1]=='15'
+    (root/'continuation.json').write_text(json.dumps(dict(execution_mode='sequential',gpu_uuids=[devices,devices])))
+    event('prepare')
+elif args[:2]==['-m','runner.sweep']:
+    shard=int(args[args.index('--shard')+1]);event('start',shard=shard)
+    time.sleep(.1)
+    if os.environ.get('FAIL_SHARD0')=='1' and shard==0:sys.exit(7)
+    event('finish',shard=shard)
+elif args[0].endswith('longbench_v2.py'):
+    event('disk',groups=args[args.index('--groups')+1])
+elif args[0].endswith('sweep_report.py'):
+    event('report',final='--final' in args)
+else:raise AssertionError(args)
+''')
+        executable.chmod(0o755)
+        config=self.root/'server.env';log=self.root/'events'
+        config.write_text(f'PYTHON_BIN="{executable}"\nEXPERIMENT_DIR="{self.root}/out"\n'
+            'RESUME_SINGLE_GROUP=1\nRESUME_EXCLUDE_PERCENTAGES="15"\nGPU_A="surviving-group"\nGPU_B="withdrawn-group"\n')
+        for fail in (False,True):
+            if log.exists():log.unlink()
+            result=subprocess.run(['bash',str(ROOT/'scripts/a800_longbench.sh'),'resume'],cwd='/tmp',
+                env=dict(self.env,UCM_ENV_FILE=str(config),EVENT_LOG=str(log),FAIL_SHARD0=str(int(fail))),capture_output=True,text=True)
+            self.assertEqual(result.returncode,1 if fail else 0,result.stderr)
+            events=[json.loads(line) for line in log.read_text().splitlines()]
+            workers=[(r['kind'],r['shard']) for r in events if 'shard' in r]
+            self.assertEqual(workers,[('start',0)] if fail else [('start',0),('finish',0),('start',1),('finish',1)])
+            self.assertTrue(all(r['devices']=='surviving-group' if 'shard' in r else r['devices']=='' for r in events))
+            self.assertEqual(next(r['groups'] for r in events if r['kind']=='disk'),'1')
+            self.assertEqual(events[-1]['final'],not fail)
 
 
 if __name__=='__main__':unittest.main()

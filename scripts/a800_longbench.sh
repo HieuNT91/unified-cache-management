@@ -39,29 +39,57 @@ case "${1:-}" in
         # Refuse partial/completed sweeps before acquiring GPUs.
         cd "$CODE_ROOT"
         resume_flags=()
+        resume_device_group=""
         if [[ "$1" == resume ]]; then
+            prepare_flags=()
+            if [[ -n "${RESUME_EXCLUDE_PERCENTAGES:-}" ]]; then
+                read -r -a excluded_percentages <<< "$RESUME_EXCLUDE_PERCENTAGES"
+                prepare_flags+=(--exclude-percentages "${excluded_percentages[@]}")
+            fi
+            case "${RESUME_SINGLE_GROUP:-0}" in
+                1) prepare_flags+=(--single-group-gpus "$GPU_A") ;;
+                0) ;;
+                *) echo 'RESUME_SINGLE_GROUP must be 0 or 1.' >&2; exit 2 ;;
+            esac
             CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" -m runner.resume \
                 --model "$MODEL_PATH" --manifest "$PREPARED_DIR/manifest.jsonl" \
                 --output "$EXPERIMENT_DIR" --cache-root "$CACHE_ROOT" --tp 4 --shards 2 \
-                --validation "${RESUME_VALIDATION:-full}"
+                --validation "${RESUME_VALIDATION:-full}" "${prepare_flags[@]}"
             resume_flags=(--resume --skip-selective)
+            resume_device_group="$(CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" -c \
+                'import json,sys; s=json.load(open(sys.argv[1])); print(",".join(s["gpu_uuids"][0]) if s.get("execution_mode")=="sequential" else "")' \
+                "$EXPERIMENT_DIR/continuation.json")"
         else
+            [[ "${RESUME_SINGLE_GROUP:-0}" == 0 && -z "${RESUME_EXCLUDE_PERCENTAGES:-}" ]] || {
+                echo 'Scope/device changes apply to resume, not a new run.' >&2; exit 2;
+            }
             for name in group-0 group-1 baseline prophetkv-{1,5,10,15,20,30} selective-{1,5,10,15,20,30}; do
                 [[ ! -e "$EXPERIMENT_DIR/$name" ]] || { echo "Existing result: $name; use a new EXPERIMENT_DIR." >&2; exit 1; }
             done
             prepare
         fi
+        physical_groups=2
+        [[ -z "$resume_device_group" ]] || physical_groups=1
         CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/longbench_v2.py" disk \
-            --prepared "$PREPARED_DIR" --cache-root "$CACHE_ROOT" --groups 2
+            --prepared "$PREPARED_DIR" --cache-root "$CACHE_ROOT" --groups "$physical_groups"
         log_suffix=""
         [[ "$1" != resume ]] || log_suffix="-resume-$(date +%Y%m%d-%H%M%S)"
-        worker 0 "$GPU_A" "${resume_flags[@]}" >"$EXPERIMENT_DIR/group-a${log_suffix}.log" 2>&1 & pid_a=$!
-        worker 1 "$GPU_B" "${resume_flags[@]}" >"$EXPERIMENT_DIR/group-b${log_suffix}.log" 2>&1 & pid_b=$!
-        echo "Group A PID=$pid_a; Group B PID=$pid_b"
-        status_a=0; status_b=0
-        wait "$pid_a" || status_a=$?
-        wait "$pid_b" || status_b=$?
-        [[ "$status_a" == 0 && "$status_b" == 0 ]] || { echo "Sweep failed: A=$status_a B=$status_b" >&2; exit 1; }
+        if [[ -n "$resume_device_group" ]]; then
+            for shard in 0 1; do
+                worker "$shard" "$resume_device_group" "${resume_flags[@]}" \
+                    >"$EXPERIMENT_DIR/group-${shard}${log_suffix}.log" 2>&1 & pid=$!
+                echo "Sequential group $shard PID=$pid; devices=$resume_device_group"
+                wait "$pid" || { report; echo "Group $shard failed; validated records retained." >&2; exit 1; }
+            done
+        else
+            worker 0 "$GPU_A" "${resume_flags[@]}" >"$EXPERIMENT_DIR/group-a${log_suffix}.log" 2>&1 & pid_a=$!
+            worker 1 "$GPU_B" "${resume_flags[@]}" >"$EXPERIMENT_DIR/group-b${log_suffix}.log" 2>&1 & pid_b=$!
+            echo "Group A PID=$pid_a; Group B PID=$pid_b"
+            status_a=0; status_b=0
+            wait "$pid_a" || status_a=$?
+            wait "$pid_b" || status_b=$?
+            [[ "$status_a" == 0 && "$status_b" == 0 ]] || { echo "Sweep failed: A=$status_a B=$status_b" >&2; exit 1; }
+        fi
         report --final
         ;;
     counts)

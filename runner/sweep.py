@@ -292,6 +292,19 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
 
 
 def run_sweep(args):
+    if getattr(args, 'resume', False):
+        from runner.resume import resolve_scope
+        _, attempt, scope = resolve_scope(args.output)
+        if scope and scope.get('execution_mode') == 'sequential':
+            # Both logical shards share one physical TP group. Also protect direct
+            # worker invocations, not only the launcher's sequential wait.
+            with (attempt/'single-group.lock').open('a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return _run_sweep(args)
+    return _run_sweep(args)
+
+
+def _run_sweep(args):
     if args.shards < 1 or not 0 <= args.shard < args.shards:
         raise ValueError('Invalid prompt shard')
     args.model, args.output = args.model.resolve(), args.output.resolve()

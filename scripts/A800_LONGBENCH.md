@@ -246,3 +246,5 @@ supports `stop`, `resume`, `status`, and `aggregate`; do not delete result direc
 
 For metrics over the same accepted prompts across methods, use
 `status_same_count`; see [matched status](STATUS_SAME_COUNT.md).
+
+If GPUs 4–7 are withdrawn, see [resume on GPUs 0–3 without ProphetKV 15%](A800_SINGLE_GROUP_RESUME.md).

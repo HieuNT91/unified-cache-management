@@ -113,6 +113,78 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(again['pending']['prophetkv-5'],[1,3])
         self.assertEqual(again['fingerprint'],scope['fingerprint'])
 
+    def test_drop_ratio_migrate_both_shards_and_resume_mixed_device_results(self):
+        from scripts.sweep_counts import saved_counts
+        old=resume.prepare(self.args)
+        devices=['GPU-00000000-0000-0000-0000-000000000001',
+                 'GPU-00000000-0000-0000-0000-000000000002']
+        self.args.exclude_percentages=[5]
+        self.args.single_group_gpus=','.join(devices)
+        scope=resume.prepare(self.args)
+        self.assertEqual(scope['gpu_uuids'],[devices,devices])
+        self.assertEqual(scope['execution_mode'],'sequential')
+        self.assertEqual(scope['pending'],{'baseline':[],'prophetkv-1':[1,3]})
+        self.assertEqual(scope['expected'],8)
+        self.assertIn('prophetkv-5',scope['discontinued'])
+        self.assertIn(old['fingerprint'],scope['cohort_gpu_uuids'])
+        for name,digest in self.original.items():self.assertEqual(file_hash(self.output/name),digest)
+        live=collect(self.output,self.manifest,[1,5])
+        matched=collect(self.output,self.manifest,[1,5],same_count=True)
+        self.assertEqual((live['completed'],live['expected']),(6,8))
+        self.assertEqual(matched['matching']['prompt_ids'],['0','2'])
+        self.assertEqual(set(live['methods']),{'baseline','prophetkv-1'})
+        counts=saved_counts(self.output,self.manifest,[1,5])
+        self.assertEqual((counts['saved'],counts['expected']),(6,8))
+        self.assertEqual(counts['methods']['prophetkv-5'],1)
+        # Finish a missing odd-shard result on the surviving (formerly other) group.
+        self.write_record(1,self.configs[1],scope['fingerprint'])
+        path=self.output/'prophetkv-1/000001/result.json'
+        value=json.loads(path.read_text());value['gpu_uuids']=devices;atomic_json(path,value)
+        self.args.exclude_percentages=None;self.args.single_group_gpus=None
+        again=resume.prepare(self.args)
+        self.assertEqual(again['pending']['prophetkv-1'],[3])
+        self.assertEqual(again['excluded_percentages'],[5])
+        self.assertEqual(again['execution_mode'],'sequential')
+        self.write_record(3,self.configs[1],again['fingerprint'])
+        path=self.output/'prophetkv-1/000003/result.json'
+        value=json.loads(path.read_text());value['gpu_uuids']=devices;atomic_json(path,value)
+        finished=resume.prepare(self.args)
+        for shard in (0,1):
+            self.args.shard=shard
+            with patch.dict(os.environ,{'CUDA_VISIBLE_DEVICES':','.join(devices)}), \
+                    patch.object(sweep,'check_environment',return_value=devices), \
+                    patch.object(sweep,'start_engine',side_effect=AssertionError('Completed results rerun')):
+                sweep.run_sweep(self.args)
+            if shard==0:
+                with self.assertRaises(FileNotFoundError):collect(self.output,self.manifest,[1,5],True)
+        final=collect(self.output,self.manifest,[1,5],True)
+        self.assertEqual((final['completed'],final['expected']),(8,8))
+        self.assertEqual(collect(self.output,self.manifest,[1,5],same_count=True)['completed'],8)
+        for name,digest in self.original.items():self.assertEqual(file_hash(self.output/name),digest)
+
+    def test_single_group_lock_and_explicit_device_validation(self):
+        import fcntl
+        for bad in ('0,1','GPU-short,GPU-short'):
+            self.args.single_group_gpus=bad
+            with self.assertRaisesRegex(ValueError,'full GPU UUIDs'):resume.prepare(self.args)
+            self.assertFalse((self.output/'continuation.json').exists())
+        self.args.single_group_gpus='GPU-00000000-0000-0000-0000-000000000001,GPU-00000000-0000-0000-0000-000000000002'
+        scope=resume.prepare(self.args)
+        with (self.output/scope['attempt']/'single-group.lock').open('a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            with self.assertRaises(BlockingIOError):sweep.run_sweep(self.args)
+        self.args.shard=1
+        with patch.dict(os.environ,{'CUDA_VISIBLE_DEVICES':'GPU-1a,GPU-1b'}):
+            with self.assertRaisesRegex(RuntimeError,'GPU UUIDs'):
+                resume.attach(self.args,scope['current_identity'])
+
+    def test_reject_unknown_or_all_excluded_ratios_before_mutation(self):
+        for excluded in ([20],[1,5]):
+            self.args.exclude_percentages=excluded
+            with self.assertRaisesRegex(ValueError,'Exclude only original ratios'):resume.prepare(self.args)
+            self.assertFalse((self.output/'continuation.json').exists())
+        for name,digest in self.original.items():self.assertEqual(file_hash(self.output/name),digest)
+
     def test_changes_or_unretired_results_rejected_before_mutation(self):
         cases = [('input_sha256','wrong'),('ratio',.4),('gpu_uuids',['GPU-other']),
                  ('retirement',[dict(rank=0,quiescent=False)])]

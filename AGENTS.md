@@ -107,6 +107,15 @@
   `continuation.json`. Final scope is3521 A800/8000 L20, selective discontinued.
   CPU-only recovery/locking/stop tests passed; remote GPU continuation is pending.
 
+- A800 LongBench can explicitly resume on one surviving TP4 group with
+  `RESUME_SINGLE_GROUP=1`, full UUIDs in `GPU_A`, and
+  `RESUME_EXCLUDE_PERCENTAGES="15"`. See `scripts/A800_SINGLE_GROUP_RESUME.md`.
+  Keep both original logical shards; execute them sequentially on GPU_A and never
+  use GPU_B in this mode. Preserve old results and their original device provenance.
+  Active scope is baseline plus vanilla1/5/10/20/30%, 3018 total; retained15% and
+  selective results are excluded from both ordinary and matched status. Resume
+  inherits saved exclusions/device assignments. No local GPU or remote launch.
+
 - Server-local launcher settings live in Git-ignored `.env`; `.env.example` is
   tracked. `scripts/server_env.sh` loads one trusted Bash assignment per line,
   preserving existing environment values before expanding later assignments.

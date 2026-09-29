@@ -17,11 +17,9 @@ from runner.sweep import configurations
 def collect(output, manifest, percentages, final=False, shards=2, same_count=False):
     if final and same_count:
         raise ValueError('Matched status is a live snapshot, not a final report')
-    from runner.resume import resolve_scope
+    from runner.resume import resolve_scope, active_configurations
     report_root, group_root, continuation = resolve_scope(output)
-    configs=configurations(percentages, skip_selective=continuation is not None)
-    if continuation and configs != continuation['configurations']:
-        raise RuntimeError('Summary ratios differ from continuation')
+    configs=active_configurations(percentages, scope=continuation) if continuation else configurations(percentages)
     rows=manifest_entries(manifest)
     expected=[dict(prompt_id=r['id'],subtask=r['subtask']) for r in rows]
     kind='final' if final else 'live'
@@ -79,6 +77,8 @@ def collect(output, manifest, percentages, final=False, shards=2, same_count=Fal
         summary['discontinued'] = continuation['discontinued']
         summary['continuation_fingerprint'] = continuation['fingerprint']
         summary['resume_validation'] = continuation.get('validation', {'mode':'full'})
+        summary['execution_mode'] = continuation.get('execution_mode', 'parallel')
+        summary['gpu_uuids'] = continuation.get('gpu_uuids')
     stream=io.StringIO(newline='');writer=csv.writer(stream)
     writer.writerow(['configuration','scope','subtask',*COLUMNS])
     lines=[f'{kind.title()} summary: {completed}/{summary["expected"]} validated measurements', '']
@@ -86,8 +86,8 @@ def collect(output, manifest, percentages, final=False, shards=2, same_count=Fal
         lines += [f'Matched samples per method: {matching["matched_samples"]}. '
                   'Metrics use the exact prompt IDs shared by all active methods.', '']
     if continuation:
-        lines += ['Selective runs discontinued; their existing artifacts remain in the original directories.',
-                  'Retained and resumed measurements span different timing sessions.', '']
+        lines += ['Discontinued: '+', '.join(continuation['discontinued'])+'. Existing artifacts remain in the original directories.',
+                  'Retained and resumed measurements span different timing sessions and may use different GPU groups.', '']
         if continuation.get('validation', {}).get('mode') == 'fast':
             lines += ['Fast resume trusted prior diagnostic validation; saved diagnostics were not replayed or rehashed.',
                       'New measurements receive full validation.', '']
