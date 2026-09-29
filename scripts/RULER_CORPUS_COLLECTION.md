@@ -117,7 +117,35 @@ Per-group temporary context KV is at most about 15.6 GiB; allow double payload
 for writes plus 16 GiB scratch across groups. KV is deleted after each prompt;
 attention archives and measurement receipts remain reusable CPU data.
 
-`status` reads counters and process identity. `report` is available after engine
+`status` refreshes `live_summary.md`, `live_summary.csv`, and `live_summary.json`
+in `EXPERIMENT_DIR` and prints overall metrics and supervisor identity. Tables
+include each action and task: accepted/expected answers, accuracy, answer-engine
+TTFT, thinking/answer token counts. Independent probes have a separate counter.
+For 120/task the scheduled totals are 6,240 answers and 1,560 probes, although the
+frozen full inventory remains 200/task. Reports refresh on status invocation.
+`status_same_count` writes `same_count_summary.md/.csv/.json` using the exact prompt
+ID intersection across actions; ordinary live rows may cover different prompts.
+Status checks accepted result hashes and protocol identity without loading token
+files, replaying diagnostics/attention, or invoking model/GPU verification.
+
+Do **not** update the code checkout used by an active corpus run: its code hashes
+are frozen. To add live reporting to an older running deployment, publish/fetch
+the updated code into a **separate reporting checkout**, then run its CPU reporter
+against the existing results (it does not load `.env`; pass paths explicitly):
+
+```bash
+CUDA_VISIBLE_DEVICES='' /data/jh/envs/ucm/bin/python \
+  /path/to/reporting-checkout/scripts/corpus_status.py \
+  --root /data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20
+```
+
+Add `--same-count` for matched coverage or `--prepared /relocated/inputs` to
+override the saved manifest location. This reader can run while collection
+continues; it only writes report files and its own report lock. Saved results,
+protocol, cache and active processes remain untouched. Live status never
+certifies final completion.
+
+`report` is available after engine
 exit. `report.json/.txt/.html` label smaller tranches `partial-complete`; only the
 entire inventory plus owned-engine exit produces `final-validation.json`.
 Per-method paired accuracy and TTFT summaries cover only accepted data. Each

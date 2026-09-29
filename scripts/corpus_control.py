@@ -421,15 +421,9 @@ def main():
             atomic_json(path,s)
         result=dict(relocated=True,verify_required=True)
     else:
-        result={}
-        for name in ('supervisor','report','tranche','progress-group0','progress-group1'):
-            path=a.root/(name+'.json')
-            if path.exists():result[name]=json.loads(path.read_text())
-        result['accepted']={p.name:len(list(p.glob('*/validated.json'))) for p in (a.root/'records').glob('*') if p.is_dir()}
-        if 'supervisor' in result:result['supervisor']['alive']=alive(result['supervisor'])
-        if a.command=='status_same_count':
-            result['report']=snapshot_report(a.root,same_count=True)
-            result['available_accepted']=result['accepted']
-            result['accepted']=result['report']['accepted_answers']
+        from scripts.corpus_status import write_summary
+        if a.command=='status_same_count':snapshot_report(a.root,same_count=True)
+        write_summary(a.root,same_count=a.command=='status_same_count')
+        return
     print(json.dumps(result,indent=2))
 if __name__=='__main__':main()

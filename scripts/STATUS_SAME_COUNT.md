@@ -33,10 +33,14 @@ Outputs are separate from ordinary live/final reports:
 |---|---|
 | `a800_longbench.sh`, `l20_ruler.sh` | `same_count_summary.md`, `.csv`, `.json` |
 | `a800_router.sh` | `status_same_count.json` and printed JSON |
-| `ruler_corpus.sh`, `router_infer.sh` | `report_same_count.json`, `.txt`, `.html`, `.csv` and printed JSON |
+| `ruler_corpus.sh`, `router_infer.sh` | `same_count_summary.md`, `.csv`, `.json`; paired details in `report_same_count.json`, `.txt`, `.html`, `.csv` |
 
 These are CPU status snapshots. They use accepted sweep ledgers or committed
 router/corpus result files with checked result/protocol hashes. They do not replay
 saved attention diagnostics, load models, start inference, refit trees, or publish
-completion receipts. Existing `status` behavior is unchanged. `server_env.sh` is a
+completion receipts. Corpus/inference `status` now refreshes `live_summary.md`,
+`.csv`, and `.json` and prints a compact summary. See the
+[collection guide](RULER_CORPUS_COLLECTION.md) for running the standalone CPU
+reporter from another checkout without changing a running experiment's code.
+`server_env.sh` is a
 sourced environment helper, not a launcher.
