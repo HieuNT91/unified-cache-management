@@ -34,6 +34,45 @@ equal scores by ascending original position, and return sorted positions.
 
 ## Frozen total-N split and training
 
+`ruler_corpus.sh train` automatically joins a completed
+`extensions/add5-10/` collection when present. Its action inventory becomes
+`nocache`, `prophetkv-1`, `prophetkv-5`, `prophetkv-10`, `prophetkv-20`,
+`prophetkv-40` for the default base run. Training requires the extension's final
+`complete.json` and engine exit; an unfinished extension raises an error rather
+than silently training the original four actions. Original records retain their
+original protocol, added records retain their extension protocol, and all source
+files stay unchanged. Saved features are checked against original attention
+replay and cached in memory during training. No new GPU inference is needed.
+
+Run the updated commands from a **separate checkout**, with `UCM_ENV_FILE` pointing
+to the original collection's `.env`. Keep its collection checkout unchanged so
+the follow-up can freeze the original runtime. Offline commands inherit the saved
+prepared path when `PREPARED_DIR`/`--prepared` is absent. An extension requires its
+original pinned prepared directory.
+
+For the completed 120/task L20 collection, this example uses 80/task for training
+and 40/task for held-out evaluation (1,040 + 520 = 1,560 prompts):
+
+```bash
+scripts/ruler_corpus.sh train \
+  --root /data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20 \
+  --train-samples 1040 --trainer ruler13-v1 --seed 42 --policy-count 3 \
+  --output /data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-router-six-actions-l20
+```
+
+Choose a new output directory for each training run. The split, five features,
+216-setting search, and conservative probe-inclusive latency accounting below
+are unchanged. Original and added fixed-action timings come from different
+measurement sessions; training reports disclose this. The 80/40 split is an
+example, not a new default for `--train-samples`.
+
+`snapshot`, `replay`, and offline `test` also use the combined reader. Existing
+four-action trees still select the original corpus when their original protocol
+matches. Collections without the extension retain their existing behavior.
+For Python callers, use `runner.corpus_training_data.open_corpus(root)` for the
+combined view; `train(Corpus(root), ...)` upgrades to that view automatically.
+The raw `Corpus` reader itself continues to describe the original collection.
+
 ```bash
 scripts/ruler_corpus.sh train --train-samples 390 --trainer ruler13-v1 \
   --seed 42 --output /data/training/ruler13-v1-run1

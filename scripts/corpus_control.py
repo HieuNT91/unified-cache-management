@@ -89,9 +89,9 @@ def configure(a):
         tree=load(a.tree);settings.update(actions=tree['actions'],tree_sha256=file_hash(a.tree),tree=str(a.tree))
         if a.dataset=='ruler':
             if not a.corpus:raise ValueError('RULER tree inference requires --corpus for frozen held-out inputs')
-            from runner.corpus import Corpus
+            from runner.corpus_training_data import open_corpus
             from runner.corpus_eval import evaluation_ids
-            corpus=Corpus(a.corpus,a.prepared)
+            corpus=open_corpus(a.corpus,a.prepared,tree=tree)
             settings['selected_ids']=evaluation_ids(corpus,tree)
             settings['heldout_inputs']={pid:corpus.rows[pid]['sha256'] for pid in settings['selected_ids']}
         else:settings['selected_ids']=None
@@ -372,8 +372,9 @@ def main():
         if a.limit_per_task is None:a.limit_per_task=200
         result=configure(a)
     elif a.command in ('train','replay','test','snapshot'):
-        from runner.corpus import Corpus
-        corpus=Corpus(a.root,a.prepared)
+        from runner.corpus_training_data import open_corpus
+        requested_tree=load(a.tree) if a.command in ('test','snapshot') and a.tree else None
+        corpus=open_corpus(a.root,a.prepared,tree=requested_tree)
         if corpus.protocol['kind']!='collection' or corpus.protocol['dataset']!='ruler':raise ValueError('Training/offline replay only accepts RULER corpus collections')
         if a.command=='train':
             from runner.corpus_train import train

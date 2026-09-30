@@ -163,6 +163,8 @@ def _compiled_leaves(tree):
 
 
 def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3):
+    from runner.corpus_training_data import training_view
+    corpus=training_view(corpus)
     if corpus.protocol.get('dataset')!='ruler' or corpus.protocol.get('kind')!='collection':raise ValueError('Only RULER corpus collections may train routers')
     if trainer!='ruler13-v1':raise ValueError('Unknown trainer version')
     if type(policy_count) is not int or not 1<=policy_count<=len(GRID):raise ValueError('Invalid policy count')
@@ -213,6 +215,9 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3):
         timing='Estimated probe-inclusive OOF TTFT; not live router latency',
         policies=[dict(id=t['id'],feasible=t['oof']['feasible'],oof_macro_loss=t['oof']['macro_loss'],
             oof_speedup=t['oof']['speedup'],leaves=_compiled_leaves(t['tree']),duplicate_of=t['duplicate_of']) for t in trees])
+    if snapshot.get('source')=='completed-add5-10-extension':
+        summary['data_source']=snapshot['source']
+        summary['timing']+='; original and added fixed actions were measured in different sessions'
     atomic_json(output/'summary.json',summary)
     import json
     (output/'summary.txt').write_text(json.dumps(summary,indent=2)+'\n')

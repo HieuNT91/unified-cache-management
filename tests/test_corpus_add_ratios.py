@@ -52,7 +52,7 @@ def result(row, case, protocol, initialization, digest):
 
 
 class AddRatiosTests(unittest.TestCase):
-    def fixture(self, root, groups=1):
+    def fixture(self, root, groups=1, tasks=('task',)):
         prepared = root/'prepared'
         state = root/extension.STATE
         runtime = state/'frozen-code'
@@ -72,14 +72,15 @@ class AddRatiosTests(unittest.TestCase):
         atomic_json(root/'cleanup.json', dict(complete=True, owned_engines_exited=True))
         atomic_json(root/'initialization.json', dict(validated=True, engine_config={}))
         rows = []
-        for ordinal in range(3):  # A prepared third row must NEVER enter the two-row tranche.
-            pid = f'task-{ordinal:03d}'
+        for ordinal, task in ((i, task) for i in range(3) for task in tasks):
+            # A prepared third row/task must NEVER enter the two-row tranche.
+            pid = f'{task}-{ordinal:03d}'
             sample = dict(tiny_sample(), thinking=False, max_output_tokens=256)
             path = prepared/f'{pid}.json'
             atomic_json(path, sample)
             raw = prepared/f'{pid}-raw.json'
             atomic_json(raw, dict(source=pid))
-            row = dict(id=pid, ordinal=ordinal, subtask='task', prepared=path.name, sha256=file_hash(path),
+            row = dict(id=pid, ordinal=ordinal, subtask=task, prepared=path.name, sha256=file_hash(path),
                        raw=raw.name, raw_sha256=file_hash(raw), references=['answer'], scoring='ruler_all')
             atomic_json(prepared/'generation'/pid/'receipt.json', dict(row=row))
             rows.append(row)
@@ -91,13 +92,19 @@ class AddRatiosTests(unittest.TestCase):
                     folder = record_dir(root, case, pid)
                     folder.mkdir(parents=True)
                     record.update(archives(folder), internal_tokens=1)
+                    from runner.router_policy import features_from_arrays
+                    prefix, end = sample['boundaries'][1], sample['boundaries'][-2]
+                    record['features'] = features_from_arrays(np.full((64, end), 1/end, np.float64),
+                                                              np.full(end-prefix, 1/end, np.float32), prefix, end)
+                    record['timings']['routing_overhead_seconds'] = .01
                     ratio = .01
                 else:
                     ratio = next(a['ratio'] for a in DEFAULT_ACTIONS if a['id'] == case)
                 publish(root, case, row, protocol, record, diagnostics(sample, ratio))
-        atomic_json(root/'partial-2-validation.json', dict(status='partial-complete', tranche_complete=True,
-            scheduled_samples=2, accepted_answers={a['id']: 2 for a in DEFAULT_ACTIONS}, accepted_probes=2, answers=8))
-        with patch('scripts.corpus_inputs.prepared_rows', return_value=rows), patch('scripts.corpus_inputs.TASKS', ('task',)), \
+        n = 2*len(tasks)
+        atomic_json(root/f'partial-{n}-validation.json', dict(status='partial-complete', tranche_complete=True,
+            scheduled_samples=n, accepted_answers={a['id']: n for a in DEFAULT_ACTIONS}, accepted_probes=n, answers=4*n))
+        with patch('scripts.corpus_inputs.prepared_rows', return_value=rows), patch('scripts.corpus_inputs.TASKS', tasks), \
                 patch('runner.tree_profiles.validate'), patch.object(extension, 'environment_check'):
             corpus = extension.prepare(root, runtime)
         return corpus, rows

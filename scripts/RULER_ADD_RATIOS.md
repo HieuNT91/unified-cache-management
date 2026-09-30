@@ -130,3 +130,21 @@ and owned engine exit to validate.
 
 Verify each group's startup receipt once, then request status as needed. These
 commands have CPU coverage; real L20 GPU execution remains a server-side check.
+
+## Train a router after completion
+
+From the updated follow-up checkout, with the original `.env` selected and
+`EXPERIMENT_DIR` pointing at the base output directory, run:
+
+```bash
+scripts/ruler_corpus.sh train --train-samples 1040 --seed 42 --policy-count 3 \
+  --output "$EXPERIMENT_DIR/router-training-six-actions"
+```
+
+The standard trainer now automatically joins the completed extension and uses
+all six actions. For 120/task, the example above fits on 80/task and evaluates
+on the remaining 40/task. It refuses incomplete extensions and existing training
+output directories. Training, exported trees, and offline held-out evaluation
+reuse the saved inputs/probes/answers and require no additional GPU inference.
+The original protocols and frozen follow-up runtime remain unchanged. See the
+[training guide](RULER_CORPUS_TRAINING.md) for the split and latency definitions.
