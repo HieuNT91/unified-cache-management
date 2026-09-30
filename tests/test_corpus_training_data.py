@@ -171,6 +171,72 @@ class ExtensionTrainingTests(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertEqual(extension.read(root/'cli-heldout/report.json')['overall']['actions'], {'prophetkv-10': 13})
 
+    def test_both_action_scopes_fit_and_evaluate_exactly_all_samples(self):
+        from runner.corpus_eval import test_tree
+        from scripts import corpus_control
+        with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()):
+            root = Path(td)
+            collection, rows = self.completed(root/'corpus', tasks=TASKS)
+            pins = {p: file_hash(p) for p in collection.root.rglob('*') if p.is_file()}
+            cohorts = []
+            for scope, count in (('original', 4), ('all', 6)):
+                output = root/scope
+                argv = ['corpus_control.py', 'train', '--root', str(collection.root),
+                        '--output', str(output), '--action-scope', scope,
+                        '--evaluation', 'training', '--policy-count', '1']
+                with patch('scripts.corpus_inputs.prepared_rows', return_value=rows), patch.object(sys, 'argv', argv):
+                    corpus_control.main()
+                    corpus = open_corpus(collection.root, action_scope=scope)
+                summary = extension.read(output/'summary.json')
+                self.assertEqual(summary['training_samples'], 26)
+                self.assertEqual(summary['evaluation_samples'], 26)
+                self.assertEqual(summary['heldout_samples'], 0)
+                self.assertTrue(summary['training_overlap'])
+                self.assertEqual(len(summary['actions']), count)
+                membership = extension.read(output/'split.json')
+                self.assertEqual(membership['train_ids'], membership['evaluation_ids'])
+                self.assertEqual(membership['heldout_ids'], [])
+                cohorts.append(set(membership['train_ids']))
+                tree = load(output/'router1.json')
+                self.assertEqual(tree['training_ids'], membership['evaluation_ids'])
+                report = extension.read(output/'router1-training/report.json')
+                self.assertEqual(report['overall']['samples'], 26)
+                self.assertTrue(report['metadata']['training_overlap'])
+                self.assertFalse(report['metadata']['frozen_heldout'])
+                self.assertEqual(summary['policies'][0]['accuracy_percent'], 100*report['macro_accuracy'])
+                if scope == 'all':
+                    self.assertEqual(report['overall']['actions'], {'prophetkv-10': 26})
+                    self.assertAlmostEqual(summary['policies'][0]['estimated_router_ttft_seconds'], .21)
+                    self.assertAlmostEqual(summary['policies'][0]['estimated_speedup'], 2/.21)
+                with self.assertRaisesRegex(ValueError, 'held-out artifact'):
+                    test_tree(corpus, tree, root/(scope+'-heldout'))
+                repeated = test_tree(corpus, tree, root/(scope+'-repeat'), evaluation='training')
+                self.assertEqual(repeated['overall'], report['overall'])
+                with self.assertRaisesRegex(ValueError, 'exact original training set'):
+                    test_tree(corpus, tree, root/'invalid', snapshot=corpus.snapshot(), evaluation='training')
+                with self.assertRaisesRegex(ValueError, 'all complete samples'):
+                    train(corpus, 13, root/'partial', action_scope=scope, evaluation='training')
+            self.assertEqual(cohorts[0], cohorts[1])
+            self.assertEqual(pins, {p: file_hash(p) for p in pins})
+            receipt = collection.root/'records/prophetkv-10'/next(iter(cohorts[1]))/'validated.json'
+            receipt.write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'evaluation evidence changed'):
+                test_tree(corpus, tree, root/'corrupt', evaluation='training')
+
+    def test_original_training_ignores_unfinished_extension(self):
+        with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()):
+            root = Path(td)
+            collection, rows = fixtures.AddRatiosTests().fixture(root/'corpus', tasks=TASKS)
+            with patch('scripts.corpus_inputs.prepared_rows', return_value=rows):
+                original = open_corpus(collection.root, action_scope='original')
+            self.assertNotIsInstance(original, ExtendedCorpus)
+            self.assertFalse((collection.state/'complete.json').exists())
+            summary = train(original, None, root/'original', action_scope='original', evaluation='training', policy_count=1)
+            self.assertEqual(summary['training_samples'], 26)
+            self.assertEqual(len(summary['actions']), 4)
+            with self.assertRaisesRegex(ValueError, 'extension is incomplete'):
+                train(original, None, root/'all', action_scope='all', evaluation='training')
+
 
 if __name__ == '__main__':
     unittest.main()

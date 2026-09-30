@@ -162,13 +162,28 @@ def _compiled_leaves(tree):
     return 1 if 'action' in tree else _compiled_leaves(tree['le'])+_compiled_leaves(tree['gt'])
 
 
-def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3):
+def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
+          action_scope='all',evaluation='heldout'):
     from runner.corpus_training_data import training_view
-    corpus=training_view(corpus)
+    corpus=training_view(corpus,action_scope)
     if corpus.protocol.get('dataset')!='ruler' or corpus.protocol.get('kind')!='collection':raise ValueError('Only RULER corpus collections may train routers')
     if trainer!='ruler13-v1':raise ValueError('Unknown trainer version')
     if type(policy_count) is not int or not 1<=policy_count<=len(GRID):raise ValueError('Invalid policy count')
-    snapshot=corpus.snapshot();membership=split(snapshot['samples'],n,seed)
+    if evaluation not in ('heldout','training'):raise ValueError('Unknown evaluation mode')
+    snapshot=corpus.snapshot()
+    if evaluation=='training':
+        total=len(snapshot['samples'])
+        if n is not None and n!=total:
+            raise ValueError('Training-set evaluation uses all complete samples; omit --train-samples or give their exact count')
+        n=total
+        ids=[r['id'] for r in snapshot['samples']]
+        if not ids or len(set(ids))!=len(ids):raise ValueError('Empty or duplicate training cohort')
+        membership=dict(train_ids=ids,heldout_ids=[],evaluation_ids=list(ids),evaluation=evaluation,
+            training_overlap=True,seed=seed,requested_train_samples=n,
+            allocation=dict(Counter(r['task'] for r in snapshot['samples'])))
+    else:
+        membership=split(snapshot['samples'],n,seed)
+        membership.update(evaluation_ids=membership['heldout_ids'],evaluation=evaluation,training_overlap=False)
     output=Path(output);output.mkdir(parents=True,exist_ok=False)
     atomic_json(output/'snapshot.json',snapshot);atomic_json(output/'split.json',membership)
     by_id={r['id']:r for r in snapshot['samples']};samples=[by_id[i] for i in membership['train_ids']]
@@ -182,6 +197,7 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3):
     atomic_json(output/'matrices.json',dict(ids=membership['train_ids'],features=features,scores=scores,answer_ttft=times,probe_overhead=overhead))
     policies,table,folds=search(samples,features,scores,times,overhead,corpus.protocol['actions'],seed,policy_count)
     settings=dict(trainer=trainer,seed=seed,policy_count=policy_count,primary='router1',grid=GRID,folds=folds,
+        action_scope=action_scope,evaluation=evaluation,evaluation_ids=membership['evaluation_ids'],
         train_ids=membership['train_ids'],targets=dict(macro_loss=.02,speedup=4),actions=corpus.protocol['actions'],
         training_hardware=corpus.protocol.get('hardware',{}),snapshot_sha256=file_hash(output/'snapshot.json'))
     atomic_json(output/'settings.json',settings);atomic_json(output/'search.json',table)
@@ -194,6 +210,9 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3):
             provenance=dict(snapshot_sha256=file_hash(output/'snapshot.json'),training_run_sha256=file_hash(output/'settings.json'),
                 corpus_protocol_sha256=snapshot['protocol_sha256'],plan_sha256=corpus.protocol['plan_sha256'],
                 hardware=corpus.protocol.get('hardware',{})))
+        tree['evaluation']=evaluation
+        if evaluation=='training':
+            tree['training_hashes']=dict(snapshot['acceptance_hashes'])
         tree=export(output/(policy['id']+'.json'),tree);trees.append(tree)
         # Check compiler equivalence at training values and exact split boundaries.
         xrows=[{f:row.get(f) for f in FEATURES} for row in features]
@@ -209,12 +228,25 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3):
             expected='nocache' if missing else names[choose(leaf(raw,[row[f] for f in FEATURES]),policy['training_costs'],policy['setting'],dense,sparse)]
             if decide(tree,row)['action']!=expected:raise ValueError('Export decision mismatch')
     from runner.corpus_eval import test_tree
-    for tree in trees:test_tree(corpus,tree,output/(tree['id']+'-heldout'))
+    reports={tree['id']:test_tree(corpus,tree,output/(tree['id']+'-'+evaluation),evaluation=evaluation)
+             for tree in trees}
     summary=dict(training_samples=n,heldout_samples=len(membership['heldout_ids']),primary='router1',
+        action_scope=action_scope,evaluation=evaluation,evaluation_samples=len(membership['evaluation_ids']),
+        training_overlap=evaluation=='training',
+        interpretation='Training-set resubstitution; no held-out performance claim' if evaluation=='training' else 'Held-out evaluation',
         trainer=trainer,actions=corpus.protocol['actions'],settings_searched=len(GRID),
         timing='Estimated probe-inclusive OOF TTFT; not live router latency',
         policies=[dict(id=t['id'],feasible=t['oof']['feasible'],oof_macro_loss=t['oof']['macro_loss'],
             oof_speedup=t['oof']['speedup'],leaves=_compiled_leaves(t['tree']),duplicate_of=t['duplicate_of']) for t in trees])
+    for policy in summary['policies']:
+        report=reports[policy['id']];overall=report['overall']
+        policy.update(accuracy_percent=100*report['macro_accuracy'],
+            baseline_accuracy_percent=100*report['macro_baseline_accuracy'],
+            accuracy_loss_pp=100*(report['macro_baseline_accuracy']-report['macro_accuracy']),
+            answer_ttft_seconds=overall['answer_ttft_seconds'],
+            estimated_router_ttft_seconds=overall['estimated_router_ttft_seconds'],
+            baseline_ttft_seconds=overall['baseline_ttft_seconds'],
+            estimated_speedup=overall['estimated_speedup'],actions=overall['actions'])
     if snapshot.get('source')=='completed-add5-10-extension':
         summary['data_source']=snapshot['source']
         summary['timing']+='; original and added fixed actions were measured in different sessions'
@@ -222,6 +254,7 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3):
     import json
     (output/'summary.txt').write_text(json.dumps(summary,indent=2)+'\n')
     atomic_json(output/'complete.json',dict(complete=True,primary='router1',training=n,heldout=len(membership['heldout_ids']),
+        evaluation=evaluation,evaluated=len(membership['evaluation_ids']),training_overlap=evaluation=='training',
         settings_searched=len(GRID),policies=policy_count,estimated_timing=True,
         files={str(p.relative_to(output)):file_hash(p) for p in output.rglob('*') if p.is_file()}))
     return summary

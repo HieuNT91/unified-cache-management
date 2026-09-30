@@ -55,11 +55,8 @@ class AddRatiosTests(unittest.TestCase):
     def fixture(self, root, groups=1, tasks=('task',)):
         prepared = root/'prepared'
         state = root/extension.STATE
-        runtime = state/'frozen-code'
-        runtime.mkdir(parents=True)
-        (runtime/'stub.py').write_text('# synthetic CPU fixture\n')
-        code = {'stub.py': file_hash(runtime/'stub.py')}
-        atomic_json(runtime/'runtime.json', dict(base_code=code, files=code))
+        state.mkdir(parents=True)
+        code = {'historical.py': 'a'*64}
         atomic_json(prepared/'plan.json', {'synthetic': True})
         protocol = dict(kind='collection', dataset='ruler', actions=DEFAULT_ACTIONS,
             prepared=str(prepared), model='/not-used', cache_root=str(root/'cache'), code=code,
@@ -106,7 +103,7 @@ class AddRatiosTests(unittest.TestCase):
             scheduled_samples=n, accepted_answers={a['id']: n for a in DEFAULT_ACTIONS}, accepted_probes=n, answers=4*n))
         with patch('scripts.corpus_inputs.prepared_rows', return_value=rows), patch('scripts.corpus_inputs.TASKS', tasks), \
                 patch('runner.tree_profiles.validate'), patch.object(extension, 'environment_check'):
-            corpus = extension.prepare(root, runtime)
+            corpus = extension.prepare(root)
         return corpus, rows
 
     def fake_engine(self, events):
@@ -161,6 +158,9 @@ class AddRatiosTests(unittest.TestCase):
                     self.assertIsNotNone(corpus.outcome(row, action, full=True))
                     self.assertTrue((corpus.root/'records'/action/row['id']/'validated.json').is_file())
             self.assertFalse((corpus.state/'records').exists())
+            self.assertFalse((corpus.state/'frozen-code').exists())
+            initial = extension.read(corpus.root/corpus.outcome(rows[0], extension.EXTRA[0])['initialization'])
+            self.assertIn('runner/corpus_runtime.py', initial['execution_code'])
             self.assertEqual(pins, {name: file_hash(name) for name in pins})
             self.assertEqual(corpus.pending(0), [])
             self.assertEqual(self.collect(corpus, attempt='empty'), [])
@@ -207,12 +207,11 @@ class AddRatiosTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'artifact'):
                 corpus.attention(rows[0], replay=True)
 
-    def test_changed_input_runtime_and_original_protocol_are_rejected(self):
-        for kind in ('input', 'runtime', 'protocol'):
+    def test_changed_input_and_original_protocol_are_rejected(self):
+        for kind in ('input', 'protocol'):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as td:
                 corpus, rows = self.fixture(Path(td))
                 path = {'input': Path(corpus.protocol['prepared'])/rows[0]['prepared'],
-                        'runtime': corpus.state/'frozen-code'/'stub.py',
                         'protocol': corpus.root/'protocol.json'}[kind]
                 path.write_text('{}')
                 with self.assertRaises(ValueError):
@@ -309,14 +308,10 @@ class AddRatiosTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'lock is held'):
                     idle(root)
 
-    def test_bootstrap_freezes_only_pinned_code_and_rejects_active_base(self):
+    def test_direct_checkout_cli_and_active_base_refusal(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)/'results'
-            source = Path(td)/'original'
-            source.mkdir()
-            (source/'run.py').write_text('# pinned original\n')
-            (source/'unrelated.py').write_text('# must not enter frozen runtime\n')
-            protocol = dict(actions=DEFAULT_ACTIONS, code={'run.py': file_hash(source/'run.py')})
+            protocol = dict(actions=DEFAULT_ACTIONS)
             atomic_json(root/'protocol.json', protocol)
             atomic_json(root/'tranche.json', dict(limit_per_task=1))
             atomic_json(root/'partial-13-validation.json', dict(status='partial-complete', tranche_complete=True,
@@ -325,24 +320,37 @@ class AddRatiosTests(unittest.TestCase):
             from runner.router_process import identity
             atomic_json(root/'supervisor.json', dict(pid=os.getpid(), identity=identity(os.getpid()), state='partial-complete'))
             with self.assertRaisesRegex(ValueError, 'still alive'):
-                extension.bootstrap(root, source)
-            self.assertFalse((root/extension.STATE/'frozen-code').exists())
-            atomic_json(root/'supervisor.json', dict(pid=-1, identity=None, state='partial-complete'))
-            runtime = extension.bootstrap(root, source)
-            extension.verify_runtime(runtime, protocol['code'])
-            self.assertFalse((runtime/'unrelated.py').exists())
-            self.assertEqual(file_hash(runtime/'run.py'), protocol['code']['run.py'])
-            self.assertEqual(file_hash(runtime/extension.CONTROLLER), file_hash(extension.__file__))
-            # The frozen controller has a real working CLI independent of cwd.
-            check = subprocess.run([sys.executable, str(runtime/extension.CONTROLLER), '--help'],
+                extension.detach(root)
+            self.assertFalse((root/extension.STATE).exists())
+            check = subprocess.run([sys.executable, extension.__file__, '--help'],
                                    cwd='/tmp', capture_output=True, text=True)
             self.assertEqual(check.returncode, 0, check.stderr)
             self.assertIn('status_same_count', check.stdout)
-            (source/'run.py').write_text('# later checkout edits cannot change frozen execution\n')
-            self.assertEqual(extension.bootstrap(root, source), runtime)
-            (runtime/'run.py').write_text('# corrupt\n')
-            with self.assertRaisesRegex(ValueError, 'Pinned file'):
-                extension.verify_runtime(runtime, protocol['code'])
+            self.assertNotIn('--runtime-code', check.stdout)
+
+    def test_detach_can_prepare_in_background_without_prior_verify(self):
+        from scripts.corpus_inputs import TASKS
+        with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()):
+            corpus, _ = self.fixture(Path(td), tasks=TASKS)
+            (corpus.state/'protocol.json').unlink()
+            with patch('scripts.corpus_control.check_hardware'), \
+                    patch.object(extension.subprocess, 'run', side_effect=RuntimeError('captured launch')) as launch:
+                with self.assertRaisesRegex(RuntimeError, 'captured launch'):
+                    extension.detach(corpus.root)
+            config = json.loads(launch.call_args.kwargs['input'])
+            self.assertEqual(config['cwd'], str(extension.CODE_ROOT))
+            self.assertEqual(config['command'][3], str(Path(extension.__file__).resolve()))
+            self.assertEqual(config['command'][4], 'supervise')
+            self.assertNotIn('--runtime-code', config['command'])
+            self.assertFalse((corpus.state/'frozen-code').exists())
+
+    def test_status_during_background_preparation(self):
+        with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()):
+            root = Path(td)
+            atomic_json(root/extension.STATE/'supervisor.json', dict(pid=-1, identity=None, state='verifying'))
+            report = extension.summarize(root)
+            self.assertEqual(report['status'], 'verifying')
+            self.assertFalse(report['supervisor']['alive'])
 
     def test_no_commit_until_cache_deletion_succeeds(self):
         with tempfile.TemporaryDirectory() as td:
@@ -373,7 +381,6 @@ class AddRatiosTests(unittest.TestCase):
                     def wait(self, **kwargs):
                         return self.code
 
-                runtime = corpus.state/'frozen-code'
                 with patch.object(extension, 'prepare', return_value=corpus), \
                         patch('scripts.corpus_control.check_hardware'), \
                         patch('scripts.router_control.cleanup_caches'), \
@@ -386,16 +393,17 @@ class AddRatiosTests(unittest.TestCase):
                         patch.object(extension.signal, 'signal'), \
                         patch.object(extension.time, 'sleep'):
                     if success:
-                        extension.supervise(corpus.root, runtime)
+                        extension.supervise(corpus.root)
                         finalize.assert_called_once_with(corpus.root)
                         self.assertTrue(extension.read(corpus.state/'cleanup.json')['owned_engines_exited'])
                     else:
                         with self.assertRaisesRegex(RuntimeError, 'failed'):
-                            extension.supervise(corpus.root, runtime)
+                            extension.supervise(corpus.root)
                         finalize.assert_not_called()
                     terminate.assert_not_called()
                 self.assertEqual(len(launches), len(codes))
                 self.assertTrue(all('worker' in cmd for cmd in launches))
+                self.assertTrue(all(str(Path(extension.__file__).resolve()) in cmd for cmd in launches))
                 self.assertEqual(extension.read(corpus.state/'supervisor.json')['state'], 'complete' if success else 'failed')
 
     def test_shell_uses_env_and_explicit_root_precedence(self):

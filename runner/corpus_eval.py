@@ -55,17 +55,23 @@ def replay(corpus,decisions,output,metadata=None):
     return report(rows,output,metadata)
 
 
-def evaluation_ids(corpus,tree,snapshot=None):
+def evaluation_ids(corpus,tree,snapshot=None,evaluation='heldout'):
     validate(tree)
     if tree['actions']!=corpus.protocol['actions']:raise ValueError('Tree inventory differs from measured corpus')
     if tree['provenance']['corpus_protocol_sha256']!=protocol_identity(corpus.protocol):raise ValueError('Tree belongs to a different corpus')
-    if snapshot is None:
+    if evaluation not in ('heldout','training'):raise ValueError('Unknown evaluation mode')
+    if evaluation=='training':
+        if snapshot is not None:raise ValueError('Training evaluation uses the exact original training set')
+        ids=tree['training_ids'];pins=tree.get('training_hashes',{})
+        if not pins:raise ValueError('Missing frozen training evidence; use a tree fitted with --evaluation training')
+    elif snapshot is None:
         ids=tree['heldout_ids'];pins=tree.get('heldout_hashes',{})
         if not pins:raise ValueError('Missing frozen held-out artifact hashes')
     else:
         if snapshot['protocol_sha256']!=protocol_identity(corpus.protocol):raise ValueError('Evaluation snapshot protocol mismatch')
         ids=[r['id'] for r in snapshot['samples']];pins=snapshot['acceptance_hashes']
-    if not ids or len(set(ids))!=len(ids) or set(ids)&set(tree['training_ids']):raise ValueError('Empty, duplicate, or training-overlapping evaluation')
+    if not ids or len(set(ids))!=len(ids) or (evaluation=='heldout' and set(ids)&set(tree['training_ids'])):
+        raise ValueError('Empty, duplicate, or training-overlapping held-out evaluation')
     for name,expected in pins.items():
         if file_hash(relative(corpus.root,name))!=expected:raise ValueError('Frozen evaluation evidence changed')
     for pid in ids:
@@ -74,8 +80,10 @@ def evaluation_ids(corpus,tree,snapshot=None):
     return ids
 
 
-def test_tree(corpus,tree,output,snapshot=None):
-    ids=evaluation_ids(corpus,tree,snapshot)
+def test_tree(corpus,tree,output,snapshot=None,evaluation='heldout'):
+    ids=evaluation_ids(corpus,tree,snapshot,evaluation)
     decisions=[dict(sample_id=pid,action=decide(tree,corpus.features(pid))['action']) for pid in ids]
-    return replay(corpus,decisions,output,dict(tree_sha256=tree['payload_sha256'],frozen_heldout=snapshot is None,
-        training_overlap=False,inference='offline',refit=False))
+    return replay(corpus,decisions,output,dict(tree_sha256=tree['payload_sha256'],
+        frozen_heldout=evaluation=='heldout' and snapshot is None,evaluation=evaluation,
+        training_overlap=evaluation=='training',inference='offline',refit=False,
+        interpretation='Training-set resubstitution; no held-out performance claim' if evaluation=='training' else 'Held-out evaluation'))

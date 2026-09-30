@@ -14,48 +14,41 @@ probe, baseline, original sparse answer, or router training is scheduled.
 
 ## Deployment and commands
 
-Put the new launcher in a separate checkout. The original checkout must remain
-available at its original source revision for the first verification. Use the
-original run's trusted `.env` (or the `PYTHON_BIN` and `EXPERIMENT_DIR` variables):
+Use the updated checkout directly. Put these assignments in its `.env` file
+(adjust paths to your server):
 
-```bash
-# Run these commands from the checkout containing the new launcher.
-export UCM_ENV_FILE=/data/jh/unified-cache-management/ucm-ruler120-l20/.env
-
-# Only AFTER the original collection has completed and exited:
-scripts/ruler_corpus_add_ratios.sh verify \
-  --root /data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20 \
-  --runtime-code /data/jh/unified-cache-management/ucm-ruler120-l20
-
-scripts/ruler_corpus_add_ratios.sh detach \
-  --root /data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20
-
-scripts/ruler_corpus_add_ratios.sh status \
-  --root /data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20
+```dotenv
+PYTHON_BIN=/data/jh/envs/ucm/bin/python
+EXPERIMENT_DIR=/data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20
 ```
 
-Adjust the absolute checkout paths to the actual server deployment. If the
-launcher is added to the original checkout **after completion**, and every
-previously pinned source file remains unchanged, `--runtime-code` is unnecessary.
-Do not update existing inference files to make this work: use the separate
-checkout and explicit original runtime path instead. A changed/missing pinned
-source file is an error; the launcher never rewrites the original fingerprint.
+After the original collection completes and exits:
+
+```bash
+scripts/ruler_corpus_add_ratios.sh detach
+scripts/ruler_corpus_add_ratios.sh status
+scripts/ruler_corpus_add_ratios.sh status_same_count
+```
+
+A separate `verify` command is **optional**. `detach` prepares and validates the
+saved inputs and attention in the background before collecting the new answers.
+For a CPU-only preflight, run `scripts/ruler_corpus_add_ratios.sh verify` first.
+No runtime copy, original source checkout, or `--runtime-code` argument is needed.
+The supervisor and workers run from the current checkout; keep that checkout
+unchanged while the follow-up is running. Existing older extension results remain
+readable without their old `frozen-code/` directory; nothing deletes that directory.
+
+If the original collection is still running, put updated code in a separate
+worktree and give it the `.env` above. Its absolute result path shares the existing
+records. Do not update the original running collector's checkout.
 
 `--root` overrides `EXPERIMENT_DIR`. Without either, the default is
-`outputs/ruler13-120-l20` below the launcher's checkout. `UCM_ENV_FILE`, exported
-variable precedence, and `PYTHON_BIN` use the existing server environment loader.
-Model, prepared input, cache location, and GPU UUIDs come from the saved protocol;
-new `MODEL_PATH`, `PREPARED_DIR`, `CACHE_ROOT`, or `GPU_A/GPU_B` values do not
-override those saved assignments.
-
-The first `verify` makes a private copy of exactly the original pinned source
-inventory and this controller. All later commands run that frozen controller and
-runtime, so edits to either checkout cannot change the follow-up. Verification
-is CPU-only and replays all original attention archives and diagnostics; allow
-time to read the full original collection. It does not regenerate prompts or
-launch an engine. `detach` checks the saved UUIDs are available and unoccupied,
-then launches a detached CPU supervisor. The supervisor validates sources again
-before GPU work. No automatic waiter or launch is installed.
+`outputs/ruler13-120-l20` below the launcher's checkout. The existing trusted Bash
+`.env` loader and `PYTHON_BIN` conventions apply. Model, prepared input, cache
+location, and GPU UUIDs come from the saved protocol; new `MODEL_PATH`,
+`PREPARED_DIR`, `CACHE_ROOT`, or `GPU_A/GPU_B` values do not override those saved
+assignments. `detach` checks the saved UUIDs are available and unoccupied, then
+launches a detached CPU supervisor. No automatic waiter or launch is installed.
 
 ## Results and validation
 
@@ -68,7 +61,6 @@ outputs/ruler13-120-l20/
   extensions/add5-10/
     protocol.json                 # Separate extension protocol
     sources.json                  # Pins original records, inputs and receipts
-    frozen-code/                  # Original runtime plus frozen controller
     derived/                      # Replayed scores and new exact budget masks
     sessions/                     # New initialization/ownership evidence
     supervisor.log
@@ -114,7 +106,6 @@ With `EXPERIMENT_DIR` pointing at the existing output root:
 scripts/ruler_corpus_add_ratios.sh status
 scripts/ruler_corpus_add_ratios.sh status_same_count
 # After inspecting a failed attempt and confirming its owned engines exited:
-scripts/ruler_corpus_add_ratios.sh verify
 scripts/ruler_corpus_add_ratios.sh resume
 # Final reports are automatic. Recover interrupted final publication with:
 scripts/ruler_corpus_add_ratios.sh report
@@ -131,20 +122,35 @@ and owned engine exit to validate.
 Verify each group's startup receipt once, then request status as needed. These
 commands have CPU coverage; real L20 GPU execution remains a server-side check.
 
-## Train a router after completion
+## Train both routers on the collected samples
 
-From the updated follow-up checkout, with the original `.env` selected and
-`EXPERIMENT_DIR` pointing at the base output directory, run:
+With the `.env` above, run the original four-action training now:
 
 ```bash
-scripts/ruler_corpus.sh train --train-samples 1040 --seed 42 --policy-count 3 \
-  --output "$EXPERIMENT_DIR/router-training-six-actions"
+scripts/ruler_corpus.sh train --action-scope original --evaluation training \
+  --seed 42 --policy-count 3 --output outputs/router-original-training
 ```
 
-The standard trainer now automatically joins the completed extension and uses
-all six actions. For 120/task, the example above fits on 80/task and evaluates
-on the remaining 40/task. It refuses incomplete extensions and existing training
-output directories. Training, exported trees, and offline held-out evaluation
-reuse the saved inputs/probes/answers and require no additional GPU inference.
-The original protocols and frozen follow-up runtime remain unchanged. See the
-[training guide](RULER_CORPUS_TRAINING.md) for the split and latency definitions.
+After 5%/10% collection completes, train with all six actions:
+
+```bash
+scripts/ruler_corpus.sh train --action-scope all --evaluation training \
+  --seed 42 --policy-count 3 --output outputs/router-six-actions-training
+```
+
+Both commands fit on **all complete samples and evaluate those exact same sample
+IDs**: 1,560 prompts for the completed 120/task collection. There is no held-out
+set. Omit `--train-samples`; the command uses the entire complete cohort.
+`original` ignores an unfinished extension; `all` requires the extension to finish
+if it is present. Use the second command only after the extension finishes to get
+six actions. Each output directory must be new.
+
+Read `summary.txt` / `summary.json` in each output directory for accuracy, dense
+accuracy, loss, estimated TTFT, speedup and action counts. Per-policy details are
+in `routerN-training/report.txt`, `report.json` and `decisions.csv`; individual
+portable trees are `routerN.json`. These are CPU-only training-set evaluations
+from saved outcomes, not new inference or held-out performance. TTFT includes the
+saved independent probe overhead and selected answer time; it is an estimate,
+not measured live-router latency. The existing five-fold OOF search still selects
+settings before each final tree is refitted on all samples. See the
+[training guide](RULER_CORPUS_TRAINING.md) for details.

@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Collect only 5/10% into an existing corpus, with a separate pinned protocol.
-
-Only stdlib imports precede bootstrap: inference uses the base run's exact code,
-not whichever newer checkout supplies this controller. No original file is edited.
-"""
+"""Collect only 5/10% into an existing corpus using this checkout's runtime."""
 import argparse
 from collections import Counter
 from contextlib import contextmanager
@@ -14,7 +10,6 @@ import io
 import json
 import os
 from pathlib import Path
-import shutil
 import signal
 import subprocess
 import sys
@@ -23,7 +18,10 @@ import uuid
 
 EXTRA = ('prophetkv-5', 'prophetkv-10')
 STATE = Path('extensions/add5-10')
-CONTROLLER = 'add_ratios_control.py'
+CODE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CODE_ROOT))
+os.environ.update(PYTHONPATH=str(CODE_ROOT), PYTHONDONTWRITEBYTECODE='1',
+                  OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1')
 
 
 def read(path):
@@ -62,12 +60,6 @@ def check_files(root, pins):
             raise ValueError('Pinned file changed or missing: '+str(path))
 
 
-def activate(runtime):
-    sys.path.insert(0, str(runtime))
-    os.environ.update(PYTHONPATH=str(runtime), PYTHONDONTWRITEBYTECODE='1',
-                      OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1')
-
-
 def completion(root, protocol, count):
     """The scheduled tranche, not the full reserved 2,600-row inventory, is final."""
     name = 'final-validation.json' if count == 2600 else f'partial-{count}-validation.json'
@@ -84,51 +76,6 @@ def completion(root, protocol, count):
             state.get('state') not in ('complete', 'partial-complete')):
         raise ValueError('Original collection has not successfully exited')
     return name
-
-
-def bootstrap(root, runtime):
-    """Copy exactly the pinned source inventory, then execute from that copy."""
-    from runner.setups import atomic_json
-    from scripts.corpus_control import idle
-    state = root/STATE
-    with locked(root/'launch.lock'):
-        idle(root)
-        protocol = read(root/'protocol.json')
-        limit = read(root/'tranche.json')['limit_per_task']
-        completion(root, protocol, 13 * limit)
-        state.mkdir(parents=True, exist_ok=True)
-        with locked(state/'bootstrap.lock'):
-            target = state/'frozen-code'
-            if target.exists():
-                pins = read(target/'runtime.json')
-                check_files(target, pins['files'])
-                if pins['base_code'] != protocol['code']:
-                    raise ValueError('Frozen runtime belongs to a different base protocol')
-                return target
-            check_files(runtime, protocol['code'])
-            staging = state/('freeze-'+uuid.uuid4().hex)
-            staging.mkdir()
-            try:
-                for name in protocol['code']:
-                    dest = contained(staging, name)
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(contained(runtime, name), dest)
-                shutil.copyfile(Path(__file__), staging/CONTROLLER)
-                files = dict(protocol['code'], **{CONTROLLER: digest(staging/CONTROLLER)})
-                check_files(staging, files)
-                atomic_json(staging/'runtime.json', dict(base_code=protocol['code'], files=files))
-                staging.rename(target)
-            except BaseException:
-                shutil.rmtree(staging)
-                raise
-            return target
-
-
-def verify_runtime(runtime, base_code=None):
-    pins = read(runtime/'runtime.json')
-    if base_code is not None and pins['base_code'] != base_code:
-        raise ValueError('Base runtime fingerprint changed')
-    check_files(runtime, pins['files'])
 
 
 def environment_check(protocol):
@@ -171,7 +118,7 @@ def derive(attention, sample, inventory):
         attention['scores'], sample['boundaries'][1], a['ratio']) for a in inventory if a['id'] != 'nocache'})
 
 
-def prepare(root, runtime):
+def prepare(root):
     """Caller owns the base run lock; expensive CPU replay precedes any GPU work."""
     import numpy as np
     from runner.corpus import Corpus, match_answer
@@ -180,6 +127,7 @@ def prepare(root, runtime):
     from runner.tree_profiles import validate
     from scripts.corpus_inputs import TASKS
     from scripts.corpus_control import groups
+    from scripts.router_control import code_hashes
     from run import verify_diagnostics
     state = root/STATE
     if (state/'protocol.json').exists():
@@ -200,13 +148,12 @@ def prepare(root, runtime):
     for case in EXTRA:
         if (root/'records'/case).exists():
             raise ValueError('Unregistered added-action records already exist: '+case)
-    verify_runtime(runtime, protocol['code'])
     environment_check(protocol)
     pins = {str(root/name): digest(root/name) for name in
             ('protocol.json', 'settings.json', 'tranche.json', 'cleanup.json', 'supervisor.json', done)}
     pins[str(base.prepared/'plan.json')] = protocol['plan_sha256']
     derived = {}
-    (state/'derived').mkdir(exist_ok=True)
+    (state/'derived').mkdir(parents=True, exist_ok=True)
     for n, row in enumerate(rows):
         pid = row['id']
         sample = base.inputs(pid)
@@ -253,9 +200,9 @@ def prepare(root, runtime):
         if (n+1) % 10 == 0 or n+1 == len(rows):
             print(f'Validated original inputs, answers and attention: {n+1}/{len(rows)}', flush=True)
     atomic_json(state/'sources.json', dict(files=pins, rows=rows))
-    extended = dict(protocol, schema='ruler-inplace-actions-v1', actions=inventory, added_actions=list(EXTRA),
+    extended = dict(protocol, schema='ruler-inplace-actions-v2', actions=inventory, added_actions=list(EXTRA),
                     base_protocol_sha256=protocol_identity(protocol), sources_sha256=digest(state/'sources.json'),
-                    runtime_sha256=digest(runtime/'runtime.json'), derived=derived)
+                    code=code_hashes(), derived=derived)
     atomic_json(state/'protocol.json', extended)
     return Extension(root)
 
@@ -277,10 +224,6 @@ class Extension:
         self.actions = actions(self.protocol['actions'])
 
     def verify_sources(self):
-        runtime = self.state/'frozen-code'
-        if digest(runtime/'runtime.json') != self.protocol['runtime_sha256']:
-            raise ValueError('Frozen runtime manifest changed')
-        verify_runtime(runtime, self.base_protocol['code'])
         for name, expected in self.sources['files'].items():
             if not Path(name).is_file() or digest(name) != expected:
                 raise ValueError('Original artifact changed: '+name)
@@ -348,6 +291,7 @@ def collect(root, group, attempt):
     from runner.corpus_runtime import Engine
     from runner.corpus_records import record_dir, publish
     from runner.setups import atomic_json, check_environment
+    from scripts.router_control import code_hashes
     corpus = Extension(root)
     pending = corpus.pending(group)
     if not pending:
@@ -357,6 +301,8 @@ def collect(root, group, attempt):
     with locked(corpus.state/f'group{group}.lock'):
         engine = Engine(corpus.state, corpus.protocol, group, 'cached', attempt, pending)
         try:
+            initialization = engine.session/'initialization.json'
+            atomic_json(initialization, dict(read(initialization), execution_code=code_hashes()))
             for row in pending:
                 attention = corpus.attention(row, replay=True)
                 engine.begin(row)
@@ -399,6 +345,15 @@ def summarize(root, same_count=False, final=False):
     from runner.reporting import aggregate, COLUMNS, render_markdown
     from runner.router_process import alive
     from runner.setups import atomic_json
+    if not (Path(root)/STATE/'protocol.json').exists():
+        state = Path(root)/STATE/'supervisor.json'
+        if not final and state.exists():
+            saved = read(state)
+            result = dict(status=saved['state'], supervisor=dict(saved, alive=alive(saved)),
+                          message='Extension preparation is pending; see extensions/add5-10/supervisor.log')
+            print(json.dumps(result, indent=2))
+            return result
+        raise ValueError('No prepared extension; run detach or verify first')
     corpus = Extension(root)
     expected = [dict(prompt_id=r['id'], subtask=r['subtask']) for r in corpus.rows]
     old = [a['id'] for a in corpus.base_protocol['actions']]
@@ -505,7 +460,7 @@ def base_exclusive(root):
         handle.close()
 
 
-def supervise(root, runtime):
+def supervise(root):
     from runner.router_process import identity, group_alive
     from runner.setups import atomic_json
     from scripts.corpus_control import check_hardware
@@ -519,17 +474,17 @@ def supervise(root, runtime):
 
         def launch(corpus, group, retry):
             attempt = uuid.uuid4().hex
-            cmd = [sys.executable, '-u', str(runtime/CONTROLLER), 'worker', '--root', str(root),
-                   '--runtime-code', str(runtime), '--frozen', '--group', str(group), '--attempt', attempt]
+            cmd = [sys.executable, '-u', str(Path(__file__).resolve()), 'worker', '--root', str(root),
+                   '--group', str(group), '--attempt', attempt]
             with (state_dir/f'group{group}-{attempt}.log').open('a') as log:
-                child = subprocess.Popen(cmd, cwd=runtime, env=environment(','.join(corpus.protocol['groups'][group])),
+                child = subprocess.Popen(cmd, cwd=CODE_ROOT, env=environment(','.join(corpus.protocol['groups'][group])),
                                          stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             receipt = dict(pid=child.pid, identity=identity(child.pid), group=group, retry=retry, command=cmd, started_at=time.time())
             atomic_json(state_dir/'processes'/f'{attempt}.json', receipt)
             running[group] = dict(child=child, receipt=receipt, last=time.monotonic(), mtime=time.time())
 
         try:
-            corpus = prepare(root, runtime)
+            corpus = prepare(root)
             check_hardware(corpus.protocol)
             cleanup_caches(state_dir, corpus.protocol)
             for group in range(len(corpus.protocol['groups'])):
@@ -577,25 +532,30 @@ def supervise(root, runtime):
             raise
 
 
-def detach(root, runtime, resume=False):
+def detach(root, resume=False):
     from runner.router_process import identity
     from runner.setups import atomic_json
     from scripts.corpus_control import idle, check_hardware
     from scripts.router_control import environment
     state = root/STATE
+    protocol = read(root/'protocol.json')
+    count = 13 * read(root/'tranche.json')['limit_per_task']
+    with locked(root/'launch.lock'):
+        idle(root)
+        completion(root, protocol, count)
+        state.mkdir(parents=True, exist_ok=True)
     with locked(state/'launch.lock'):
         idle(state)
         if (state/'complete.json').exists():
             raise ValueError('Completed extension cannot restart')
         if (state/'supervisor.json').exists() and not resume:
             raise ValueError('Use resume for missing new records')
-        corpus = Extension(root)
-        command = ['nohup', sys.executable, '-u', str(runtime/CONTROLLER), 'supervise',
-                   '--root', str(root), '--runtime-code', str(runtime), '--frozen']
+        command = ['nohup', sys.executable, '-u', str(Path(__file__).resolve()), 'supervise',
+                   '--root', str(root)]
         with locked(root/'launch.lock'):
             idle(root)
-            completion(root, corpus.base_protocol, len(corpus.rows))
-            check_hardware(corpus.protocol)
+            completion(root, protocol, count)
+            check_hardware(protocol)
             helper = """import json,subprocess,sys
 c=json.load(sys.stdin)
 with open(c['log'],'a') as log:
@@ -603,7 +563,7 @@ with open(c['log'],'a') as log:
 print(p.pid,flush=True)
 """
             result = subprocess.run([sys.executable, '-c', helper], input=json.dumps(dict(command=command,
-                cwd=str(runtime), env=environment(), log=str(state/'supervisor.log'))), text=True, capture_output=True, check=True)
+                cwd=str(CODE_ROOT), env=environment(), log=str(state/'supervisor.log'))), text=True, capture_output=True, check=True)
             pid = int(result.stdout.strip())
             atomic_json(state/'launch.json', dict(pid=pid, identity=identity(pid), command=command, resume=resume))
         for _ in range(200):
@@ -631,8 +591,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('verify', 'detach', 'resume', 'status', 'status_same_count', 'report', 'supervise', 'worker'))
     parser.add_argument('--root', required=True, type=Path)
-    parser.add_argument('--runtime-code', type=Path, help='Unchanged original checkout (defaults to this checkout); frozen after first verify')
-    parser.add_argument('--frozen', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--group', type=int, help=argparse.SUPPRESS)
     parser.add_argument('--attempt', help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -641,32 +599,16 @@ def main():
         raise ValueError('Missing existing collection protocol: '+str(root))
     if args.command != 'worker' and os.environ.get('CUDA_VISIBLE_DEVICES', ''):
         raise ValueError('Control commands require CUDA_VISIBLE_DEVICES empty')
-    runtime = (args.runtime_code or Path(__file__).resolve().parents[1]).resolve()
-    if not args.frozen:
-        frozen = root/STATE/'frozen-code'
-        if not frozen.exists():
-            if args.command != 'verify':
-                raise ValueError('Run verify after the original collection completes first')
-            check_files(runtime, read(root/'protocol.json')['code'])
-            activate(runtime)
-            frozen = bootstrap(root, runtime)
-        command = [sys.executable, '-u', str(frozen/CONTROLLER), args.command, '--root', str(root),
-                   '--runtime-code', str(frozen), '--frozen']
-        os.execv(sys.executable, command)
-    if runtime != root/STATE/'frozen-code' or Path(__file__).resolve() != runtime/CONTROLLER:
-        raise ValueError('Internal commands must use the frozen extension controller')
-    verify_runtime(runtime, read(root/'protocol.json')['code'])
-    activate(runtime)
     if args.command == 'verify':
         from scripts.corpus_control import idle
         with base_exclusive(root):
             idle(root/STATE)
-            corpus = prepare(root, runtime)
+            corpus = prepare(root)
         print(f'Verified {len(corpus.rows)} original prompts; {len(corpus.rows)*2} new answers. No GPU work launched.')
     elif args.command in ('detach', 'resume'):
-        detach(root, runtime, args.command == 'resume')
+        detach(root, args.command == 'resume')
     elif args.command == 'supervise':
-        supervise(root, runtime)
+        supervise(root)
     elif args.command == 'worker':
         try:
             collect(root, args.group, args.attempt)

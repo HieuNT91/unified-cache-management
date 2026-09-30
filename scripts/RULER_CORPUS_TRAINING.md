@@ -32,50 +32,73 @@ four-rank FP32 reduction order; it never uses a tolerance to conceal disagreemen
 Selections exclude the first chunk, take floor(eligible length × ratio), break
 equal scores by ascending original position, and return sorted positions.
 
-## Frozen total-N split and training
+## Train and evaluate on exactly the same samples
 
-`ruler_corpus.sh train` automatically joins a completed
-`extensions/add5-10/` collection when present. Its action inventory becomes
-`nocache`, `prophetkv-1`, `prophetkv-5`, `prophetkv-10`, `prophetkv-20`,
-`prophetkv-40` for the default base run. Training requires the extension's final
-`complete.json` and engine exit; an unfinished extension raises an error rather
-than silently training the original four actions. Original records retain their
-original protocol, added records retain their extension protocol, and all source
-files stay unchanged. Saved features are checked against original attention
-replay and cached in memory during training. No new GPU inference is needed.
+Set the updated checkout's `.env` to the original collection directory:
 
-Run the updated commands from a **separate checkout**, with `UCM_ENV_FILE` pointing
-to the original collection's `.env`. Keep its collection checkout unchanged so
-the follow-up can freeze the original runtime. Offline commands inherit the saved
-prepared path when `PREPARED_DIR`/`--prepared` is absent. An extension requires its
-original pinned prepared directory.
-
-For the completed 120/task L20 collection, this example uses 80/task for training
-and 40/task for held-out evaluation (1,040 + 520 = 1,560 prompts):
-
-```bash
-scripts/ruler_corpus.sh train \
-  --root /data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20 \
-  --train-samples 1040 --trainer ruler13-v1 --seed 42 --policy-count 3 \
-  --output /data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-router-six-actions-l20
+```dotenv
+PYTHON_BIN=/data/jh/envs/ucm/bin/python
+EXPERIMENT_DIR=/data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20
 ```
 
-Choose a new output directory for each training run. The split, five features,
-216-setting search, and conservative probe-inclusive latency accounting below
-are unchanged. Original and added fixed-action timings come from different
-measurement sessions; training reports disclose this. The 80/40 split is an
-example, not a new default for `--train-samples`.
-
-`snapshot`, `replay`, and offline `test` also use the combined reader. Existing
-four-action trees still select the original corpus when their original protocol
-matches. Collections without the extension retain their existing behavior.
-For Python callers, use `runner.corpus_training_data.open_corpus(root)` for the
-combined view; `train(Corpus(root), ...)` upgrades to that view automatically.
-The raw `Corpus` reader itself continues to describe the original collection.
+Train the original four actions now, and all six once the 5%/10% follow-up finishes:
 
 ```bash
-scripts/ruler_corpus.sh train --train-samples 390 --trainer ruler13-v1 \
-  --seed 42 --output /data/training/ruler13-v1-run1
+scripts/ruler_corpus.sh train --action-scope original --evaluation training \
+  --seed 42 --policy-count 3 --output outputs/router-original-training
+
+# After 5%/10% collection and final reporting finish:
+scripts/ruler_corpus.sh train --action-scope all --evaluation training \
+  --seed 42 --policy-count 3 --output outputs/router-six-actions-training
+```
+
+`--evaluation training` uses every complete sample for fitting and evaluates the
+final trees on **exactly the same IDs**, with no held-out set. For the completed
+120/task L20 collection, each run fits and evaluates 1,560 prompts. Do not supply
+`--train-samples` unless it equals the full complete count. `split.json` records
+identical `train_ids` and `evaluation_ids` and an empty `heldout_ids` list. Reports
+explicitly identify training-set resubstitution. Five-fold OOF results still guide
+setting selection; final refitted-tree performance is reported separately.
+
+`--action-scope original` reads only the original action inventory and works while
+the follow-up is incomplete. `--action-scope all` (the default) joins a completed
+`extensions/add5-10/` when present: nocache plus ProphetKV 1/5/10/20/40% for the
+L20 run. An unfinished extension raises an error. If there is no extension, `all`
+uses the base actions; wait for follow-up completion before the six-action run.
+Original and added records retain their respective protocols and are unchanged.
+No GPU inference is needed. Timings come from different measurement sessions.
+
+Use a new output directory each time. `summary.txt` and `summary.json` give each
+policy's accuracy, baseline accuracy, loss, estimated TTFT/speedup, action counts
+and separate OOF metrics. Detailed results are in `routerN-training/report.txt`,
+`report.json` and `decisions.csv`. Portable policies are `routerN.json` with
+checksum sidecars and readable rules. Re-evaluate a training tree explicitly with:
+
+```bash
+scripts/ruler_corpus.sh test --tree outputs/router-original-training/router1.json \
+  --evaluation training --output outputs/router-original-training-repeat
+```
+
+Offline commands use the saved prepared path when `PREPARED_DIR`/`--prepared` is
+absent. An extension requires its original prepared directory. The follow-up
+runs the current checkout directly; no frozen runtime copy is required. Leave
+any checkout used by an active collector unchanged.
+
+`snapshot`, `replay`, and offline `test` also support the combined reader.
+Existing four-action trees automatically select their original corpus. Python
+callers use `runner.corpus_training_data.open_corpus(root, action_scope='original')`
+or the default combined view; pass the same `action_scope` to `train`. The raw
+`Corpus` reader continues to describe the original collection.
+
+## Optional held-out split
+
+The default `--evaluation heldout` preserves the original split behavior. For
+example, fit on 80/task and evaluate the other 40/task in the 120/task collection:
+
+```bash
+scripts/ruler_corpus.sh train --action-scope all --evaluation heldout \
+  --train-samples 1040 --seed 42 --policy-count 3 \
+  --output outputs/router-six-actions-heldout
 ```
 
 `N` is the **total** across all 13 tasks. Each task needs at least two complete
@@ -86,6 +109,8 @@ training when `13 <= N <= complete_samples - 13`; all others enter held-out test
 For example, **50 complete samples/task gives 650 usable samples; 390 train leaves
 260 held out** (30 train and 20 test/task). A seed affects membership and folds,
 not the inventory or collected outcomes.
+
+## Shared trainer and artifacts
 
 One shared pooled policy is fitted per selected setting. Task labels enter only
 sampling, task-stratified prompt folds and reporting. Router input is exactly five
@@ -119,7 +144,8 @@ another primary. Other trainer names fail explicitly until implemented as a new
 version; existing runs are immutable.
 
 Run artifacts include snapshot, split, matrices, all settings and OOF results,
-fold membership/statistics, fitted trees, and per-policy held-out reports. Each
+fold membership/statistics, fitted trees, and per-policy evaluation reports (`routerN-training` or
+`routerN-heldout`, depending on the evaluation mode). Each
 `routerN.json` is an individual interpretable tree with full-precision thresholds,
 action/feature definitions, training/held-out membership, evidence hashes and
 hardware provenance. Transfer its `.sha256` sidecar too. Readable `.txt` rules
@@ -138,7 +164,9 @@ A decision line is `{"sample_id":"cwe-000","action":"prophetkv-20"}`. Unknown,
 duplicate or unmeasured decisions fail. Replay joins only accepted outcomes; it
 cannot synthesize a result for an uncollected ratio. Tree testing uses saved
 attention, the unchanged tree and the same measured-outcome join. Default tests
-use frozen held-out IDs and hashes. `--evaluation-snapshot /path/snapshot.json`
+use frozen held-out IDs and hashes. `--evaluation training` instead uses the
+exact training IDs and evidence recorded by a training-evaluation run; it cannot
+be combined with `--evaluation-snapshot`. `--evaluation-snapshot /path/snapshot.json`
 evaluates an explicit later complete snapshot and rejects any training overlap;
 select only non-training samples in that snapshot. The original evidence pins
 must remain present and valid.

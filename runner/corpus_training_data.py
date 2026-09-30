@@ -8,10 +8,12 @@ from runner.setups import file_hash
 from scripts.corpus_add_ratios import EXTRA, STATE, Extension, combined_actions
 
 
-def open_corpus(root, prepared=None, tree=None):
+def open_corpus(root, prepared=None, tree=None, action_scope='all'):
     """Default to all collected actions; old trees keep their original evidence."""
     root = Path(root)
-    if (root/STATE).exists():
+    if action_scope not in ('original', 'all'):
+        raise ValueError('Unknown action scope')
+    if action_scope == 'all' and (root/STATE).exists():
         original = json.loads((root/'protocol.json').read_text())
         if (tree is not None and tree['actions'] == original['actions'] and
                 tree['provenance']['corpus_protocol_sha256'] == protocol_identity(original)):
@@ -20,8 +22,12 @@ def open_corpus(root, prepared=None, tree=None):
     return Corpus(root, prepared)
 
 
-def training_view(corpus):
+def training_view(corpus, action_scope='all'):
     # Also cover direct Python calls to train(Corpus(...), ...).
+    if action_scope == 'original':
+        return Corpus(corpus.root, corpus.prepared) if isinstance(corpus, ExtendedCorpus) else corpus
+    if action_scope != 'all':
+        raise ValueError('Unknown action scope')
     if not isinstance(corpus, ExtendedCorpus) and (Path(corpus.root)/STATE).exists():
         return ExtendedCorpus(corpus.root, getattr(corpus, 'prepared', None))
     return corpus
@@ -70,7 +76,7 @@ class ExtendedCorpus(Corpus):
             raise ValueError('Original prepared plan changed')
         self.metadata_hashes = {name: file_hash(relative(self.root, name)) for name in (
             'protocol.json', str(STATE/'protocol.json'), str(STATE/'sources.json'),
-            str(STATE/'complete.json'), str(STATE/'cleanup.json'), str(STATE/'frozen-code/runtime.json'))}
+            str(STATE/'complete.json'), str(STATE/'cleanup.json'))}
         self._features = {}
 
     def _receipt(self, prompt_id, case):

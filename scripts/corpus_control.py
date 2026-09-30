@@ -350,6 +350,8 @@ def parser():
     p.add_argument('--gpu-a');p.add_argument('--gpu-b');p.add_argument('--limit-per-task',type=int,default=None,help='1..200; configure defaults to 200, later commands retain the frozen tranche')
     p.add_argument('--workers',type=int,default=4);p.add_argument('--train-samples',type=int)
     p.add_argument('--trainer',default='ruler13-v1');p.add_argument('--seed',type=int,default=42);p.add_argument('--policy-count',type=int,default=3)
+    p.add_argument('--action-scope',choices=('original','all'),default='all',help='Offline readers: original inventory or include the completed 5/10 extension')
+    p.add_argument('--evaluation',choices=('heldout','training'),default='heldout',help='Train/test: held-out split, or fit and evaluate on exactly the same complete samples')
     p.add_argument('--mode',choices=('offline',),default='offline')
     p.add_argument('--inference',action='store_true',help=argparse.SUPPRESS)
     return p
@@ -374,18 +376,19 @@ def main():
     elif a.command in ('train','replay','test','snapshot'):
         from runner.corpus_training_data import open_corpus
         requested_tree=load(a.tree) if a.command in ('test','snapshot') and a.tree else None
-        corpus=open_corpus(a.root,a.prepared,tree=requested_tree)
+        corpus=open_corpus(a.root,a.prepared,tree=requested_tree,action_scope=a.action_scope)
         if corpus.protocol['kind']!='collection' or corpus.protocol['dataset']!='ruler':raise ValueError('Training/offline replay only accepts RULER corpus collections')
         if a.command=='train':
             from runner.corpus_train import train
-            result=train(corpus,a.train_samples,a.output,a.seed,a.trainer,a.policy_count)
+            result=train(corpus,a.train_samples,a.output,a.seed,a.trainer,a.policy_count,
+                         action_scope=a.action_scope,evaluation=a.evaluation)
         elif a.command=='replay':
             from runner.corpus_eval import replay
             result=replay(corpus,[json.loads(line) for line in a.decisions.read_text().splitlines()],a.output)
         elif a.command=='test':
             from runner.corpus_eval import test_tree
             snapshot=json.loads(a.evaluation_snapshot.read_text()) if a.evaluation_snapshot else None
-            result=test_tree(corpus,load(a.tree),a.output,snapshot)
+            result=test_tree(corpus,load(a.tree),a.output,snapshot,evaluation=a.evaluation)
         else:
             result=corpus.snapshot()
             if a.tree:
