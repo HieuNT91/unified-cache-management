@@ -15,17 +15,22 @@ from runner.setups import (atomic_json, file_hash, fingerprint, manifest_entries
                            check_environment, start_engine, retirement, runtime_identity)
 
 
-def configurations(percentages=(1,5,10,15,20,30), layers=(11,12,13,14,15), skip_selective=False):
+def configurations(percentages=(1,5,10,15,20,30), layers=(11,12,13,14,15), skip_selective=False, num_layers=64):
     if not percentages or len(set(percentages)) != len(percentages) or any(
             type(p) is not int or not 0 < p <= 100 for p in percentages):
         raise ValueError("Ratios must be distinct integer percentages in [1,100]")
     from ucm.sparse.prophetkv.layers import resolve_layers
-    selected = list(resolve_layers("selective_prophetkv", layers))
+    selected = list(resolve_layers("selective_prophetkv", layers, None, num_layers))
     return [dict(name='baseline', method='baseline', ratio=None, layers=None)] + [
         dict(name=f'{name}-{pct}', method=method, ratio=pct/100, layers=layers)
         for name, method, layers in [('prophetkv', 'prophetkv', None),
             ('selective', 'selective_prophetkv', selected)]
         for pct in percentages if not (skip_selective and method == 'selective_prophetkv')]
+
+
+def sweep_configs(args):
+    return configurations(getattr(args, 'percentages', (1,5,10,15,20,30)), getattr(args, 'layers', (11,12,13,14,15)),
+                          getattr(args, 'no_selective', False), getattr(args, 'num_layers', 64))
 
 
 class SharedReporter:
@@ -124,7 +129,9 @@ class PromptCache:
 
 def load_inputs(args):
     from run import check_model
-    check_model(args.model)
+    from runner.profiles import PROFILES
+    args.profile = check_model(args.model)
+    args.num_layers = PROFILES[args.profile]['num_hidden_layers']
     rows = manifest_entries(args.manifest)
     expected, selected, hashes = [], [], []
     config_hash = file_hash(args.model/'config.json')
@@ -139,7 +146,7 @@ def load_inputs(args):
         if index % args.shards != args.shard:
             continue
         sample = json.loads(path.read_text())
-        validate_sample(sample, 4096, getattr(args, 'context_length', 114688))
+        validate_sample(sample, 4096, getattr(args, 'context_length', 114688), PROFILES[args.profile]['window'])
         exact = getattr(args, 'exact_input_tokens', None)
         if exact is not None and len(sample['token_ids']) != exact:
             raise ValueError(f'Expected exactly {exact} formatted input tokens')
@@ -149,8 +156,7 @@ def load_inputs(args):
     if not selected:
         raise ValueError('Empty prompt shard')
     args.identity_spec = dict(inputs=hashes, manifest=file_hash(args.manifest), model=config_hash,
-                                runtime=runtime_identity(), tp=args.tp, configs=configurations(getattr(args, 'percentages', (1,5,10,15,20,30)),
-                                getattr(args, 'layers', (11,12,13,14,15))),
+                                runtime=runtime_identity(), tp=args.tp, configs=sweep_configs(args),
                                 context_length=getattr(args, 'context_length', 114688),
                                 exact_input_tokens=getattr(args, 'exact_input_tokens', None))
     return expected, selected, fingerprint(args.identity_spec)
@@ -167,10 +173,11 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
     from runner.worker import setup, arm, drain, configure
     from ucm.sparse.prophetkv.layers import resolve_layers
     cached = configs[0]['method'] != 'baseline'
+    num_layers = getattr(args, 'num_layers', 64)
     sample = selected[0][2]
     cfg = engine_config(args.model, configs[0]['method'], configs[0]['ratio'] or .2,
         tp=args.tp, memory=args.memory, cache_dir=cache,
-        end_token=sample['token_ids'][sample['boundaries'][1]-1])
+        end_token=sample['token_ids'][sample['boundaries'][1]-1], profile=getattr(args, 'profile', 'qwen3-32b'))
     if cached:
         cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts'] = {
             f'prompt-{index}': sample['boundaries'] for index, _, sample in selected}
@@ -206,7 +213,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                 atomic_json(group/'construction'/f'{index:06d}.json', construction)
             for config in pending:
                 method, ratio = config['method'], config['ratio']
-                scoring = resolve_layers(method,config['layers']) if cached else ()
+                scoring = resolve_layers(method,config['layers'],None,num_layers) if cached else ()
                 if cached:
                     replies = llm.collective_rpc(configure, kwargs=dict(method=method, ratio=ratio, layers=config['layers']))
                     wanted = dict(method=method, ratio=ratio, scoring_layers=list(scoring))
@@ -242,7 +249,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                 timings.update(ttft_seconds=ttft,generation_seconds=elapsed)
                 started = time.perf_counter()
                 diagnostics = llm.collective_rpc(drain)
-                verify_diagnostics(diagnostics,sample,method,ratio,args.tp,scoring)
+                verify_diagnostics(diagnostics,sample,method,ratio,args.tp,scoring,num_layers)
                 if not cached and result.num_cached_tokens != 0:
                     raise RuntimeError('Baseline reused cached tokens')
                 output_dir = args.output/config['name']/f'{index:06d}'
@@ -310,7 +317,7 @@ def _run_sweep(args):
     args.model, args.output = args.model.resolve(), args.output.resolve()
     expected, selected, identity = load_inputs(args)
     cache = args.cache_root.resolve()/f'sweep-{uuid.uuid4().hex}'
-    configs = configurations(args.percentages, args.layers)
+    configs = sweep_configs(args)
     resume = getattr(args, 'resume', False)
     if resume != getattr(args, 'skip_selective', False):
         raise ValueError('Use --resume and --skip-selective together for a ProphetKV continuation')
@@ -326,9 +333,10 @@ def _run_sweep(args):
                                      for i, _, _ in selected for c in configs),
             cache_policy='construct one prompt, reuse all cached methods, retire and delete',
             max_retained_context_tokens=max(s['boundaries'][-2] for _,_,s in selected),
-            baseline=engine_config(args.model,'baseline',tp=args.tp,memory=args.memory),
+            baseline=engine_config(args.model,'baseline',tp=args.tp,memory=args.memory,profile=args.profile),
             cached=engine_config(args.model,'prophetkv',tp=args.tp,memory=args.memory,
-                cache_dir=cache,end_token=selected[0][2]['token_ids'][selected[0][2]['boundaries'][1]-1])),indent=2))
+                cache_dir=cache,end_token=selected[0][2]['token_ids'][selected[0][2]['boundaries'][1]-1],
+                profile=args.profile)),indent=2))
         return
     devices = check_environment(args.tp)
     group.mkdir(parents=True,exist_ok=False)  # no ambiguous resume or duplicate group
@@ -338,7 +346,7 @@ def _run_sweep(args):
         prompt_ids=[e['id'] for _,e,_ in selected],configurations=configs,shard=args.shard,shards=args.shards))
     reporters = {c['name']:SharedReporter(report_root/c['name'],expected,
         dict(method=c['method'],ratio=c['ratio'],
-             scoring_layers=(c['layers'] or list(range(64))) if c['method'] != 'baseline' else [],
+             scoring_layers=(c['layers'] or list(range(args.num_layers))) if c['method'] != 'baseline' else [],
              sweep_fingerprint=identity,
              cache_policy='temporary per prompt; construction excluded from TTFT'),args.shard,args.shards)
         for c in configs}
@@ -378,6 +386,8 @@ def main():
     parser.add_argument('--dry-run',action='store_true')
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--skip-selective',action='store_true')
+    parser.add_argument('--no-selective',action='store_true',
+                        help='Run baseline and all-layer ProphetKV only (no resume semantics)')
     run_sweep(parser.parse_args())
 
 

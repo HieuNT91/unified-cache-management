@@ -25,10 +25,13 @@ class Worker(BaseWorker):
                 starttime = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
                 atomic_json(root / 'owners' / f'{pid}.json', dict(pid=pid, starttime=starttime))
         super().load_model()
-        from runner.rope_window import ensure_rope_window
+        from runner.profiles import profile_of
+        from runner.rope_window import ensure_rope_window, ensure_native_rope
         model = self.model_runner.model.model
-        if model.__class__.__name__ != 'Qwen3Model' or len(model.layers) != 64:
-            raise RuntimeError('Expected Qwen3-32B with 64 decoder layers')
+        hf_config = self.vllm_config.model_config.hf_config
+        _, spec = profile_of(hf_config)
+        if model.__class__.__name__ != 'Qwen3Model' or len(model.layers) != spec['num_hidden_layers']:
+            raise RuntimeError(f"Expected Qwen3 with {spec['num_hidden_layers']} decoder layers")
         tile = getattr(self.vllm_config.model_config.hf_config, 'ucm_activation_tile', None)
         if tile is None and self.vllm_config.cache_config.num_gpu_blocks_override == 1031:
             tile = 4096  # preserve the frozen router profile
@@ -37,8 +40,12 @@ class Worker(BaseWorker):
                 raise ValueError('Router activation tile must be 4096')
             from runner.router_tiles import install_tiles
             install_tiles(model, tile)
-        self.rope_audits = [ensure_rope_window(layer.self_attn.rotary_emb, 131072)
-                            for layer in model.layers]
+        if spec['rope'] is None:
+            self.rope_audits = [ensure_native_rope(layer.self_attn.rotary_emb, spec['max_position_embeddings'])
+                                for layer in model.layers]
+        else:
+            self.rope_audits = [ensure_rope_window(layer.self_attn.rotary_emb, 131072)
+                                for layer in model.layers]
 
 
 def setup(worker):
@@ -83,7 +90,8 @@ def configure(worker, method, ratio, layers=None):
     if worker.model_runner.requests or worker.model_runner.input_batch.req_id_to_index:
         raise RuntimeError('Worker request bookkeeping remains before policy change')
     return dict(rank=get_tensor_model_parallel_rank(),
-                **configure_sparse(get_ucm_sparse(), method, ratio, layers))
+                **configure_sparse(get_ucm_sparse(), method, ratio, layers,
+                                   len(worker.model_runner.model.model.layers)))
 
 
 def router_mode(worker, request_id, action, capture=False):

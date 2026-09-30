@@ -1,5 +1,6 @@
 """Shared clean method configuration; importable without CUDA."""
 from ucm.sparse.prophetkv.layers import resolve_layers
+from runner.profiles import PROFILES
 
 METHODS = ('baseline', 'prophetkv', 'selective_prophetkv', 'router')
 WINDOW = 131072
@@ -9,7 +10,8 @@ VERSIONS = {'vllm': '0.9.2', 'torch': '2.7.0', 'transformers': '4.53.2', 'uc-man
 
 
 def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
-                  memory=.9, cache_dir=None, end_token=None, persistent=None, router_policy=None, router_id="router1", router_profile=False):
+                  memory=.9, cache_dir=None, end_token=None, persistent=None, router_policy=None, router_id="router1", router_profile=False,
+                  profile='qwen3-32b'):
     if method not in METHODS:
         raise ValueError('Unknown method')
     if method == 'router':
@@ -28,22 +30,27 @@ def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
         raise ValueError('Invalid ratio, tensor parallel size or memory utilization')
     if method == 'baseline' and (layers is not None or count is not None):
         raise ValueError('Baseline has no scoring layers')
+    spec = PROFILES[profile]
+    if router_profile and profile != 'qwen3-32b':
+        raise ValueError('Frozen router policies exist only for Qwen3-32B')
     cfg = dict(model=str(model), tokenizer=str(model), dtype='bfloat16',
-               max_model_len=WINDOW, max_num_batched_tokens=PREFILL_BUDGET,
+               max_model_len=spec['window'], max_num_batched_tokens=PREFILL_BUDGET,
                enable_chunked_prefill=True, enable_prefix_caching=False,
                enforce_eager=True, max_num_seqs=1, block_size=64,
                tensor_parallel_size=tp, distributed_executor_backend='mp',
                disable_custom_all_reduce=True, gpu_memory_utilization=memory,
                generation_config='vllm', seed=0, quantization=None,
-               cpu_offload_gb=0, swap_space=0, rope_scaling=dict(ROPE),
+               cpu_offload_gb=0, swap_space=0,
                worker_cls='runner.worker.Worker')
+    if spec['rope'] is not None:
+        cfg['rope_scaling'] = dict(spec['rope'])
     if router_profile:
         if tp != 4:
             raise ValueError('Frozen router profile requires TP4')
         cfg.update(max_model_len=65920, num_gpu_blocks_override=1031,
                    hf_overrides={'max_position_embeddings':32768})
     if method != 'baseline':
-        selected = resolve_layers(method, layers, count)
+        selected = resolve_layers(method, layers, count, spec['num_hidden_layers'])
         if cache_dir is None or type(end_token) is not int:
             raise ValueError('Cached methods require a cache directory and delimiter')
         sparse = dict(method='prophetkv' if method == 'router' else method, ratio=ratio, chunk_end_token_id=end_token,
@@ -69,7 +76,7 @@ def validate_preparation(kv_chunk_size=4096, context_length=WINDOW):
         raise ValueError('context-length must be from 1 to 131072')
 
 
-def validate_sample(sample, kv_chunk_size=4096, context_length=WINDOW):
+def validate_sample(sample, kv_chunk_size=4096, context_length=WINDOW, window=WINDOW):
     validate_preparation(kv_chunk_size, context_length)
     ids, bounds, question = sample['token_ids'], sample['boundaries'], sample['question_positions']
     if not ids or any(type(t) is not int or t < 0 for t in ids):
@@ -101,8 +108,8 @@ def validate_sample(sample, kv_chunk_size=4096, context_length=WINDOW):
     if len(ids) > context_length:
         raise ValueError('Formatted prompt exceeds context-length; truncation is forbidden')
     budget = sample['max_output_tokens']
-    if type(budget) is not int or not 1 <= budget <= 16384 or len(ids) + budget > WINDOW:
-        raise ValueError('Prompt plus output exceeds the 131072-token window')
+    if type(budget) is not int or not 1 <= budget <= 16384 or len(ids) + budget > window:
+        raise ValueError(f'Prompt plus output exceeds the {window}-token window')
     if type(sample['thinking']) is not bool:
         raise ValueError('thinking must be boolean')
     return sample

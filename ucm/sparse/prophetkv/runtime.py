@@ -47,7 +47,8 @@ def setup(worker):
     if not has_ucm_sparse():return {'baseline':True}
     sparse=get_ucm_sparse()
     model=worker.model_runner.model.model
-    if model.__class__.__name__!='Qwen3Model' or len(model.layers)!=64:
+    if (model.__class__.__name__!='Qwen3Model' or
+            len(model.layers)!=worker.vllm_config.model_config.hf_config.num_hidden_layers):
         raise RuntimeError('Model must be an unpartitioned Qwen3 decoder (TP supported; PP unsupported)')
     sparse.model=model
     group=get_kv_transfer_group()

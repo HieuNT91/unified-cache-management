@@ -20,8 +20,8 @@ class TemporaryStore(TrackedStore):
         return super().dump_data(*args, **kwargs)
 
 
-def configure_sparse(sparse, method, ratio, layers=None):
-    selected = resolve_layers(method, layers)
+def configure_sparse(sparse, method, ratio, layers=None, num_layers=64):
+    selected = resolve_layers(method, layers, None, num_layers)
     if not 0 <= ratio <= 1:
         raise ValueError('Invalid ratio')
     if (sparse.request_state.pending is not None or getattr(sparse, 'request', None) is not None

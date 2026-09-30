@@ -24,11 +24,9 @@ def digest(path):
 
 
 def check_model(path):
-    cfg = json.loads((path / 'config.json').read_text())
-    if (cfg.get('model_type'), cfg.get('num_hidden_layers'), cfg.get('hidden_size')) != ('qwen3', 64, 5120):
-        raise ValueError('Use a local Qwen3-32B checkpoint')
-    if cfg.get('quantization_config'):
-        raise ValueError('Use the unquantized BF16 checkpoint')
+    """Return the supported profile name (Qwen3-32B is the official one)."""
+    from runner.profiles import model_profile
+    return model_profile(path)[0]
 
 
 def tokenize_sample(args, tokenizer=None):
@@ -103,7 +101,7 @@ def generate(engine, tokens, budget, request_id, thinking=False):
     return result, first, time.perf_counter() - started
 
 
-def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers):
+def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, num_layers=64):
     """Independent CPU replay of each TP rank's global scores and layer sets."""
     import math
     if sorted(w['rank'] for w in workers) != list(range(tp)):
@@ -142,20 +140,20 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers):
         count = math.floor(len(scores) * ratio)
         reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
         if (event['selected_positions'] != reference or event['scoring_layers'] != list(expected_layers)
-                or event['fusion'] != 'mean_layers_fp32' or event['alignment_count'] != 64):
+                or event['fusion'] != 'mean_layers_fp32' or event['alignment_count'] != num_layers):
             raise RuntimeError('Selection replay, mean or cache alignment mismatch')
         if common is not None and common != reference:
             raise RuntimeError('TP ranks disagree on selected positions')
         common = reference
         layers = [e for e in events if e['kind'] == 'layer_counts']
-        expected = {f'model.layers.{i}.self_attn.attn' for i in range(64)}
+        expected = {f'model.layers.{i}.self_attn.attn' for i in range(num_layers)}
         required = reference + list(range(end, sample['boundaries'][-1]))
-        if len(layers) != 64 * len(steps):
+        if len(layers) != num_layers * len(steps):
             raise RuntimeError('Missing all-layer selected-set verification')
         for step in steps:
             subset = [p for p in required if step['start'] <= p < step['end']]
             entries = [e for e in layers if (e['start'], e['end']) == (step['start'], step['end'])]
-            if (len(entries) != 64 or {e['layer'] for e in entries} != expected
+            if (len(entries) != num_layers or {e['layer'] for e in entries} != expected
                     or step['recomputed_tokens'] != len(subset)):
                 raise RuntimeError('Missing layer or incorrect per-step token count')
             for entry in entries:
@@ -167,17 +165,19 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers):
 
 def run(args):
     from importlib.metadata import version
-    check_model(args.model)
+    from runner.profiles import PROFILES
+    profile = check_model(args.model)
+    spec = PROFILES[profile]
     sample = json.loads(args.input.read_text())
     if args.max_output_tokens is not None:
         sample['max_output_tokens'] = args.max_output_tokens
-    validate_sample(sample)
+    validate_sample(sample, window=spec['window'])
     if sample['model_config_sha256'] != digest(args.model / 'config.json'):
         raise ValueError('Input was prepared with a different model configuration')
     cfg = engine_config(args.model, args.method, args.ratio, args.layers, args.num_layers,
         args.tp, args.memory, args.output.resolve() / 'cache',
         sample['token_ids'][sample['boundaries'][1] - 1],
-        router_policy=args.router_policy, router_id=args.router_id)
+        router_policy=args.router_policy, router_id=args.router_id, profile=profile)
     if args.method == 'router':
         from runner.router_measure import validate_profile
         validate_profile(sample,args.tp)
@@ -264,12 +264,14 @@ def run(args):
         timings.update(ttft_seconds=ttft, generation_seconds=elapsed)
         started = time.perf_counter()
         diagnostics = llm.collective_rpc(drain)
-        scoring_layers = resolve_layers(args.method, args.layers, args.num_layers) if cached else ()
+        scoring_layers = resolve_layers(args.method, args.layers, args.num_layers,
+                                        spec['num_hidden_layers']) if cached else ()
         if routing:
             from runner.router_measure import validate_answer
             validate_answer(llm,diagnostics,result,sample,routing,args.tp)
         else:
-            verify_diagnostics(diagnostics, sample, args.method, args.ratio, args.tp, scoring_layers)
+            verify_diagnostics(diagnostics, sample, args.method, args.ratio, args.tp, scoring_layers,
+                               spec['num_hidden_layers'])
         if not cached and result.num_cached_tokens != 0:
             raise RuntimeError('Baseline reused cached tokens')
         after = {str(p.relative_to(cache)): (p.stat().st_size, p.stat().st_mtime_ns)

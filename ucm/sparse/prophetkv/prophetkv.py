@@ -14,7 +14,9 @@ class ProphetKV(Blend):
         super().__init__(config,role)
         self.method=self.blend_config.get('method','prophetkv')
         self.ratio=self.blend_config.get('ratio',.2)
-        self.scoring_layers=resolve_layers(self.method, self.blend_config.get('scoring_layers'), self.blend_config.get('num_scoring_layers'))
+        self.num_layers=config.model_config.hf_config.num_hidden_layers
+        self.scoring_layers=resolve_layers(self.method, self.blend_config.get('scoring_layers'), self.blend_config.get('num_scoring_layers'),
+                                           self.num_layers)
         if not 0 <= self.ratio <= 1: raise ValueError('ratio must be in [0, 1]')
         self.audit=self.blend_config.get('component_audit',False)
         self.request_state=RequestState()
@@ -115,7 +117,7 @@ class ProphetKV(Blend):
             prefill_complete=self.step_end==self.request.boundaries[-1]))
         if not expected:
             # Explicitly record all empty layer sets without invoking QKV/FFN.
-            for i in range(64):
+            for i in range(getattr(self,'num_layers',64)):
                 self.record_layer(f'model.layers.{i}.self_attn.attn',self.step_positions)
         return mask
 
