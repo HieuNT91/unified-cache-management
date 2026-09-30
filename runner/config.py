@@ -62,7 +62,9 @@ def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
             kv_role='kv_both', kv_connector_extra_config=dict(
                 ucm_connectors=[dict(ucm_connector_name='UcmNfsStore',
                     ucm_connector_config=dict(storage_backends=str(cache_dir),
-                        use_direct=False, timeout_ms=120000))],
+                        use_direct=False, timeout_ms=120000,
+                        **({'buffer_number': spec['transfer_buffer_number']}
+                           if 'transfer_buffer_number' in spec else {})))],
                 ucm_sparse_config={'ProphetKV': sparse, 'Blend': sparse}))
     if persistent is not None and method != 'baseline':
         cfg['kv_transfer_config']['kv_connector_extra_config']['persistent_setup'] = persistent

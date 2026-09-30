@@ -11,8 +11,11 @@ from pathlib import Path
 PROFILES = {
     'qwen3-32b': dict(num_hidden_layers=64, hidden_size=5120, window=131072,
                       rope=dict(rope_type='yarn', factor=4.0, original_max_position_embeddings=32768)),
+    # 1152 pinned 9 MiB transfer buffers (10.1 GiB/process) hold one full
+    # 64K-context load; the UCM default of 4096 pins 36 GiB per process.
     'qwen3-4b-instruct-2507': dict(num_hidden_layers=36, hidden_size=2560, window=73728,
-                                   max_position_embeddings=262144, rope=None),
+                                   max_position_embeddings=262144, rope=None,
+                                   transfer_buffer_number=1152),
 }
 
 
