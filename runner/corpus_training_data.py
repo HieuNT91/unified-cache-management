@@ -9,37 +9,109 @@ from runner.setups import file_hash
 from scripts.corpus_add_ratios import EXTRA, STATE, Extension, combined_actions
 
 
+def normalize_action_scope(value):
+    """Accept named scopes or explicit IDs/percentages; always retain dense fallback."""
+    values=[value] if isinstance(value,str) else list(value)
+    tokens=[token.strip() for item in values for token in item.split(',') if token.strip()]
+    if len(tokens)==1 and tokens[0] in ('all','original'):return tokens[0]
+    if not tokens or any(t in ('all','original') for t in tokens):
+        raise ValueError('Use all, original, or individual actions; do not mix named scopes with actions')
+    selected={'nocache'}
+    for token in tokens:
+        value=token.rstrip('%')
+        selected.add('prophetkv-'+str(int(value)) if value.isdigit() else token)
+    if selected=={'nocache'}:raise ValueError('Select at least one sparse action; nocache is retained automatically')
+    return tuple(sorted(selected))
+
+
+def select_actions(corpus,scope):
+    if isinstance(scope,str):return corpus
+    unknown=set(scope)-set(corpus.actions)
+    if unknown:raise ValueError('Actions absent from corpus inventory: '+', '.join(sorted(unknown)))
+    return SelectedCorpus(corpus,scope)
+
+
 def open_corpus(root, prepared=None, tree=None, action_scope='all', skip_validation=False):
-    """Default to all collected actions; old trees keep their original evidence."""
+    """Open the chosen inventory without rewriting collection protocols or receipts."""
+    scope=normalize_action_scope(action_scope)
+    root=Path(root)
+    # An exported subset tree carries its inventory; default testing inherits it.
+    if scope=='all' and tree is not None:
+        scope=normalize_action_scope([a['id'] for a in tree['actions']])
+    base_scope=scope if isinstance(scope,str) else 'all'
+    if not isinstance(scope,str):
+        original=json.loads((root/'protocol.json').read_text())
+        if set(scope)<=set(a['id'] for a in original['actions']):base_scope='original'
     if skip_validation:
         from runner.corpus_unchecked import UncheckedCorpus
-        return UncheckedCorpus(root, prepared, action_scope, tree)
-    root = Path(root)
-    if action_scope not in ('original', 'all'):
-        raise ValueError('Unknown action scope')
-    if action_scope == 'all' and (root/STATE).exists():
-        original = json.loads((root/'protocol.json').read_text())
-        if (tree is not None and tree['actions'] == original['actions'] and
-                tree['provenance']['corpus_protocol_sha256'] == protocol_identity(original)):
-            return Corpus(root, prepared)
-        return ExtendedCorpus(root, prepared)
-    return Corpus(root, prepared)
+        corpus=UncheckedCorpus(root,prepared,base_scope)
+    elif base_scope=='all' and (root/STATE).exists():
+        corpus=ExtendedCorpus(root,prepared)
+    else:
+        corpus=Corpus(root,prepared)
+    return select_actions(corpus,scope)
 
 
 def training_view(corpus, action_scope='all'):
-    # Also cover direct Python calls to train(Corpus(...), ...).
+    scope=normalize_action_scope(action_scope)
+    if isinstance(corpus,SelectedCorpus):
+        if corpus.action_scope==scope:return corpus
+        return open_corpus(corpus.root,corpus.prepared,action_scope=scope,
+                           skip_validation=getattr(corpus,'skip_validation',False))
+    if not isinstance(scope,str):
+        if isinstance(corpus,ExtendedCorpus) or getattr(corpus,'source',None)=='add5-10-saved-records':
+            return open_corpus(corpus.root,corpus.prepared,action_scope=scope,
+                               skip_validation=getattr(corpus,'skip_validation',False))
+        # Direct callers may have supplied an original reader for added actions.
+        if not set(scope)<=set(corpus.actions):
+            return open_corpus(corpus.root,corpus.prepared,action_scope=scope,
+                               skip_validation=getattr(corpus,'skip_validation',False))
+        return select_actions(corpus,scope)
     if getattr(corpus, 'skip_validation', False):
-        if corpus.action_scope == action_scope:
-            return corpus
-        from runner.corpus_unchecked import UncheckedCorpus
-        return UncheckedCorpus(corpus.root, corpus.prepared, action_scope)
-    if action_scope == 'original':
+        if corpus.action_scope == scope:return corpus
+        return open_corpus(corpus.root,corpus.prepared,action_scope=scope,skip_validation=True)
+    if scope == 'original':
         return Corpus(corpus.root, corpus.prepared) if isinstance(corpus, ExtendedCorpus) else corpus
-    if action_scope != 'all':
-        raise ValueError('Unknown action scope')
     if not isinstance(corpus, ExtendedCorpus) and (Path(corpus.root)/STATE).exists():
         return ExtendedCorpus(corpus.root, getattr(corpus, 'prepared', None))
     return corpus
+
+
+class SelectedCorpus(Corpus):
+    """Read-only subset; underlying readers retain original acceptance identities."""
+    def __init__(self,source,scope):
+        self._source=source
+        self.action_scope=scope
+        self.actions={name:value for name,value in source.actions.items() if name in scope}
+        self.protocol=dict(source.protocol,actions=list(self.actions.values()))
+        self.root=source.root
+        self.prepared=source.prepared
+        self.rows=source.rows
+
+    def __getattr__(self,name):
+        return getattr(self._source,name)
+
+    def inputs(self,prompt_id):return self._source.inputs(prompt_id)
+    def probe(self,prompt_id):return self._source.probe(prompt_id)
+    def features(self,prompt_id):return self._source.features(prompt_id)
+    def attention(self,prompt_id):return self._source.attention(prompt_id)
+
+    def outcome(self,prompt_id,action):
+        if action not in self.actions:raise ValueError('Action excluded by action-scope: '+action)
+        return self._source.outcome(prompt_id,action)
+
+    def snapshot(self):
+        if self.actions==self._source.actions:
+            result=self._source.snapshot()
+        elif getattr(self,'skip_validation',False):
+            from runner.corpus_unchecked import UncheckedCorpus
+            result=UncheckedCorpus.snapshot(self)
+        else:
+            result=Corpus.snapshot(self)
+            if isinstance(self._source,ExtendedCorpus):
+                result.update(source='completed-add5-10-extension',metadata_hashes=dict(self._source.metadata_hashes))
+        result['action_scope']=list(self.actions)
+        return result
 
 
 class ExtendedCorpus(Corpus):

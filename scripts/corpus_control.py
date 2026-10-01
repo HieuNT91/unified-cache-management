@@ -354,7 +354,7 @@ def parser():
     p.add_argument('--accuracy-weight',type=float,default=None,help='Train: nonnegative loss weight; 0 favors TTFT, larger favors accuracy; omitted retains legacy selection')
     p.add_argument('--selection-objective',choices=('legacy','min-budget','min-ttft'),default='legacy',help='Train: rank by budget or TTFT subject only to the OOF accuracy-loss limit')
     p.add_argument('--max-accuracy-loss-pp',type=float,default=2.,help='Train: allowed OOF macro accuracy loss in percentage points (default 2)')
-    p.add_argument('--action-scope',choices=('original','all'),default='all',help='Offline readers: original inventory or include the completed 5/10 extension')
+    p.add_argument('--action-scope',nargs='+',default='all',help='Offline: all, original, or selected actions (e.g. nocache prophetkv-1 prophetkv-5); percentages also accepted; nocache always retained')
     p.add_argument('--evaluation',choices=('heldout','training'),default='heldout',help='Train/test: held-out split, or fit and evaluate on exactly the same complete samples')
     p.add_argument('--skip-validation',action='store_true',help='Offline only: trust saved features/results; skip artifact hashing and attention replay')
     p.add_argument('--mode',choices=('offline',),default='offline')

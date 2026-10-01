@@ -253,6 +253,54 @@ budget are also included. A 5pp limit allows more loss but does not guarantee th
 the final refitted tree will choose a lower budget. Both final reports evaluate
 on the training samples; they are not independent held-out performance results.
 
+## Choose the available routing actions
+
+`--action-scope` accepts `all` (default), `original`, or individual actions:
+
+```bash
+# All collected actions, including completed 5%/10% additions:
+--action-scope all
+
+# Restrict sparse choices to 1%, 5%, and 10%:
+--action-scope nocache prophetkv-1 prophetkv-5 prophetkv-10
+
+# Equivalent shorthand (commas and percentage suffixes also work):
+--action-scope 1 5 10
+--action-scope 1,5,10
+```
+
+Nocache is always retained for baseline comparisons and missing-feature fallback.
+Choose at least one sparse action. Unknown/uncollected action IDs fail explicitly;
+do not mix `all` or `original` with individual choices. Actions are ordered by
+the source inventory, so argument order does not alter tie handling. This changes
+the router's available actions, independently of `--policy-count`.
+
+Only the selected actions, nocache and a probe must be present for a sample to
+enter the subset snapshot. With `--skip-validation`, this also works while other
+budgets are unfinished. Fully validated readers retain the extension completion
+requirements when selecting added actions. Source protocols and accepted records
+remain unchanged; subset identities are saved in training artifacts. Standalone
+`test --tree ...` inherits that tree's selected inventory when scope is left at
+its default `all`; an explicit incompatible scope is rejected.
+
+For the same 120/task training evaluation, favor only the three smallest budgets:
+
+```bash
+export OUT="/data/jh/unified-cache-management/router-actions-1-5-10-$(date +%Y%m%d-%H%M%S)"
+bash "$CODE/scripts/ruler_corpus.sh" train --skip-validation \
+  --action-scope 1 5 10 \
+  --evaluation training --train-samples 1560 \
+  --trainer ruler13-v1 --seed 42 --policy-count 3 \
+  --depths 1 2 3 4 5 \
+  --selection-objective min-budget --max-accuracy-loss-pp 2 \
+  --output "$OUT"
+cat "$OUT/summary.txt"
+```
+
+This retains nocache, so it encourages smaller sparse choices without forbidding
+dense fallback. If no candidate meets the accuracy limit, no ineligible policy
+is exported. The foreground launcher still loads `.env` and prints progress.
+
 ## Optional held-out split
 
 The default `--evaluation heldout` preserves the original split behavior. For
