@@ -140,7 +140,8 @@ sizes prevent them. Accepted depths are 1–32, default 1/2/3. Exported trees re
 their depth bound for offline testing and shared-tree inference. Existing frozen
 router policies are unchanged. Deeper trees can overfit and take longer to fit.
 
-`--accuracy-weight W` switches fitting and OOF ranking to a weighted cost:
+`--accuracy-weight W` with the default `--selection-objective legacy` switches
+fitting and OOF ranking to a weighted cost:
 
 ```text
 estimated router TTFT / fitting-fold median dense answer TTFT
@@ -187,6 +188,70 @@ This loads `.env` with exported-variable precedence, prints foreground progress,
 uses all available actions (including 5% and 10%), and reports offline results.
 All 13 tasks train one shared router per selected policy. Evaluation reuses the
 same 1560 training samples; it is not an independent held-out test.
+
+## Prefer lower budgets within an accuracy-loss limit
+
+Use `--selection-objective min-budget --max-accuracy-loss-pp 2` to favor sparse
+routing directly. It removes the 4× speedup gate for this selection mode:
+
+1. Keep only settings whose OOF task-macro accuracy loss versus nocache is at
+   most the specified number of percentage points.
+2. Minimize the sample-average selected budget, assigning nocache 100% and each
+   sparse action its actual ratio (1%, 5%, 10%, 20%, 40%, or another collected ratio).
+3. Break ties by estimated probe-inclusive TTFT, then higher macro accuracy,
+   shallower maximum depth, fewer leaves and setting order.
+
+Fitting uses cost trees with `budget_fraction + lambda * positive_accuracy_loss`.
+By default this mode searches lambda 0/.1/.25/.5/1/2/5/10/20/50/100, minimum leaf
+10/20, and penalties 0/.005/.02: 66 settings per depth. This gives the search
+aggressive sparse candidates without relying on measured latency being ordered
+by budget. `--accuracy-weight W` restricts lambda to W (six settings per depth),
+but the accuracy constraint and budget-first ranking still apply. Omit the weight
+for a broader search. All 13 tasks train shared policies; task IDs are not inputs.
+
+`--selection-objective min-ttft` instead minimizes estimated TTFT among settings
+within the same accuracy-loss limit. It also has no 4× speedup gate. Its default
+fitting grid remains the mixed loss/cost grid; an explicit accuracy weight selects
+cost trees only. `legacy` retains the earlier ranking, including its speedup gate
+when no explicit weight is provided.
+
+Nocache remains available, including the missing-feature fallback. No tree leaves
+are edited after fitting. If no candidate meets the accuracy constraint, training
+stops with an error instead of silently exporting an ineligible router. If fewer
+settings qualify than `--policy-count`, only the eligible settings are exported;
+the summary records requested and exported counts. Different OOF action vectors
+are preferred before filling additional policy slots. The constraint is an OOF
+selection criterion, not a guarantee for the final refit or future inputs.
+
+Compare 2pp and 5pp on your existing 120/task corpus, in the foreground:
+
+```bash
+cd "$CODE"
+git pull --ff-only origin prophetkv/clean-qwen3-32b-yarn4
+export PYTHON_BIN=/data/jh/envs/ucm/bin/python
+export EXPERIMENT_DIR=/data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20
+export PREPARED_DIR="$("$PYTHON_BIN" -c 'import json,sys; print(json.load(open(sys.argv[1]))["prepared"])' "$EXPERIMENT_DIR/protocol.json")"
+RUN_TAG="$(date +%Y%m%d-%H%M%S)"
+for LOSS_PP in 2 5; do
+  OUT="/data/jh/unified-cache-management/router-low-budget-${LOSS_PP}pp-${RUN_TAG}"
+  bash "$CODE/scripts/ruler_corpus.sh" train --skip-validation \
+    --action-scope all --evaluation training --train-samples 1560 \
+    --trainer ruler13-v1 --seed 42 --policy-count 3 \
+    --depths 1 2 3 4 5 \
+    --selection-objective min-budget --max-accuracy-loss-pp "$LOSS_PP" \
+    --output "$OUT"
+  if [ -f "$OUT/summary.txt" ]; then cat "$OUT/summary.txt"; fi
+done
+```
+
+Each run searches 330 settings. The wrapper loads `.env`; exports take precedence.
+There is no GPU inference or dataset revalidation with these commands. Progress
+and five-second heartbeats remain enabled. Compare `accuracy_loss_pp`, `actions`,
+`mean_selected_budget_percent`, `answer_ttft_seconds` and
+`estimated_router_ttft_seconds` in each summary. OOF action counts and average
+budget are also included. A 5pp limit allows more loss but does not guarantee that
+the final refitted tree will choose a lower budget. Both final reports evaluate
+on the training samples; they are not independent held-out performance results.
 
 ## Optional held-out split
 

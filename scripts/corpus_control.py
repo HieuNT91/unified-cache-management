@@ -352,6 +352,8 @@ def parser():
     p.add_argument('--trainer',default='ruler13-v1');p.add_argument('--seed',type=int,default=42);p.add_argument('--policy-count',type=int,default=3)
     p.add_argument('--depths',type=int,nargs='+',default=None,help='Train: maximum depths to search (1..32); default 1 2 3')
     p.add_argument('--accuracy-weight',type=float,default=None,help='Train: nonnegative loss weight; 0 favors TTFT, larger favors accuracy; omitted retains legacy selection')
+    p.add_argument('--selection-objective',choices=('legacy','min-budget','min-ttft'),default='legacy',help='Train: rank by budget or TTFT subject only to the OOF accuracy-loss limit')
+    p.add_argument('--max-accuracy-loss-pp',type=float,default=2.,help='Train: allowed OOF macro accuracy loss in percentage points (default 2)')
     p.add_argument('--action-scope',choices=('original','all'),default='all',help='Offline readers: original inventory or include the completed 5/10 extension')
     p.add_argument('--evaluation',choices=('heldout','training'),default='heldout',help='Train/test: held-out split, or fit and evaluate on exactly the same complete samples')
     p.add_argument('--skip-validation',action='store_true',help='Offline only: trust saved features/results; skip artifact hashing and attention replay')
@@ -396,7 +398,8 @@ def execute(a):
             from runner.corpus_train import train
             result=train(corpus,a.train_samples,a.output,a.seed,a.trainer,a.policy_count,
                          action_scope=a.action_scope,evaluation=a.evaluation,
-                         depths=a.depths,accuracy_weight=a.accuracy_weight)
+                         depths=a.depths,accuracy_weight=a.accuracy_weight,
+                         selection_objective=a.selection_objective,max_accuracy_loss_pp=a.max_accuracy_loss_pp)
         elif a.command=='replay':
             from runner.corpus_eval import replay
             result=replay(corpus,[json.loads(line) for line in a.decisions.read_text().splitlines()],a.output)
