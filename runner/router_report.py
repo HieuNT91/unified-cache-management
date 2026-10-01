@@ -60,14 +60,18 @@ def summarize(records, expected_rows):
     if probes!=len(expected)*3 or any(r['routing']['internal_tokens']!=1 for r in records if r.get('routing')):
         raise ValueError('Independent router probe count mismatch')
     return dict(primary='router1',answers=len(records),router_probes=probes,summaries=summaries,paired=paired,
-        policies=policies,caveat='Frozen 1300-prompt cohort only. Descriptive paired 95% bootstrap intervals. Training and clean A800 inference use different runtimes. No test-based refit, recalibration, or policy selection.')
+        policies=policies,caveat='Frozen original-input cohort only. Descriptive paired 95% bootstrap intervals. Training and clean A800 inference use different runtimes. No test-based refit, recalibration, or policy selection.')
 
 
 def metric_row(task,method,rows,dense,ci,speed_ci):
     import numpy as np
     times=[r['timings']['ttft_seconds'] for r in rows]
     base=statistics.mean(r['timings']['ttft_seconds'] for r in dense)
-    return dict(task=task,method=method,prompts=len(rows),score=statistics.mean(r['accuracy'] for r in rows),
+    from runner.reporting import ruler_preprocess
+    return dict(ruler_score=round(sum(r['accuracy'] for r in rows)/len(rows)*100,2),
+        ruler_nulls=(f"{sum(not ruler_preprocess(r['prediction']) for r in rows)}/{len(rows)}"
+                     if all('prediction' in r for r in rows) else None),
+        task=task,method=method,prompts=len(rows),score=statistics.mean(r['accuracy'] for r in rows),
         score_delta=statistics.mean(r['accuracy']-b['accuracy'] for r,b in zip(rows,dense)),paired_delta_ci95=ci,speedup_ci95=speed_ci,
         mean_total_ttft=statistics.mean(times),median_total_ttft=statistics.median(times),p95_total_ttft=float(np.percentile(times,95)),
         mean_answer_engine_ttft=statistics.mean(r['timings']['answer_engine_ttft_seconds'] for r in rows),
@@ -152,8 +156,8 @@ def finalize(root):
     records=[accepted(root,case,row,protocol) for case in CASES for row in rows]
     if any(r is None for r in records):raise ValueError('Incomplete accepted results')
     report=summarize(records,rows)
-    if report['answers']!=9100 or report['router_probes']!=3900:raise ValueError('Wrong final scope')
+    if report['answers']!=len(rows)*7 or report['router_probes']!=len(rows)*3:raise ValueError('Wrong final scope')
     folder=root/'final';publish(folder,report,records,load_policy(root/'trees.json'))
-    atomic_json(root/'final-validation.json',dict(complete=True,answers=9100,router_probes=3900,
+    atomic_json(root/'final-validation.json',dict(complete=True,answers=len(rows)*7,router_probes=len(rows)*3,
         owned_engines_exited=True,sha256={str(p.relative_to(root)):file_hash(p) for p in folder.iterdir() if p.is_file()}))
     return report

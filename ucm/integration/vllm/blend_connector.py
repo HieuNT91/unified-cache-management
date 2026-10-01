@@ -115,6 +115,7 @@ class BlendRequestDispatchMeta(RequestDispatchMeta):
     chunks_meta: List[ChunkMetaData]
     full_block_ids: tuple = ()
     continuing: bool = False
+    request_layout: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -135,7 +136,7 @@ class UCMBlendConnector(UCMDirectConnector):
         if "Blend" in ucm_sparse_config:
             blend_config = ucm_sparse_config["Blend"]
             self.enable_blend = True
-            self.chunk_end_token_id = blend_config["chunk_end_token_id"]
+
         else:
             raise "UCMBlendConnector init failed, please check your config"
 
@@ -150,78 +151,7 @@ class UCMBlendConnector(UCMDirectConnector):
         self.delta_rope_positions: torch.Tensor = None
 
     def _process_req(self, all_token_ids: List[int]):
-        """
-        pre-assumption, we explicitly construct block-padded chunk req to make it cached all tokens
-        beside chunk-build req, we try to split chunk from req, if no chunk exist, it just builds naive prefix cache
-        if chunk found, first we should match the prefix cache as much as possible, cause, they can be fully reused
-        then for other chunk blocks, if store hit num of block hash is less than threshold, we do not conduct cache blend
-        finally, if there are quite many chunk block-hits, we do cache blend to get TTFT-promot
-        """
-        chunks_meta = []
-        prefix_block_hashes = self.generate_hash(
-            self.block_size, all_token_ids, self._seed
-        )
-        if (
-            all_token_ids[-1] == self.chunk_end_token_id
-            and len(all_token_ids) % self.block_size == 0
-        ):
-            return (
-                BlendStage.BUILD_CHUNK_CACHE,
-                prefix_block_hashes,
-                chunks_meta,
-                [],
-            )
-
-        start_blk_idx = 0
-        start_token_dix = 0
-        req_chunks_hashes = []
-
-        for end_blk_idx, end_token_idx in enumerate(
-            range(self.block_size - 1, len(all_token_ids), self.block_size)
-        ):
-            # only compare the last token id in each blk to split chunk
-            # in future we should add chunk info as llm engine input,then pass them to schedule out
-            # but this will bring lots of modification to engine.
-            if all_token_ids[end_token_idx] == self.chunk_end_token_id:
-                chunk_token_ids = all_token_ids[start_token_dix : end_token_idx + 1]
-                chunk_blks_hash = self.generate_hash(
-                    self.block_size, chunk_token_ids, self._seed
-                )
-
-                chunk_blks_len = end_blk_idx - start_blk_idx + 1
-                chunk_tokens_len = chunk_blks_len * self.block_size
-
-                rag_chunk_meta = ChunkMetaData(
-                    start_token_dix=start_token_dix,
-                    chunk_tokens_len=chunk_tokens_len,
-                    start_blk_idx=start_blk_idx,
-                    chunk_blks_len=chunk_blks_len,
-                    chunk_blks_hash=chunk_blks_hash,
-                    cached_start_position=0,
-                )
-
-                # update for next rag chunk
-                start_blk_idx = end_blk_idx + 1
-                start_token_dix = end_token_idx + 1
-
-                chunks_meta.append(rag_chunk_meta)
-                req_chunks_hashes.extend(chunk_blks_hash)
-
-        if chunks_meta:
-            # found chunk, as for suffix part(such as user question about chunk), current no need to cache hit and dump
-            return (
-                BlendStage.CACHE_BLEND,
-                prefix_block_hashes,
-                chunks_meta,
-                req_chunks_hashes,
-            )
-        else:
-            return (
-                BlendStage.BUILD_PREFIX_CACHE,
-                prefix_block_hashes,
-                chunks_meta,
-                req_chunks_hashes,
-            )
+        raise RuntimeError('Explicit request layout required; delimiter discovery is unsupported')
 
     def _get_req_chunk_hit(
         self,

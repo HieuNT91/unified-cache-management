@@ -44,6 +44,20 @@ Verification checks idle devices, A800/L20 identity, model/runtime compatibility
 and per-rank memory for BF16 weights, full-position KV and an 8 GiB workspace
 reserve. Actual runtime allocation and initialization remain GPU acceptance gates.
 
+For an explicitly authorized local RTX 4500 Ada TP4 RULER collection, configure
+with `--hardware-profile rtx4500ada`. This freezes memory utilization at .95 and
+uses a 2.5 GiB per-rank workspace reserve, matching the validated local clean
+YaRN4/16K-prefill configuration. It retains BF16, KV65920/1031 blocks and 4096
+activation tiles. This profile rejects LongBench and different GPU models;
+the default server profile is unchanged. Keep a private frozen code copy for
+long collections so edits to the working checkout cannot change a running job.
+
+Probe records retain separate synchronization, generation, export, diagnostic,
+retirement/cache-check, attention-replay and feature-extraction timings. Their
+total routing overhead includes these steps. Post-generation all-rank audits
+also verify and record normalized unit-magnitude YaRN delta tables; these audits
+run outside measured routing/answer intervals.
+
 ## Prepare, configure, verify, collect
 
 Configure freezes the ordered inventory and deployment settings. Preparation first

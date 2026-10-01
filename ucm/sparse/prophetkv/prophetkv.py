@@ -48,6 +48,11 @@ class ProphetKV(Blend):
         if self.request_state.pending is not None:
             self.request=self.request_state.take(rid)
             b=self.request.boundaries
+            layout = getattr(dispatch, 'request_layout', None)
+            from runner.layout import validate_request_metadata
+            validate_request_metadata(layout, rid, list(worker_request.prompt_token_ids))
+            if layout['phase'] != 'read' or tuple(layout['boundaries']) != b or tuple(layout['question_positions']) != self.request.question_positions:
+                raise RuntimeError('Scheduler/worker request layouts disagree')
             if len(worker_request.prompt_token_ids)!=b[-1] or start!=b[1]:
                 raise RuntimeError('Cached request prefix/layout mismatch')
             chunks=[] if dispatch is None else dispatch.chunks_meta

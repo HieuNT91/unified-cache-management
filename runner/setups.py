@@ -1,4 +1,6 @@
 """Persistent prompt collections. CPU metadata code never imports a GPU runtime."""
+from runner.layout import sample_provenance
+from runner.reporting import scoring_text
 from contextlib import contextmanager
 import copy
 import fcntl
@@ -164,12 +166,12 @@ def preparation_identity(args, entries, previous=None):
         runtime=runtime_identity(), versions=VERSIONS, cache_format=CACHE_FORMAT,
         hash_protocol=HASH_PROTOCOL, tp=args.tp, dtype='bfloat16', rope=ROPE,
         window=WINDOW, kv_chunk_size=args.kv_chunk_size, context_length=args.context_length,
-        suffix_policy='complete-question-min256-v1', thinking=args.thinking,
+        suffix_policy='rpkv-original-question-min256-v1', thinking=args.thinking,
         block_size=64, prefill_budget=16384)
 
 
 def sample_identity(sample):
-    return {k: sample[k] for k in ('token_ids', 'boundaries', 'question_positions', 'thinking')}
+    return {k: sample[k] for k in ('token_ids', 'boundaries', 'question_positions', 'thinking', 'prompt_protocol', 'token_sha256')}
 
 
 def chunks_of(sample):
@@ -335,7 +337,7 @@ def construct_missing(root, descriptor, samples, missing, args, progress):
     cache = root / 'cache'
     cache.mkdir(exist_ok=True)
     cfg = engine_config(args.model, 'prophetkv', tp=args.tp, memory=args.memory,
-        cache_dir=cache, end_token=samples[0][1]['token_ids'][samples[0][1]['boundaries'][1]-1],
+        cache_dir=cache, end_token=None,
         persistent=persistent_config(root, descriptor, False))
     os.environ['PROPHETKV_SCHEDULER_RECEIPT'] = str(root / 'scheduler.json')
     started = time.perf_counter()
@@ -357,7 +359,7 @@ def construct_missing(root, descriptor, samples, missing, args, progress):
             except RuntimeError:
                 pass
             started = time.perf_counter()
-            generate(llm.llm_engine, tokens_by_id[cid], 1, namespace + ':populate-' + cid)
+            generate(llm.llm_engine, tokens_by_id[cid], 1, namespace + ':populate-' + cid, phase='populate')
             generation_seconds = time.perf_counter()-started
             ready = wait_for_cache(readiness, [tokens_by_id[cid]])
             started = time.perf_counter()
@@ -449,9 +451,6 @@ def prepare_collection(args, entries, preparation, write):
         if sample.get('model_config_sha256') != config_sha:
             raise ValueError('Prepared input uses another model configuration')
         samples.append(sample)
-    markers = {s['token_ids'][s['boundaries'][1]-1] for s in samples}
-    if len(markers) != 1:
-        raise ValueError('All prepared prompts must use the same chunk delimiter')
     identity = dict(preparation=preparation, prompts=[dict(id=row['id'], sample=fingerprint(sample_identity(sample)))
         for row, sample in zip(entries, samples)])
     fp = fingerprint(identity)
@@ -466,7 +465,7 @@ def prepare_collection(args, entries, preparation, write):
     root = args.output.resolve()
     if not write:
         cfg = engine_config(args.model, 'prophetkv', tp=args.tp, memory=args.memory,
-            cache_dir=root / 'cache', end_token=next(iter(markers)),
+            cache_dir=root / 'cache', end_token=None,
             persistent=persistent_config(root, descriptor, False))
         print(json.dumps(dict(fingerprint=fp, prompts=len(samples), chunks=len(inventory['chunks']),
             expected_kv_bytes=inventory['expected_bytes'], engine=cfg), indent=2))
@@ -496,16 +495,24 @@ def run_collection(args):
         inventory = json.loads((root / 'inventory.json').read_text())
         descriptor['inventory'] = inventory
         cached = args.method != 'baseline'
+        if cached:
+            from runner.layout import validate_layout
+            for _,sample in samples:
+                validate_layout(sample['token_ids'],sample['boundaries'],sample['question_positions'],sparse=True)
         layouts = {f'prompt-{i}': sample['boundaries'] for i, (_, sample) in enumerate(samples)}
         cfg = engine_config(model, args.method, args.ratio, args.layers, args.num_layers,
             tp, args.memory, root / 'cache',
-            samples[0][1]['token_ids'][samples[0][1]['boundaries'][1]-1],
+            None,
             persistent=persistent_config(root, descriptor, True, layouts) if cached else None,
             router_policy=getattr(args,'router_policy',None),router_id=getattr(args,'router_id','router1'))
         if args.method == 'router':
             from runner.router_measure import validate_profile
+            from runner.layout import validate_policy_protocol
+            from runner.router_policy import load_policy
+            policy=load_policy(args.router_policy)
             for _,sample in samples:
                 validate_profile(sample,tp)
+                validate_policy_protocol(policy,sample)
         if args.dry_run:
             print(json.dumps(dict(setup_fingerprint=descriptor['fingerprint'],
                 prompt_ids=[entry['id'] for entry, _ in samples], engine=cfg), indent=2))
@@ -562,7 +569,7 @@ def execute_collection(args, root, descriptor, samples, cfg, devices, receipt, r
                 sync_mode(llm,rid,'prophetkv-all64-1',tp)
             llm.collective_rpc(arm, kwargs=dict(request_id=rid, boundaries=sample['boundaries'],
                                                question_positions=sample['question_positions']))
-        return generate(llm.llm_engine, sample['token_ids'], budget, rid, thinking)
+        return generate(llm.llm_engine, sample['token_ids'], budget, rid, thinking, sample=sample)
 
     try:
         from runner.reporting import OutputAnalyzer, score_answer
@@ -628,9 +635,9 @@ def execute_collection(args, root, descriptor, samples, cfg, devices, receipt, r
             evaluation = entry.get('evaluation', evaluation_metadata(sample))
             reporting_started = time.perf_counter()
             output_metrics = analyzer.analyze(list(output.token_ids), sample['token_ids'], sample['thinking'])
-            accuracy = score_answer(output_metrics['answer_text'], evaluation)
+            accuracy = score_answer(scoring_text(output.text,output_metrics,evaluation), evaluation)
             timings['scoring_seconds'] = time.perf_counter()-reporting_started
-            record = dict(prompt_id=entry['id'], setup_fingerprint=descriptor['fingerprint'],
+            record = dict(**sample_provenance(sample),prompt_id=entry['id'], setup_fingerprint=descriptor['fingerprint'],
                 setup=str(root), construction_timings=str(root / receipt['preparation_timings']),
                 method=args.method, ratio=args.ratio if cached else None, scoring_layers=list(scoring),
                 input_sha256=entry['sha256'], model=cfg['model'], gpu_uuids=devices,

@@ -57,19 +57,29 @@ def read_rows(settings):
     return rows
 
 
+def model_artifact(root,name):
+    # User-selected local model snapshots legitimately symlink into HF blobs.
+    # Corpus artifacts still use the stricter resolved-path containment check.
+    name=Path(name)
+    if name.is_absolute() or '..' in name.parts or not name.parts:
+        raise ValueError('Expected a relative model artifact path')
+    return Path(root)/name
+
+
 def check_hardware(settings):
-    from runner.tree_profiles import PROFILES
+    from runner.tree_profiles import PROFILES,hardware_profile,allocation
+    profile=hardware_profile(settings.get('hardware_profile','server'),settings['dataset'])
     raw=subprocess.check_output(['nvidia-smi','--query-gpu=uuid,name,memory.total,memory.free','--format=csv,noheader,nounits'],text=True)
     inventory={r[0].strip():dict(name=r[1].strip(),total_mib=float(r[2]),free_mib=float(r[3])) for r in csv.reader(raw.splitlines())}
     requested=sum(settings['groups'],[])
     index=json.loads((Path(settings['model'])/'model.safetensors.index.json').read_text())
     weights=index['metadata']['total_size']/4
-    kv=PROFILES[settings['dataset']]['kv_tokens']*262144/4
+    kv=allocation(settings['dataset'],settings.get('hardware_profile','server'))['kv_tokens']*262144/4
     # Per-rank BF16 weights + full position KV + explicit activation/runtime reserve.
-    required=(weights+kv+8*2**30)/.9/2**20
+    required=(weights+kv+profile['workspace_gib']*2**30)/profile['memory']/2**20
     for gpu in requested:
         if gpu not in inventory:raise ValueError('Configured UUID is unavailable')
-        if not any(model in inventory[gpu]['name'] for model in ('A800','L20')):raise ValueError('This profile supports A800 and L20; qualify other hardware explicitly')
+        if not any(model in inventory[gpu]['name'] for model in profile['names']):raise ValueError('GPU does not match the explicit hardware profile')
         if inventory[gpu]['total_mib']<required or inventory[gpu]['free_mib']<required:
             raise ValueError(f'Profile cannot fit GPU {gpu}: requires at least {required:.0f} MiB; no precision/input shortening is applied')
     busy=subprocess.check_output(['nvidia-smi','--query-compute-apps=gpu_uuid','--format=csv,noheader'],text=True).splitlines()
@@ -80,11 +90,14 @@ def check_hardware(settings):
 
 def configure(a):
     if getattr(a,'inference',False) and not a.tree:raise ValueError('Inference configure requires a supplied --tree')
-    if not 1<=a.limit_per_task<=200:raise ValueError('limit-per-task must be 1..200')
-    settings=dict(schema='ruler-corpus-execution-v1',kind='inference' if a.tree else 'collection',dataset=a.dataset,
+    if not 1<=a.limit_per_task<=500:raise ValueError('limit-per-task must be 1..500')
+    settings=dict(prompt_protocol='rpkv-original-tokens-v1',schema='rpkv-corpus-execution-v2',kind='inference' if a.tree else 'collection',dataset=a.dataset,
         model=str(a.model),prepared=str(a.prepared),cache_root=str(a.cache_root),groups=groups(a.gpu_a,a.gpu_b),
         ruler=str(a.ruler) if a.ruler else None,data=str(a.data) if a.data else None,code=code_hashes(),
         watchdog_seconds=900,operational_retries=1)
+    from runner.tree_profiles import hardware_profile
+    hardware_profile(a.hardware_profile,a.dataset)
+    if a.hardware_profile!='server':settings['hardware_profile']=a.hardware_profile
     if a.tree:
         tree=load(a.tree);settings.update(actions=tree['actions'],tree_sha256=file_hash(a.tree),tree=str(a.tree))
         if a.dataset=='ruler':
@@ -136,18 +149,18 @@ def verify(root,hardware=True,publish=True):
     check_model(Path(s['model']))
     model_hash=file_hash(Path(s['model'])/'config.json')
     model_index=json.loads((Path(s['model'])/'model.safetensors.index.json').read_text())
-    if not all(relative(s['model'],name).is_file() for name in set(model_index['weight_map'].values())):
+    if not all(model_artifact(s['model'],name).is_file() for name in set(model_index['weight_map'].values())):
         raise ValueError('Missing local model weight shards')
     if s['dataset']=='longbench-v2':
         preparation=json.loads((Path(s['prepared'])/'preparation.json').read_text())
         for name,digest in preparation['spec']['tokenizer_files'].items():
-            if file_hash(relative(s['model'],name))!=digest:raise ValueError('LongBench tokenizer/model metadata changed')
+            if file_hash(model_artifact(s['model'],name))!=digest:raise ValueError('LongBench tokenizer/model metadata changed')
     from importlib.metadata import version
     from runner.config import VERSIONS
     if any(version(name).split('+')[0]!=expected for name,expected in VERSIONS.items()):raise ValueError('Install the clean README pinned runtime versions')
     if s['dataset']=='ruler':
-        from scripts.corpus_inputs import spec
-        for name,digest in spec()['model_fingerprints'].items():
+        spec=json.loads((Path(s['prepared'])/'spec.json').read_text())
+        for name,digest in spec['tokenizer_hashes'].items():
             if file_hash(Path(s['model'])/name)!=digest:raise ValueError('Pinned model/tokenizer mismatch')
     for row in rows:
         path=relative(s['prepared'],row['prepared'])
@@ -195,7 +208,7 @@ def snapshot_report(root,final=False,same_count=False):
         committed,matching=match_records(committed,[dict(prompt_id=r['id'],subtask=r['subtask']) for r in rows])
         selected={c:{r['prompt_id']:r for r in rs} for c,rs in committed.items()}
         probe_ids={p.parent.name for p in (root/'records'/'probe').glob('*/validated.json')}
-    expected=503 if protocol['dataset']=='longbench-v2' else len(protocol.get('selected_ids') or []) if protocol['kind']=='inference' else 2600
+    expected=503 if protocol['dataset']=='longbench-v2' else len(protocol.get('selected_ids') or []) if protocol['kind']=='inference' else 13*protocol.get('limit_per_task',500)
     counts={c:0 for c in cases};probes=0;paired_rows=[];by_case={c:[] for c in cases}
     for row in rows:
         records={c:selected[c].get(row['id']) if same_count else accepted(root,c,row,protocol) for c in cases}
@@ -249,6 +262,18 @@ def snapshot_report(root,final=False,same_count=False):
     for r in paired_rows:
         key='live_total_ttft_seconds' if protocol['kind']=='inference' else 'fixed_action_ttft_seconds'
         r[key]=r.pop('estimated_router_ttft_seconds')
+    if protocol['dataset']=='ruler':
+        from runner.reporting import ruler_preprocess
+        report['ruler_evaluation']={}
+        for case,records in by_case.items():
+            report['ruler_evaluation'][case]={}
+            for task in sorted({row['subtask'] for row in rows}):
+                selected=[r for r in records if r.get('subtask')==task]
+                if selected:
+                    report['ruler_evaluation'][case][task]=dict(
+                        score=round(sum(r['accuracy'] for r in selected)/len(selected)*100,2),
+                        nulls=(f"{sum(not ruler_preprocess(r['prediction']) for r in selected)}/{len(selected)}"
+                               if all('prediction' in r for r in selected) else None))
     report['output_statistics']={c:dict(output_caps=sum(r.get('output_cap_reached',False) for r in rs),
         mean_thinking_tokens=sum(r.get('thinking_tokens',0) for r in rs)/len(rs),
         mean_answer_tokens=sum(r.get('answer_tokens',0) for r in rs)/len(rs),
@@ -347,7 +372,8 @@ def parser():
     for name in ('model','prepared','cache-root','ruler','data','tree','corpus','actions','output','decisions','evaluation-snapshot'):
         p.add_argument('--'+name,type=Path)
     p.add_argument('--dataset',choices=('ruler','longbench-v2'),default='ruler')
-    p.add_argument('--gpu-a');p.add_argument('--gpu-b');p.add_argument('--limit-per-task',type=int,default=None,help='1..200; configure defaults to 200, later commands retain the frozen tranche')
+    p.add_argument('--gpu-a');p.add_argument('--gpu-b');p.add_argument('--limit-per-task',type=int,default=None,help='1..500; configure defaults to 500, later commands retain the frozen tranche')
+    p.add_argument('--hardware-profile',choices=('server','rtx4500ada'),default='server',help='Explicit RTX 4500 Ada RULER TP4 profile; server retains A800/L20 defaults')
     p.add_argument('--workers',type=int,default=4);p.add_argument('--train-samples',type=int)
     p.add_argument('--trainer',default='ruler13-v1');p.add_argument('--seed',type=int,default=42);p.add_argument('--policy-count',type=int,default=3)
     p.add_argument('--action-scope',choices=('original','all'),default='all',help='Offline readers: original inventory or include the completed 5/10 extension')
@@ -364,14 +390,14 @@ def main():
     if os.environ.get('CUDA_VISIBLE_DEVICES',''):raise ValueError('Coordinator must be CPU-only')
     if a.command!='configure' and a.limit_per_task is not None:
         if a.command not in ('prepare','detach','resume'):raise ValueError('--limit-per-task applies to configure/prepare/detach/resume')
-        if not 1<=a.limit_per_task<=200:raise ValueError('limit-per-task must be 1..200')
+        if not 1<=a.limit_per_task<=500:raise ValueError('limit-per-task must be 1..500')
         with (a.root/'launch.lock').open('a') as lock:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);idle(a.root)
             target=a.root/'tranche.json';prior=json.loads(target.read_text())
             if a.limit_per_task<prior['limit_per_task'] and (a.root/'records').exists():raise ValueError('Cannot shrink a collected tranche')
             atomic_json(target,dict(limit_per_task=a.limit_per_task))
     if a.command=='configure':
-        if a.limit_per_task is None:a.limit_per_task=200
+        if a.limit_per_task is None:a.limit_per_task=500
         result=configure(a)
     elif a.command in ('train','replay','test','snapshot'):
         from runner.corpus_training_data import open_corpus

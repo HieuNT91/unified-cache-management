@@ -1,3 +1,4 @@
+from runner.layout import stamp_sample
 """Continuation preserves committed answers, rejects drift, and avoids reruns."""
 import copy
 import json
@@ -26,9 +27,9 @@ class ResumeTests(unittest.TestCase):
         self.model.mkdir(); self.cache.mkdir(); self.output.mkdir()
         atomic_json(self.model/'config.json', dict(model_type='qwen3',num_hidden_layers=64,
             hidden_size=5120,num_attention_heads=40,num_key_value_heads=8,head_dim=1))
-        self.sample = dict(token_ids=[1]*63+[99]+[2]*63+[99]+[3]*256,
+        self.sample = stamp_sample(dict(token_ids=[1]*63+[99]+[2]*63+[99]+[3]*256,
             boundaries=[0,64,128,384],question_positions=[380],thinking=True,max_output_tokens=2,
-            model_config_sha256=file_hash(self.model/'config.json'))
+            model_config_sha256=file_hash(self.model/'config.json')))
         self.manifest = self.root/'manifest.jsonl'
         rows = []
         for i in range(4):

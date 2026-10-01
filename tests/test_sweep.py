@@ -1,3 +1,5 @@
+from runner.layout import request_metadata, METADATA_KEY, PROMPT_PROTOCOL
+from runner.layout import stamp_sample
 """Bounded cache lifecycle, policy changes and concurrent collection reporting."""
 import copy
 from concurrent.futures import ThreadPoolExecutor
@@ -24,9 +26,9 @@ class SweepTests(unittest.TestCase):
         self.model.mkdir()
         atomic_json(self.model/'config.json',dict(model_type='qwen3',num_hidden_layers=64,
             hidden_size=5120,num_attention_heads=40,num_key_value_heads=8,head_dim=1))
-        self.sample = dict(token_ids=[1]*63+[99]+[2]*63+[99]+[3]*256,
+        self.sample = stamp_sample(dict(token_ids=[1]*63+[99]+[2]*63+[99]+[3]*256,
             boundaries=[0,64,128,384],question_positions=[380],thinking=True,max_output_tokens=2,
-            model_config_sha256=file_hash(self.model/'config.json'))
+            model_config_sha256=file_hash(self.model/'config.json')))
         self.cache=self.root/'cache'; self.cache.mkdir()
         self.namespace='a'*32
         self.args=NS(model=self.model,tp=2,memory=.9,output=self.root/'out')
@@ -155,7 +157,8 @@ class SweepTests(unittest.TestCase):
         connector.store=Mock()
         connector.store.lookup.side_effect=lambda keys:[True]*len(keys)
         rid=self.namespace+':prompt-0:read:prophetkv-1-measured'
-        request=NS(request_id=rid,num_prompt_tokens=384,num_tokens=384,all_token_ids=self.sample['token_ids'])
+        request=NS(request_id=rid,num_prompt_tokens=384,num_tokens=384,all_token_ids=self.sample['token_ids'],prompt_token_ids=self.sample['token_ids'],
+            sampling_params=NS(extra_args={METADATA_KEY:request_metadata(rid,self.sample['token_ids'],'read',self.sample)}))
         self.assertEqual(connector.get_num_new_matched_tokens(request,0),(64,False))
         self.assertTrue(connector.temporary_readonly)
         cache=self.populated();cache.ready()
@@ -256,7 +259,7 @@ class SweepTests(unittest.TestCase):
                 return []
             llm.collective_rpc=rpc
             return llm
-        def generate(engine,tokens,budget,rid,thinking=False):
+        def generate(engine,tokens,budget,rid,thinking=False,**metadata):
             parts=rid.split(':')
             events.append(('generate',rid))
             if len(parts)==4 and parts[2]=='populate':

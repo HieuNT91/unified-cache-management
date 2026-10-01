@@ -14,6 +14,12 @@ def seed_value(namespace):
     return ('UCM_HASH_SEED', 'prophetkv-persistent-v1', namespace)
 
 
+class RepeatedLoad:
+    """Several independent reads of the same immutable file into different slots."""
+    def __init__(self, tasks):
+        self.tasks = tuple(tasks)
+
+
 class TrackedStore:
     """Retain every asynchronous operation until its backend wait succeeds."""
     def __init__(self, store):
@@ -40,13 +46,40 @@ class TrackedStore:
         self.operations['lookup'] += 1
         return self.store.lookup(*args, **kwargs)
 
-    def load_data(self, *args, **kwargs):
-        return self._submit('load_data', *args, **kwargs)
+    def load_data(self, block_ids, shard_index=None, dst_addr=None):
+        if getattr(self, 'router_dense', False):
+            raise RuntimeError('UCM transfer attempted during dense fallback')
+        if len(block_ids) == len(set(block_ids)):
+            return self._submit('load_data', block_ids, shard_index, dst_addr)
+        if len(block_ids) != len(shard_index) or len(block_ids) != len(dst_addr):
+            raise ValueError('Cache load hashes, shards and destination rows differ')
+        # PcStore flattens all layer pointers and groups them by file hash. A
+        # repeated block in one task is interpreted as additional file contents,
+        # not a second destination, causing an oversized read. Give each
+        # occurrence its own batch of unique files, retaining every global slot.
+        occurrences, batches = {}, []
+        for i, key in enumerate(block_ids):
+            occurrence = occurrences.get(key, 0)
+            occurrences[key] = occurrence + 1
+            if occurrence == len(batches):
+                batches.append([])
+            batches[occurrence].append(i)
+        tasks = []
+        for indices in batches:
+            tasks.append(self._submit('load_data', [block_ids[i] for i in indices],
+                [shard_index[i] for i in indices], [dst_addr[i] for i in indices]))
+        # Each backend task is tracked separately, including already submitted
+        # batches if a later submission fails. Retirement waits for all of them.
+        return RepeatedLoad(tasks)
 
     def dump_data(self, *args, **kwargs):
         return self._submit('dump_data', *args, **kwargs)
 
     def wait(self, task):
+        if isinstance(task, RepeatedLoad):
+            for child in task.tasks:
+                self.wait(child)
+            return None
         result = self.store.wait(task)
         if self.pending.pop(id(task), None) is not None:
             self.completed += 1

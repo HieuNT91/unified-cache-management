@@ -1,3 +1,4 @@
+from runner.layout import stamp_sample
 """CPU-only reusable corpus, pooled trainer, and shared live lifecycle contracts."""
 import copy
 import json
@@ -37,7 +38,7 @@ def signed(data):
 
 
 def tiny_sample():
-    return dict(token_ids=[1]*260,boundaries=[0,64,128,260],question_positions=[255],original_to_formatted=list(range(260)))
+    return stamp_sample(dict(token_ids=[1]*260,boundaries=[0,64,128,260],question_positions=[255],original_to_formatted=list(range(260))))
 
 
 def archives(folder,inventory=DEFAULT_ACTIONS,sample=None):
@@ -178,6 +179,7 @@ class CorpusTests(unittest.TestCase):
         self.assertEqual(len({r.get('question_sha256') for r in plan if r['task'].startswith('qa_')}),400)
         self.assertEqual(plan,inventory(qa))
         class Tokenizer:
+            chat_template="test native template"
             def apply_chat_template(self,messages,**kwargs):
                 self.thinking=kwargs['enable_thinking'];return '[USER]'+messages[0]['content']+'[END]\n'
             def __call__(self,text,**kwargs):return dict(input_ids=list(map(ord,text)),offset_mapping=[(i,i+1) for i in range(len(text))])
@@ -185,10 +187,11 @@ class CorpusTests(unittest.TestCase):
             def convert_tokens_to_ids(self,text):return 999
         for task in TASKS:
             query='What are all the special magic numbers for KEY?' if task.startswith('niah') else 'Question: Return TARGET.'
-            row=dict(index=0,input='Instructions\n'+'context '*700+'\n'+query,outputs=['SECRET'])
+            row=dict(index=0,input='[USER]Instructions\n'+'context '*700+'\n'+query+'[END]\n',answer_prefix=' Answer:',outputs=['SECRET'])
             tokenizer=Tokenizer();sample=format_corpus(tokenizer,row,task)
-            self.assertEqual(len(sample['token_ids']),64000);self.assertFalse(tokenizer.thinking)
-            self.assertEqual(sample['max_output_tokens'],256);self.assertNotIn('references',sample);self.assertNotIn('outputs',sample)
+            self.assertEqual(sample['token_ids'],list(map(ord,row['input']+row['answer_prefix'])));self.assertFalse(tokenizer.thinking)
+            from scripts.ruler_64000 import CAPS
+            self.assertEqual(sample['max_output_tokens'],CAPS[task]);self.assertNotIn('references',sample);self.assertNotIn('outputs',sample)
             self.assertEqual(sample,format_corpus(tokenizer,row,task))
             self.assertEqual(''.join(chr(sample['token_ids'][p]) for p in sample['question_positions']),query)
 
@@ -234,10 +237,69 @@ class CorpusTests(unittest.TestCase):
             with patch('scripts.corpus_control.subprocess.check_output',return_value=inventory):
                 with self.assertRaisesRegex(ValueError,'cannot fit'):check_hardware(dict(model=td,dataset='longbench-v2',groups=[uuids[:4]]))
 
+    def test_explicit_local_profile_preserves_precision_and_memory_gates(self):
+        from runner.tree_profiles import config
+        from scripts.corpus_control import check_hardware
+        cfg=config('/model','ruler',True,'/cache',9,'rtx4500ada')
+        self.assertEqual(cfg['gpu_memory_utilization'],.95)
+        self.assertEqual((cfg['dtype'],cfg['tensor_parallel_size']),('bfloat16',4))
+        self.assertEqual((cfg['max_model_len'],cfg['num_gpu_blocks_override']),(65920,1031))
+        self.assertEqual(cfg['rope_scaling']['factor'],4.)
+        self.assertIsNone(cfg['quantization']);self.assertEqual(cfg['cpu_offload_gb'],0)
+        local_lb=config('/model','longbench-v2',False,'/cache',9,'rtx4500ada')
+        self.assertEqual(local_lb['max_model_len'],65920)
+        self.assertEqual(local_lb['num_gpu_blocks_override'],1031)
+        self.assertNotIn('kv_transfer_config',local_lb)
+        self.assertEqual(config('/model','longbench-v2',False,'/cache')['max_model_len'],131072)
+        uuids=[f'GPU-{i:08x}-1111-2222-3333-444444444444' for i in range(4)]
+        with tempfile.TemporaryDirectory() as td:
+            atomic_json(Path(td)/'model.safetensors.index.json',dict(metadata=dict(total_size=61.2*2**30)))
+            settings=dict(model=td,dataset='ruler',groups=[uuids],hardware_profile='rtx4500ada')
+            inventory='\n'.join(f'{u}, NVIDIA RTX 4500 Ada Generation, 24570, 24087' for u in uuids)
+            with patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,'']):
+                self.assertLess(check_hardware(settings)['required_mib_per_rank'],24087)
+            with patch('scripts.corpus_control.subprocess.check_output',return_value=inventory):
+                with self.assertRaisesRegex(ValueError,'explicit hardware'):check_hardware({k:v for k,v in settings.items() if k!='hardware_profile'})
+            with patch('scripts.corpus_control.subprocess.check_output',return_value=inventory.replace('24087','19000')):
+                with self.assertRaisesRegex(ValueError,'cannot fit'):check_hardware(settings)
+            with patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,uuids[0]]):
+                with self.assertRaisesRegex(ValueError,'occupied'):check_hardware(settings)
+
+    def test_collection_rejects_lost_yarn_delta_normalization(self):
+        from runner.corpus_runtime import Engine
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);session=root/'session';session.mkdir()
+            atomic_json(session/'initialization.json',dict(validated=True))
+            engine=Engine.__new__(Engine);engine.sample={}
+            engine.root=root;engine.session=session;engine.cached=True;engine.group=0
+            engine.row=dict(id='sample',sha256='input');engine.construction={}
+            engine.protocol=dict(groups=[['a','b','c','d']]);engine.llm=Mock()
+            audits=[dict(rank=r,normalized=True,delta_amplitude=1.,aliases_native_table=False) for r in range(4)]
+            engine.llm.collective_rpc.return_value=audits
+            self.assertEqual(engine.common('probe',{},[])['alignment_audit'],audits)
+            for key,value in [('normalized',False),('delta_amplitude',1.140625),('aliases_native_table',True)]:
+                engine.llm.collective_rpc.return_value=[dict(a,**{key:value}) for a in audits]
+                with self.assertRaisesRegex(ValueError,'YaRN delta'):engine.common('probe',{},[])
+            engine.llm.collective_rpc.return_value=audits[:3]
+            with self.assertRaisesRegex(ValueError,'YaRN delta'):engine.common('probe',{},[])
+
+    def test_model_snapshot_symlinks_do_not_relax_corpus_containment(self):
+        from scripts.corpus_control import model_artifact
+        from runner.corpus import relative
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);snapshot=root/'snapshot';snapshot.mkdir()
+            blob=root/'blob';blob.write_bytes(b'weights')
+            (snapshot/'weights.safetensors').symlink_to(blob)
+            self.assertTrue(model_artifact(snapshot,'weights.safetensors').is_file())
+            for name in ('../blob',str(blob),''):
+                with self.assertRaises(ValueError):model_artifact(snapshot,name)
+            with self.assertRaisesRegex(ValueError,'escapes corpus'):relative(snapshot,'weights.safetensors')
+
     def test_fake_live_control_across_datasets_and_dense(self):
         from runner.corpus_runtime import infer_prompt
         class FakeEngine:
-            def __init__(self,dataset):self.events=[];self.dataset=dataset
+            def __init__(self,dataset):self.events=[];self.dataset=dataset;self.sample={}
             def probe(self,folder):
                 self.events+=['probe','retire','features']
                 return dict(features=dict.fromkeys(FEATURES,.05)),[],{}
@@ -248,7 +310,7 @@ class CorpusTests(unittest.TestCase):
         for dataset in ('ruler','longbench-v2'):
             for dense in (True,False):
                 with tempfile.TemporaryDirectory() as td:
-                    engine=FakeEngine(dataset);tree=tree_value()
+                    engine=FakeEngine(dataset);tree=tree_value();tree['prompt_protocol']='rpkv-original-tokens-v1'
                     if dense:tree['tree']=dict(action='nocache',training_samples=10)
                     tree=signed(tree);baseline,ds=engine.answer(actions()['nocache'],'baseline',None);engine.events=[]
                     result,_=infer_prompt(engine,tree,Path(td),baseline,ds)
@@ -263,7 +325,7 @@ class CorpusTests(unittest.TestCase):
         from scripts.corpus_control import snapshot_report
         for n in (50,200):
             rows=[dict(id=f'{t}-{i}',ordinal=i,subtask=t) for i in range(n) for t in TASKS]
-            protocol=dict(kind='collection',dataset='ruler',actions=DEFAULT_ACTIONS,hardware={'synthetic':True})
+            protocol=dict(kind='collection',dataset='ruler',limit_per_task=200,actions=DEFAULT_ACTIONS,hardware={'synthetic':True})
             def record(root,case,row,protocol):
                 return dict(accuracy=1.,timings=dict(answer_engine_ttft_seconds=2.,routing_overhead_seconds=.2))
             with tempfile.TemporaryDirectory() as td:

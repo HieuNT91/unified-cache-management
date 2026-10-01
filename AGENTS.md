@@ -1,5 +1,231 @@
 # Agent instructions
 
+## rpkv current scope (2026-10-01; supersedes historical protocols below)
+
+- Current worktree: `.worktrees/rpkv`, branch `rpkv`. See `scripts/RPKV.md`.
+- Original tokens only; no chunk markers/EOT padding. Metadata phase/layout and
+  request/token identity are mandatory; never recover boundaries from delimiters.
+- RULER uses the pinned original generators: 13 task batches, 500/task, seed42,
+  total window65536 including task caps128/30/120/50/32. Native Qwen3 non-thinking
+  is the documented adaptation. Score only newly generated text with upstream rules.
+- Preserve old worktrees, artifacts, jobs and policies. No historical restart,
+  real-policy refit, branch push or legacy artifact mutation is authorized.
+- 2026-10-01 user separately authorized GPU validation on physical GPUs1–4,
+  resolved/pinned by UUID: original RULER13 x5 and five random LongBench v2
+  inputs, each no-cache / ProphetKV1% /5%, 210 answers. LongBench selection
+  is seed42 from full-text inputs fitting KV65920 with the native16K output
+  reserve, explicitly approved after the initial random cohort exceeded memory.
+  RULER has native task caps and non-thinking; LongBench keeps thinking.
+  Independent diagnostic probes verify sparse controls; no router fitting.
+  Package: outputs/rpkv-gpu-validation-20261001/. Never duplicate its supervisor.
+  Only accepted measurements constitute GPU evidence; CPU tests alone do not.
+  Completed: all210 answers and70 probes passed independent final validation;
+  owned GPU engines exited. See final/validation.json and final/report.md.
+  The full CPU suite passed232 tests. Do not restart this completed scope.
+  User authorized committing the implementation locally and providing push
+  commands; no push is authorized.
+
+
+- 2026-09-30 completed CPU-only depth1–5 router search on the existing260
+  prompts/six measured actions: `outputs/ruler13-deeper-router-study-20260930/`.
+  Final deliverables are in `finalized/`, superseding the primary-stage report
+  for overall ranking. Guide: `scripts/DEEPER_ROUTER_STUDY.md`. No GPU inference,
+  runtime policy integration or deployment. Preserve previous studies unchanged.
+  Evaluated117 subsets x4320 settings=505440; reused116640 exact original depth1–3
+  settings, completed388800 new fits. Includes five/seven/all45 controls,40 singles,
+  28 pairs,6 triples and40 one-round drop-one refits of the primary all45 winner.
+  Final ranking includes ablations; no recursive feature elimination. An initial
+  partial pass is preserved separately, with completed identical subsets reused.
+  Overall best: depth5/16 leaves/minleaf5, all45 minus gap10, positive loss,
+  minimize-time, weight3, penalty.005. Accuracy90.0064% versus dense91.5769%
+  (1.5705pp overall loss; floor89.5769231%); primary TTFT5.859440s versus
+  incumbent8.605654s (-31.91%). CPU-adjusted5.904380s; incremental resident
+  features44.940ms. Remaining gap to3.650979s hindsight:2.208461s. Actions
+  dense/1/5/10/20/50=9/120/17/62/39/13. All260 fit/select/score; training-only,
+  mixed sessions and assumed integrated probe reuse, not live measured latency.
+  Best per maximum depth1–5:15.986091/11.191585/8.605654/6.326677/5.859440s.
+  210 CPU tests passed; after orchestration correction,12 focused tests passed.
+  Independent audits checked1560 answers,260 probes,all505440 candidate metrics
+  and final rankings, exported decisions/boundaries/fallbacks and tree bounds.
+  Full resume preserved523 completed files' hashes/mtimes and the prior study;
+  finalization also proved immutable. See independent-validation.json and
+  delivery-validation.json. Existing runtime policies remain unchanged.
+
+
+- 2026-09-30 user authorized the 76-addition GPU feature study and live all260
+  comparison. Package: `outputs/ruler13-gpu-feature-study-20260930/`;
+  `control.sh status` / `resume`. Guide: `scripts/GPU_FEATURE_STUDY.md`.
+  **Launched and startup independently verified Sep30 ~17:00 HKT.** Current
+  supervisor PID2796747, worker PID2797080; verify identities before action.
+  Supervisor PPID1, separate session, ignored SIGHUP, /dev/null stdin and empty
+  CUDA visibility verified. Only original UUID-pinned physical GPUs1–4 are used.
+  Leave this detached study running; no ongoing assistant polling or duplicate
+  supervisor. Existing completed experiments and their frozen runtimes unchanged.
+  Current runtime is the package's read-only, hash-pinned `frozen-code/`.
+  All212 CPU tests passed, including actual vLLM RPC codec, bounded attention,
+  policy boundaries, handoff isolation, cost sharing and synthetic final reports.
+  All1560 source answers and260 original decisions independently checked; all260
+  saved attention archives replayed exactly. Original six-action current fast
+  policy:90.4487% accuracy,9.820171s comparable simulation.
+  Initial startup halted at0 accepted records on untyped RPC NumPy transfer.
+  Its one failed diagnostic probe, logs, runtime and exited process receipts are
+  preserved in `startup-history/rpc-array-transport/`. Explicit FP32 byte packets
+  fixed the transfer; no accepted record was replaced. An earlier CPU-only report
+  JSON-type correction is preserved in `preflight-history/report-json-bool/`.
+  First scheduled cwe-000 probe passed exact native scores/masks on all ranks,
+  all64 selection, native YaRN4, eight committed warmup shards, immutable KV,
+  retirement and deletion. All81 features finite.64 independent CPU FP32 reference
+  checks (8 layers x4 ranks x head/query) passed; max error1.1921e-7. Analytic
+  extra scratch bound113.15625MiB/rank, below256MiB. See
+  `results/independent-startup-verification.json`. This verifies diagnostic
+  startup; live handoff/output-equivalence GPU gates are scheduled later.
+  Pipeline:260 accepted diagnostic all64/1% one-token probes -> owned engine
+  exit -> CPU76 singles /28 pairs /6 triples, each2592 settings, depths1–3,
+  <=2pp overall training loss -> locked winner ->520 routed answers with520
+  fresh probes. Current/winner share one-use native-score handoff and alternate
+  prompt order. No refit after live results. BF16 TP4, YaRN4, exact64000 inputs,
+  KV65920, prefill16384 and greedy non-thinking256 remain unchanged.
+  Cost-aware selection counts measured shared feature dependencies once; GPU
+  attention uses the conservative measured joint head/query pass, while live
+  computes required branches. CPU resident reductions exclude archive I/O.
+  Every live sparse mask and full output must match its saved same-group fixed
+  action; dense verifies native attention/zero reused KV/zero UCM operations.
+  Live TTFT starts before probe and ends at final first token. Serialization is
+  afterward; construction/priming separate.900s watchdog, one operational retry,
+  missing-only resume; next GPU phase halts if assigned GPUs become occupied.
+  Reports/ranked features/rules/per-task/paired CSVs publish automatically. Claim
+  improvement only if winner meets <=2pp loss AND beats current measured live
+  TTFT. Training-cohort findings only; no held-out claim or deployment.
+
+- 2026-09-30 user authorized adding ProphetKV5/10% to the existing all260
+  router pool and launching520 new answers. Package:
+  `outputs/ruler13-router-add5-10-20260930/`; `control.sh status` / `resume`.
+  **Launched and startup independently verified Sep30 12:45 HKT.** Supervisor
+  PID2722396, worker PID2722558; verify live identities before intervention.
+  Supervisor PPID1, separate session, ignored SIGHUP, /dev/null stdin and empty
+  CUDA visibility verified. Worker uses original UUID-pinned physical GPUs1–4.
+  Never duplicate this supervisor or restart the completed base collection.
+  Runtime is package `frozen-code/`, read-only; preserve it unchanged.
+  Entry point source: `scripts/corpus_extend.py`; guide:
+  `scripts/RULER_ACTION_EXTENSION.md`. Prior dirty worktree edits preserved.
+  Base260 inputs/probes/1040 answers and source runtime are pinned in
+  `results/sources.json`. All260 original archives/features replay exactly;
+  BLAS/OMP must be1 for original float64 feature arithmetic. Initial CPU
+  preflight failure under different BLAS settings is preserved separately in
+  `preflight-history/blas-thread-setting/`; no GPU inference ran in that attempt.
+  Derived5/10% masks use native FP32 scores, exact floors and stable ties;
+  original archives/receipts are never rewritten. Combined reader validates
+  each source record under its own original protocol.
+  One persistent TP4 engine: original prompt order, ordinary priming, missing
+  5% then10% answers, one temporary KV build/prompt then retirement/deletion.
+  No new baseline or independent probe. BF16 YaRN4, input64000, chunk4096,
+  scheduled prefill16384, non-thinking greedy256 remain unchanged. First cwe-000
+  pair passed all-rank score/mask/all64-selection replay, YaRN normalization,
+  eight committed warmup shards, immutability and retirement/deletion. See
+  package `startup-verification.json`; startup done, status only on request.
+  All171 CPU tests and9 extension tests passed. Watchdog900s, one operational
+  retry, validation mismatch halt, resume only missing new records. After all
+  520 answers validate and owned engines exit, supervisor pins260x6 matrix and
+  automatically runs2592 settings with five features/depth1–3. <=2pp TRAINING
+  loss; fastest primary plus maximum1%-usage objective. Previous11.31183s
+  router retained as a candidate to prevent reported best feasible regression.
+  Corrected cost: selected answer TTFT + traversal + saved probe TTFT ONLY for
+  dense. Training-only simulation assuming integrated probe reuse, mixed timing
+  sessions and unmeasured extra feature/sync/switch costs. No held-out claim,
+  deeper trees or live integrated router. Reports/exports appear in
+  `results/training/` after collection; they are not available at startup.
+
+
+- 2026-09-30 user requested more1% routing and corrected-cost retuning. CPU-only
+  all260 training study: `outputs/ruler13-router-more1pct-20260930/`. Searched
+  2592 settings: two objectives (maximize1% count / minimize probe-reuse TTFT),
+  signed/positive loss, depth1–3, minleaf5/10/20, three leaf penalties and24 loss
+  weights.1638 candidates met actual training macro loss<=2pp. Same five numeric
+  attention features; no task/query/reference features. All260 used for fitting,
+  tuning and scoring; no held-out performance claim or GPU launch.
+  Max-one best found:135/260 at1% (51.923%, up from95/260), accuracy89.7692%
+  vs dense91.5769% (loss1.8077pp), corrected TTFT13.8952s/2.0609x. Actions
+  dense/1/20/50=98/135/19/8. More dense choices make it slower than the previous
+  router. Minimum-TTFT objective recovered the previous exact choices40/95/88/37,
+  accuracy90.8718%, TTFT11.3118s/2.5316x. Max-one depth3/seven leaves/minleaf5;
+  min-TTFT depth3/six leaves/minleaf20. Exports pass value/boundary/missing-feature
+  checks. All2592 candidate accuracy/bounds and780 final decisions independently
+  checked; see report.txt/.json, per-task.csv, rules and independent-validation.json.
+  Finite greedy-tree search, not proven global optimality. Latency remains the
+  hypothetical integrated-probe estimate with unmeasured extra feature/sync/switch
+  costs excluded. Preserve earlier studies and their immutable artifacts.
+
+- 2026-09-30 user requested corrected probe-reuse latency accounting. Saved in
+  `outputs/ruler13-router-probe-reuse-accounting-20260930/`: selected answer TTFT
+  plus tree traversal, plus per-prompt one-token probe TTFT ONLY for dense
+  decisions. ProphetKV is assumed to reuse its normal probe. Same trees/actions;
+  no refit, reranking or GPU run. All260 training fast-loss2pp:90.8718%,11.3118s,
+  2.5316x; fast-loss5pp:86.5833%,8.6355s,3.3162x. Prior heldout104 fast-loss5pp:
+  91.0897%,13.6059s,2.1047x. These are integrated-reuse ESTIMATES, not measured
+  live router latency. Dense probe proxy (~2.06s) includes the collected one-token
+  first-token work; incremental feature/transfer/TP-sync/switch costs remain
+  unmeasured and excluded. Preserve earlier recorded-pipeline reports. See
+  report.txt/.json and validation.json (1768 decisions replayed).
+
+- 2026-09-30 user explicitly requested fitting, tuning and scoring on ALL260
+  collected prompts. Completed CPU-only resubstitution study:
+  `outputs/ruler13-router-all260-training-20260930/`. All216 clean tree settings
+  fitted on260; selected accuracy-first and fastest within0/2/5pp TRAINING loss.
+  This scope has NO held-out set; preserve earlier156/104 reports separately.
+  Dense91.5769%/28.6370s. Accuracy-first92.6346%/36.9749s; fast-no-loss
+  91.6474%/25.6530s; fast-loss2pp90.8718%/22.4236s/1.2771x; fast-loss5pp
+  86.5833%/19.9845s/1.4330x. Times include original mean probe overhead11.4283s.
+  TTFT audit: feature mean5.0273s but median.0630s/max47.0431s; replay mean2.8597s
+  but median.5574s. Total probe median4.1834s. Three original37–47s feature cases
+  reran CPU-only in~.06s with identical features; decision~.000214s including
+  validation. Slow original intervals lack CPU/page-fault/scheduling telemetry;
+  exact cause is unverified. Offline timings do not replace recorded costs or
+  establish live-router latency. See report.txt, latency-explanation.txt,
+  latency-audit.json, per-task.csv and delivery-validation.json. No GPU launch.
+
+- 2026-09-30 CPU router training/simulation completed at user request. Artifacts:
+  `outputs/ruler13-router-simulation-20260930/`. Frozen completed clean corpus:
+  `outputs/ruler13-corpus20-clean-yarn4-20260929/`; all1040 answers/260 probes
+  completed Sep30 01:56 HKT and owned processes exited. Do not restart collection.
+  Training split seed42:156 rows (12/task), held-out104 (8/task). Unchanged clean
+  trainer searched216 settings with five training-only folds and fitted five
+  ranked policies. Two additional speed comparisons were selected from OOF only
+  (fastest within2pp/5pp loss) before inspecting held-out performance. Seven fits,
+  five distinct trees; router4 equals3 and router5 equals1. Router1 remains primary.
+  All260 attention archives were independently replayed; five features matched
+  recorded values exactly. Main estimates include recorded probe overhead even
+  for dense fallback; no GPU inference, test-driven refit or timing recalibration.
+  Held-out dense91.3782%/28.6364s; router1 91.1378%/36.9500s/.7750x;
+  fast-loss5pp91.0897%/25.4381s/1.1257x, choosing dense/1/20/50 counts31/27/46/0.
+  Held-out mean probe overhead12.4476s. No setting met the joint OOF<=2pp loss
+  and>=4x target. See comparison.json/.txt/.html, per-task.csv, tree exports and
+  validation.json. Paired20k within-task bootstrap intervals are descriptive;
+  this small held-out cohort is not a general accuracy guarantee.
+
+- 2026-09-29 local clean RULER13 data collection is launched on physical GPUs1–4
+  by UUID. Package: `outputs/ruler13-corpus20-clean-yarn4-20260929/`; control:
+  `control.sh status` / `status_same_count`. Exactly20 new prompts/task,
+  260 prompts,260 independent all64/1% one-token probes,1040 answers from true
+  connector-free dense and original all64 ProphetKV1/20/50%. Inputs are exactly
+  64000 tokens; full source/question reconstruction passed for all260. BF16 TP4,
+  native YaRN4 table131072, KV65920/1031 blocks, chunk/tile4096, prefill16384,
+  greedy non-thinking256, local RTX4500Ada memory.95. Execution uses the package's
+  read-only `frozen-code/`; never edit that copy or duplicate its supervisor.
+  Supervisor initial PID2538953, CPU reporter2539705; verify live identities,
+  detachment receipts, progress and logs before intervention. Baselines run first;
+  then one cached engine collects each prompt's probe and three sparse answers.
+  All-rank exact scores/masks must match the independent probe. Cached records
+  explicitly audit unit-magnitude YaRN delta normalization after generation.
+  NPZ archives retain all64 FP32 layers on all4 ranks plus native scores, local
+  means, exact masks and position mappings. Features, outputs/token IDs, scores,
+  timings and immutable-cache/retirement evidence are retained. CPU reporter
+  writes live summaries, first-phase replay receipts, then a training snapshot
+  and `collection-complete.json` after1040 answers/260 probes and owned exit.
+  The corpus plan reserves2600 identities; only this260-prompt tranche runs.
+  No tree fitting, later tranche or held-out inference is scheduled. Final
+  supervisor receipt is `results/partial-260-validation.json` relative to the
+  larger reserved plan. Startup verification only; status later on request.
+
 - This worktree (`.worktrees/prophetkv-clean`) is the current codebase for new
   implementation, inference, launchers, and deployment. Use code under
   `.worktrees/` for current work.

@@ -1,4 +1,6 @@
 """One native clean engine/configuration on one TP4 group; resumable accepted rows."""
+from runner.layout import sample_provenance
+from runner.reporting import scoring_text
 import argparse
 import fcntl
 import json
@@ -118,10 +120,14 @@ def run_group(root, group, case, attempt):
         atomic_json(session_root/'ownership.json',dict(cache=str(cache),group=group,pid=os.getpid(),identity=identity(os.getpid())))
         samples=[(r,json.loads((Path(protocol['prepared'])/r['prepared']).read_text())) for r in pending]
         for _,s in samples:validate_profile(s,4)
+        policy=load_policy(root/'trees.json') if is_router else None
+        if is_router:
+            from runner.layout import validate_policy_protocol
+            for _,s in samples:validate_policy_protocol(policy,s)
         first=samples[0][1]
         cfg=engine_config(protocol['model'],'prophetkv' if cached else 'baseline',
             ratio=.01 if is_router else RATIOS[case],tp=4,cache_dir=cache,
-            end_token=first['token_ids'][first['boundaries'][1]-1],router_profile=True)
+            end_token=None,router_profile=True)
         if cached:
             cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts']={
                 r['id']:s['boundaries'] for r,s in samples}
@@ -138,12 +144,11 @@ def run_group(root, group, case, attempt):
                 if len(receipt['rope'])!=64 or any(not a['formula_bitwise_equal'] or a['table_positions']!=131072 for a in receipt['rope']):
                     raise ValueError('Scheduled YaRN4 initialization audit failed')
             analyzer=OutputAnalyzer(llm.get_tokenizer())
-            policy=load_policy(root/'trees.json') if is_router else None
             start=time.perf_counter()
             warm_namespace=uuid.uuid4().hex
             warm_id=f"{warm_namespace}:{pending[0]['id']}:populate:warmup"
             warm=[100,200,300,400]*32
-            generate(llm.llm_engine,warm,1,warm_id)
+            generate(llm.llm_engine,warm,1,warm_id,phase='populate' if cached else None)
             if cached:
                 ready_args=SimpleNamespace(model_path=Path(protocol['model']),tensor_parallel_size=4,cache_dir=cache,
                     cache_ready_timeout_seconds=600,hash_seed=seed_value(warm_namespace))
@@ -169,7 +174,7 @@ def run_group(root, group, case, attempt):
                 if cached:
                     start=time.perf_counter();pc=PromptCache(cache,Path(protocol['model']),4,namespace,sample)
                     for i,chunk in enumerate(pc.chunks):
-                        generate(llm.llm_engine,list(chunk),1,f'{namespace}:{tag}:populate:{i}')
+                        generate(llm.llm_engine,list(chunk),1,f'{namespace}:{tag}:populate:{i}',phase='populate')
                         retirement(llm,4)
                     timings['construction_seconds']=time.perf_counter()-start
                     start=time.perf_counter();construction=pc.ready()
@@ -180,7 +185,7 @@ def run_group(root, group, case, attempt):
                 start=time.perf_counter()
                 if cached:
                     arm_request(llm,sample,prime,'prophetkv-all64-1' if is_router else case,4)
-                generate(llm.llm_engine,sample['token_ids'],1,prime,False)
+                generate(llm.llm_engine,sample['token_ids'],1,prime,False,sample=sample)
                 llm.collective_rpc(drain);retirement(llm,4)
                 timings['priming_seconds']=time.perf_counter()-start
                 if pc:pc.unchanged()
@@ -190,7 +195,7 @@ def run_group(root, group, case, attempt):
                     rid=routing['answer_request_id']
                 else:
                     if cached:arm_request(llm,sample,rid,case,4)
-                    result,ttft,elapsed=generate(llm.llm_engine,sample['token_ids'],256,rid,False)
+                    result,ttft,elapsed=generate(llm.llm_engine,sample['token_ids'],sample['max_output_tokens'],rid,False,sample=sample)
                 timings.update(ttft_seconds=ttft,generation_seconds=elapsed,
                     answer_engine_ttft_seconds=routing['answer_engine_ttft_seconds'] if routing else ttft,
                     routing_overhead_seconds=routing['routing_overhead_seconds'] if routing else 0.)
@@ -207,13 +212,13 @@ def run_group(root, group, case, attempt):
                 output=result.outputs[0]
                 metrics=analyzer.analyze(list(output.token_ids),sample['token_ids'],False)
                 evaluation=evaluation_metadata({},row)
-                record=dict(prompt_id=row['id'],method=case,group=group,gpu_uuids=devices,input_sha256=row['sha256'],
+                record=dict(**sample_provenance(sample),prompt_id=row['id'],method=case,group=group,gpu_uuids=devices,input_sha256=row['sha256'],
                     prompt_tokens=len(sample['token_ids']),output_token_ids=list(output.token_ids),prediction=output.text,
-                    finish_reason=output.finish_reason,max_output_tokens=256,num_cached_tokens=result.num_cached_tokens,
-                    output_cap_reached=len(output.token_ids)>=256,timings=timings,routing=routing,
+                    finish_reason=output.finish_reason,max_output_tokens=sample['max_output_tokens'],num_cached_tokens=result.num_cached_tokens,
+                    output_cap_reached=len(output.token_ids)>=sample['max_output_tokens'],timings=timings,routing=routing,
                     retirement=retired,cache_immutable=True,construction=construction,
                     session=str(session_root.relative_to(root)),initialization_sha256=initialization_sha256,**metrics,**evaluation,
-                    accuracy=score_answer(metrics['answer_text'],evaluation))
+                    accuracy=score_answer(scoring_text(output.text,metrics,evaluation),evaluation))
                 if routing:
                     action=routing['decision']['action'];fixed=accepted(root,action,row,protocol)
                     if fixed is None:raise ValueError('Fixed action must be accepted before router measurement')

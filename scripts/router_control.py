@@ -41,8 +41,8 @@ def configure(args):
     root=args.root
     settings=dict(model=str(args.model),prepared=str(args.prepared),cache_root=str(args.cache_root),
         policy=str(args.policy),ruler=str(args.ruler),groups=groups(args.gpu_a,args.gpu_b),
-        cohort_sha256=file_hash(COHORT),code=code_hashes(),primary='router1',cases=list(CASES),
-        answers=9100,router_probes=3900,watchdog_seconds=900,operational_retries=1)
+        cohort_sha256=fingerprint('rpkv-original-ruler-13x500-seed42'),code=code_hashes(),primary='router1',cases=list(CASES),
+        answers=45500,router_probes=19500,watchdog_seconds=900,operational_retries=1)
     root.mkdir(parents=True,exist_ok=True)
     with (root/'configure.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -57,11 +57,11 @@ def configure(args):
 
 def verify(root, publish=True):
     root=Path(root);settings=json.loads((root/'settings.json').read_text())
-    if settings['code']!=code_hashes() or settings['cohort_sha256']!=file_hash(COHORT):
+    if settings['code']!=code_hashes() or settings['cohort_sha256']!=fingerprint('rpkv-original-ruler-13x500-seed42'):
         raise ValueError('Configured code/cohort changed; review before using a new experiment directory')
     rows=verify_prepared(settings['prepared'])
-    spec=load_spec()
-    for name,expected in spec['model_fingerprints'].items():
+    spec=json.loads((Path(settings['prepared'])/'spec.json').read_text())
+    for name,expected in spec['tokenizer_hashes'].items():
         if file_hash(Path(settings['model'])/name)!=expected:raise ValueError('Model/tokenizer fingerprint mismatch')
     index=json.loads((Path(settings['model'])/'model.safetensors.index.json').read_text())
     if not all((Path(settings['model'])/name).is_file() for name in set(index['weight_map'].values())):
@@ -71,11 +71,13 @@ def verify(root, publish=True):
     if any(version(name).split('+')[0]!=expected for name,expected in VERSIONS.items()):
         raise ValueError('Install the clean README pinned runtime versions')
     policy=load_policy(settings['policy'])
-    if policy['provenance']['cohort_sha256']!=file_hash(COHORT) or policy['provenance']['training_protocol_sha256']!=spec['training_protocol_sha256']:
-        raise ValueError('Policy was exported for a different frozen cohort')
+    from runner.layout import PROMPT_PROTOCOL
+    from scripts.ruler_64000 import EVALUATION_PROTOCOL
+    if policy.get('prompt_protocol') != PROMPT_PROTOCOL or policy.get('evaluation_protocol') != EVALUATION_PROTOCOL:
+        raise ValueError('Policy protocol is incompatible; no automatic refit or historical policy reuse')
     protocol={k:v for k,v in settings.items() if k not in ('policy','ruler')}
-    protocol.update(policy_sha256=file_hash(settings['policy']),prepared_manifest_sha256=file_hash(Path(settings['prepared'])/'manifest.jsonl'),
-        prepared_receipt_sha256=file_hash(Path(settings['prepared'])/'prepared.json'))
+    protocol.update(answers=len(rows)*7,router_probes=len(rows)*3,policy_sha256=file_hash(settings['policy']),prepared_manifest_sha256=file_hash(Path(settings['prepared'])/'manifest.jsonl'),
+        prepared_receipt_sha256=file_hash(Path(settings['prepared'])/'preparation.json'))
     if (root/'protocol.json').exists():
         if json.loads((root/'protocol.json').read_text())!=protocol:raise ValueError('Frozen execution protocol changed')
         if file_hash(root/'trees.json')!=protocol['policy_sha256']:raise ValueError('Installed policy changed')
@@ -300,7 +302,7 @@ def main():
     if a.command=='configure':configure(a)
     elif a.command=='prepare':
         s=json.loads((a.root/'settings.json').read_text());prepare(Path(s['ruler']),Path(s['model']),Path(s['prepared']),a.workers)
-    elif a.command=='verify':verify(a.root);print('Verified 1300 frozen inputs, three policies and native code; no inference launched.')
+    elif a.command=='verify':verify(a.root);print('Verified frozen original inputs, three policies and native code; no inference launched.')
     elif a.command in ('detach','resume'):detach(a.root,a.command=='resume')
     elif a.command=='supervise':supervise(a.root)
     elif a.command in ('status','status_same_count'):status(a.root,a.command=='status_same_count')

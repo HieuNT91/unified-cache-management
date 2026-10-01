@@ -1,4 +1,6 @@
 """Prompt-major temporary KV sweeps. No collection-wide KV preparation."""
+from runner.layout import sample_provenance
+from runner.reporting import scoring_text
 import argparse
 import fcntl
 import json
@@ -49,7 +51,8 @@ class SharedReporter:
                 # Keep the ledger small; raw output/diagnostics live in per-prompt files.
                 keys = ('prompt_id','subtask','accuracy','thinking_tokens','answer_tokens','control_tokens',
                         'output_tokens','output_cap_reached','unfinished_thinking','timings')
-                state['records'].append({key:record[key] for key in keys})
+                state['records'].append({**{key:record[key] for key in keys},
+                    **{key:record[key] for key in ('prediction','scoring') if key in record}})
             if finished:
                 if self.shard in state['finished']:
                     raise RuntimeError('Duplicate engine completion')
@@ -80,6 +83,8 @@ class PromptCache:
     def __init__(self, cache, model, tp, namespace, sample):
         from runner.identity import BlockHasher, block_keys, shard_name
         from ucm.sparse.prophetkv.lifecycle import seed_value
+        from runner.layout import validate_layout
+        validate_layout(sample['token_ids'], sample['boundaries'], sample['question_positions'], sparse=True)
         self.cache, self.tp = Path(cache), tp
         self.chunks = list(dict.fromkeys(tuple(sample['token_ids'][a:b]) for a,b in
                            zip(sample['boundaries'][:-2], sample['boundaries'][1:-1])))
@@ -168,9 +173,13 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
     from ucm.sparse.prophetkv.layers import resolve_layers
     cached = configs[0]['method'] != 'baseline'
     sample = selected[0][2]
+    if cached:
+        from runner.layout import validate_layout
+        for _,_,item in selected:
+            validate_layout(item['token_ids'],item['boundaries'],item['question_positions'],sparse=True)
     cfg = engine_config(args.model, configs[0]['method'], configs[0]['ratio'] or .2,
         tp=args.tp, memory=args.memory, cache_dir=cache,
-        end_token=sample['token_ids'][sample['boundaries'][1]-1])
+        end_token=None)
     if cached:
         cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts'] = {
             f'prompt-{index}': sample['boundaries'] for index, _, sample in selected}
@@ -197,7 +206,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                 started = time.perf_counter()
                 prompt_cache = PromptCache(cache, args.model, args.tp, namespace, sample)
                 for chunk_index, chunk in enumerate(prompt_cache.chunks):
-                    generate(llm.llm_engine, list(chunk), 1, f'{namespace}:{tag}:populate:{chunk_index}')
+                    generate(llm.llm_engine, list(chunk), 1, f'{namespace}:{tag}:populate:{chunk_index}', phase='populate')
                     retirement(llm,args.tp)
                 readiness = prompt_cache.ready()
                 construction = dict(prompt_id=entry['id'], namespace=namespace,
@@ -219,7 +228,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                     if cached:
                         llm.collective_rpc(arm, kwargs=dict(request_id=rid, boundaries=bounds,
                                                           question_positions=sample['question_positions']))
-                    return rid, generate(llm.llm_engine, ids, budget, rid, thinking)
+                    return rid, generate(llm.llm_engine, ids, budget, rid, thinking, sample=sample)
 
                 timings = {}
                 # Warm each policy once, and prime every measured request separately.
@@ -261,9 +270,9 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                 started = time.perf_counter()
                 lengths = analyzer.analyze(list(output.token_ids),ids,sample['thinking'])
                 evaluation = entry['evaluation']
-                accuracy = score_answer(lengths['answer_text'],evaluation)
+                accuracy = score_answer(scoring_text(output.text,lengths,evaluation),evaluation)
                 timings['scoring_seconds'] = time.perf_counter()-started
-                record = dict(prompt_id=entry['id'], method=method, ratio=ratio, scoring_layers=list(scoring),
+                record = dict(**sample_provenance(sample),prompt_id=entry['id'], method=method, ratio=ratio, scoring_layers=list(scoring),
                     request_id=rid, input_sha256=entry['sha256'], model=str(args.model), gpu_uuids=devices,
                     runtime_versions=VERSIONS, prompt_tokens=len(ids), output_token_ids=list(output.token_ids),
                     prediction=output.text, max_output_tokens=sample['max_output_tokens'], thinking=sample['thinking'],
@@ -328,7 +337,7 @@ def _run_sweep(args):
             max_retained_context_tokens=max(s['boundaries'][-2] for _,_,s in selected),
             baseline=engine_config(args.model,'baseline',tp=args.tp,memory=args.memory),
             cached=engine_config(args.model,'prophetkv',tp=args.tp,memory=args.memory,
-                cache_dir=cache,end_token=selected[0][2]['token_ids'][selected[0][2]['boundaries'][1]-1])),indent=2))
+                cache_dir=cache,end_token=None)),indent=2))
         return
     devices = check_environment(args.tp)
     group.mkdir(parents=True,exist_ok=False)  # no ambiguous resume or duplicate group

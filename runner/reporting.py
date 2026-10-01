@@ -50,11 +50,21 @@ def extract_choice(answer):
     return matches[0] if len(set(matches)) == 1 else None
 
 
+def ruler_preprocess(text):
+    # NVIDIA/RULER evaluate.py at the pinned commit, including control chars.
+    return re.sub(r'[\x00-\x1f]', '\n', text.strip()).strip()
+
+
+def scoring_text(generated_text, analysis, evaluation):
+    return generated_text if evaluation['scoring'] in ('ruler_all', 'ruler_any') else analysis['answer_text']
+
+
 def score_answer(answer, evaluation):
     references, scorer = evaluation['references'], evaluation['scoring']
     if not references:
         return None
     if scorer in ('ruler_all', 'ruler_any'):
+        answer = ruler_preprocess(answer)
         hits = [reference.lower() in answer.lower() for reference in references]
         return sum(hits)/len(hits) if scorer == 'ruler_all' else float(any(hits))
     prediction = normalized(answer)
@@ -124,6 +134,9 @@ def metrics(records, expected):
                   median_ttft_seconds=statistics.median(ttft) if ttft else None,
                   output_cap_reached=sum(r['output_cap_reached'] for r in records),
                   unfinished_thinking=sum(r['unfinished_thinking'] for r in records))
+    ruler = [r for r in records if r.get('scoring') in ('ruler_all', 'ruler_any')]
+    result['ruler_score'] = round(sum(r['accuracy'] for r in ruler)/len(ruler)*100, 2) if ruler else None
+    result['ruler_nulls'] = f"{sum(not ruler_preprocess(r['prediction']) for r in ruler)}/{len(ruler)}" if ruler else None
     for name in ('thinking_tokens', 'answer_tokens', 'control_tokens', 'output_tokens'):
         values = [r[name] for r in records]
         result['mean_'+name] = statistics.mean(values) if values else None
@@ -169,7 +182,7 @@ def aggregate(records, expected, context, status):
 COLUMNS = ('expected', 'completed', 'accuracy_scored', 'accuracy_unscored', 'accuracy_percent',
            'mean_ttft_seconds', 'median_ttft_seconds', 'mean_thinking_tokens', 'mean_answer_tokens',
            'mean_control_tokens', 'mean_output_tokens', 'total_thinking_tokens', 'total_answer_tokens',
-           'total_control_tokens', 'total_output_tokens', 'output_cap_reached', 'unfinished_thinking')
+           'total_control_tokens', 'total_output_tokens', 'output_cap_reached', 'unfinished_thinking', 'ruler_score', 'ruler_nulls')
 
 
 def render_markdown(report):

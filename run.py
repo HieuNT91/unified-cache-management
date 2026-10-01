@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare prompts or a persistent KV collection, then run a native clean method."""
 import argparse
+from runner.layout import sample_provenance
 import hashlib
 import json
 import os
@@ -33,11 +34,10 @@ def check_model(path):
 
 def tokenize_sample(args, tokenizer=None):
     from transformers import AutoTokenizer
-    from runner.cache import cacheblend_prompt
     check_model(args.model)
     if tokenizer is None:
         tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
-    question = args.question.read_text().strip()
+    question = args.question.read_text()
     if not question:
         raise ValueError('Empty question')
     messages = [{'role': 'user', 'content': args.context.read_text() + '\n\n' + question}]
@@ -52,21 +52,14 @@ def tokenize_sample(args, tokenizer=None):
                         if b > start and a < start + len(question)]
     if not question_indices:
         raise ValueError('Question token mapping is empty')
-    suffix = max(256, len(ids) - question_indices[0])
-    marker = tokenizer.convert_tokens_to_ids('<|endoftext|>')
-    if marker is None or tokenizer.convert_ids_to_tokens(marker) != '<|endoftext|>':
-        raise ValueError('Expected Qwen3 end-of-text delimiter')
-    chunks, formatted = cacheblend_prompt(ids, tokenizer, marker, getattr(args, 'kv_chunk_size', 4096) - 1, suffix)
-    bounds = [0]
-    for chunk in chunks:
-        bounds.append(bounds[-1] + len(chunk))
-    shift = bounds[-1] - (len(ids) - suffix)
-    bounds.append(len(formatted))
-    sample = dict(token_ids=formatted, boundaries=bounds,
-        question_positions=[i + shift for i in question_indices],
+    from runner.layout import boundaries_for, stamp_sample
+    sample = dict(token_ids=ids,
+        boundaries=boundaries_for(len(ids), question_indices[0], getattr(args, 'kv_chunk_size', 4096)),
+        question_positions=question_indices,
         thinking=args.thinking, max_output_tokens=args.max_output_tokens,
         model_config_sha256=digest(args.model / 'config.json'),
         context_sha256=digest(args.context), question_sha256=digest(args.question))
+    stamp_sample(sample, tokenizer.chat_template)
     validate_sample(sample, getattr(args, 'kv_chunk_size', 4096), getattr(args, 'context_length', 131072))
     return sample
 
@@ -80,14 +73,21 @@ def prepare(args):
     print(f'Prepared {len(sample["token_ids"])} tokens')
 
 
-def generate(engine, tokens, budget, request_id, thinking=False):
+def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None, phase=None):
     from vllm import SamplingParams
     from vllm.inputs import TokensPrompt
     if engine.has_unfinished_requests():
         raise RuntimeError('Concurrent requests are unsupported')
-    params = SamplingParams(temperature=.6 if thinking else 0., top_p=.95 if thinking else 1.,
-                            top_k=20 if thinking else -1, min_p=0., seed=0, max_tokens=budget)
     started = time.perf_counter()
+    from runner.layout import request_metadata, METADATA_KEY
+    metadata = request_metadata(request_id, tokens, phase or 'read', sample) if (sample is not None or phase is not None) else None
+    params = SamplingParams(temperature=.6 if thinking else 0., top_p=.95 if thinking else 1.,
+                            top_k=20 if thinking else 32, min_p=0., seed=0, max_tokens=budget,
+                            extra_args={METADATA_KEY: metadata} if metadata is not None else None)
+    # vLLM normalizes greedy top_k to zero in __post_init__. Preserve the
+    # requested RULER parameter on the wire; temperature zero remains greedy.
+    if not thinking:
+        params.top_k = 32
     engine.add_request(request_id, TokensPrompt(prompt_token_ids=tokens), params)
     first, result = None, None
     while engine.has_unfinished_requests():
@@ -172,15 +172,21 @@ def run(args):
     if args.max_output_tokens is not None:
         sample['max_output_tokens'] = args.max_output_tokens
     validate_sample(sample)
+    if args.method != 'baseline':
+        from runner.layout import validate_layout
+        validate_layout(sample['token_ids'], sample['boundaries'], sample['question_positions'], sparse=True)
     if sample['model_config_sha256'] != digest(args.model / 'config.json'):
         raise ValueError('Input was prepared with a different model configuration')
     cfg = engine_config(args.model, args.method, args.ratio, args.layers, args.num_layers,
         args.tp, args.memory, args.output.resolve() / 'cache',
-        sample['token_ids'][sample['boundaries'][1] - 1],
+        None,
         router_policy=args.router_policy, router_id=args.router_id)
     if args.method == 'router':
         from runner.router_measure import validate_profile
         validate_profile(sample,args.tp)
+        from runner.layout import validate_policy_protocol
+        from runner.router_policy import load_policy
+        validate_policy_protocol(load_policy(args.router_policy),sample)
     if args.dry_run:
         print(json.dumps(cfg, indent=2))
         return
@@ -219,7 +225,7 @@ def run(args):
         setup_receipts = llm.collective_rpc(setup)
         started = time.perf_counter()
         warmup = [100, 200, 300, 400] * 32
-        generate(llm.llm_engine, warmup, 1, namespace + ':warmup')
+        generate(llm.llm_engine, warmup, 1, namespace + ':warmup', phase='populate' if cached else None)
         if cached:
             wait_for_cache(readiness_args, [warmup])
         llm.collective_rpc(retire)
@@ -228,7 +234,8 @@ def run(args):
         readiness = None
         if cached:
             for i, chunk in enumerate(chunks):
-                generate(llm.llm_engine, chunk, 1, namespace + f':populate-{i}')
+                generate(llm.llm_engine, chunk, 1, namespace + f':populate-{i}', phase='populate')
+                llm.collective_rpc(retire)
             readiness = wait_for_cache(readiness_args, chunks)
         timings['cache_build_and_readiness_seconds'] = time.perf_counter() - started
 
@@ -239,7 +246,7 @@ def run(args):
 
         started = time.perf_counter()
         metadata(namespace + ':prime')
-        generate(llm.llm_engine, ids, 1, namespace + ':prime')
+        generate(llm.llm_engine, ids, 1, namespace + ':prime', sample=sample)
         llm.collective_rpc(drain)
         llm.collective_rpc(retire)
         timings['priming_seconds'] = time.perf_counter() - started
@@ -260,7 +267,7 @@ def run(args):
         else:
             metadata(namespace + ':measured')
             result, ttft, elapsed = generate(llm.llm_engine, ids, sample['max_output_tokens'],
-                                             namespace + ':measured', sample['thinking'])
+                                             namespace + ':measured', sample['thinking'], sample=sample)
         timings.update(ttft_seconds=ttft, generation_seconds=elapsed)
         started = time.perf_counter()
         diagnostics = llm.collective_rpc(drain)
@@ -290,13 +297,18 @@ def run(args):
             delete_retired_files(cache, before)
         timings['retirement_seconds'] = time.perf_counter() - started
         output = result.outputs[0]
-        record = dict(method=args.method, ratio=args.ratio if cached else None,
+        from runner.reporting import OutputAnalyzer, evaluation_metadata, score_answer, scoring_text
+        evaluation=evaluation_metadata(sample)
+        output_metrics=OutputAnalyzer(llm.get_tokenizer()).analyze(list(output.token_ids),ids,sample['thinking'])
+        accuracy=score_answer(scoring_text(output.text,output_metrics,evaluation),evaluation)
+        record = dict(**sample_provenance(sample),method=args.method, ratio=args.ratio if cached else None,
             scoring_layers=list(scoring_layers), input_sha256=digest(args.input),
             model=str(args.model), gpu_uuids=devices, runtime_versions=VERSIONS,
             prompt_tokens=len(ids), output_token_ids=list(output.token_ids), prediction=output.text,
             max_output_tokens=sample['max_output_tokens'], thinking=sample['thinking'],
             finish_reason=output.finish_reason, num_cached_tokens=result.num_cached_tokens,
-            timings=timings, setup=setup_receipts, readiness=readiness, retirement=retirement, routing=routing)
+            timings=timings, setup=setup_receipts, readiness=readiness, retirement=retirement, routing=routing,
+            **evaluation, **output_metrics, accuracy=accuracy, output_cap_reached=len(output.token_ids)>=sample['max_output_tokens'])
     finally:
         llm.llm_engine.engine_core.shutdown()
     dump(args.output / 'result.json', record)

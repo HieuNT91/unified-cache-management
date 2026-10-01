@@ -1,3 +1,4 @@
+from runner.layout import request_metadata, stamp_sample
 """CPU regressions for real chunk state/connector paths and causal execution."""
 import ast
 import copy
@@ -102,7 +103,8 @@ class WorkerStateTests(unittest.TestCase):
     @staticmethod
     def entry(start, count, length, first=False, hit=True, reserved=True):
         blocks = list(range((length+63)//64)) if reserved else list(range((start+count+63)//64))
-        dispatch = NS(chunks_meta=[NS(start_token_dix=64,store_hits=[hit]*516)] if first else [],
+        layout_sample=stamp_sample(dict(token_ids=list(range(length)),boundaries=[0,64]+list(range(4160,33088,4096))+[33088,length],question_positions=[33089,length-1]))
+        dispatch = NS(request_layout=request_metadata('r',layout_sample['token_ids'],'read',layout_sample),chunks_meta=[NS(start_token_dix=64,store_hits=[hit]*516)] if first else [],
                       full_block_ids=tuple(blocks),load_block_ids=([],list(range(517))))
         scheduler = NS(num_scheduled_tokens={'r': count}, scheduled_new_reqs=[NS(req_id='r')] if first else [],
             scheduled_cached_reqs=NS(req_ids=[] if first else ['r']),
@@ -116,7 +118,7 @@ class WorkerStateTests(unittest.TestCase):
         from ucm.sparse.prophetkv import prophetkv
         sparse = self.sparse()
         length = 64+3*16384+1
-        sparse.request_state.arm(RequestMetadata('r',(0,64,33088,length),(33089,length-1)))
+        sparse.request_state.arm(RequestMetadata('r',(0,64,4160,8256,12352,16448,20544,24640,28736,32832,33088,length),(33089,length-1)))
         selected = torch.tensor([16450,33000])
         with patch.object(prophetkv, 'probe', return_value=selected) as probe:
             covered = []
@@ -143,11 +145,11 @@ class WorkerStateTests(unittest.TestCase):
     def test_missing_hits_slots_and_mapping_changes_fail(self):
         for hits,reserved in [(False,True),(True,False)]:
             sparse = self.sparse()
-            sparse.request_state.arm(RequestMetadata('r',(0,64,33088,40000),(39999,)))
+            sparse.request_state.arm(RequestMetadata('r',(0,64,4160,8256,12352,16448,20544,24640,28736,32832,33088,40000),(33089,39999)))
             with self.assertRaises(RuntimeError):
                 sparse.build_sparse_meta(*self.entry(64,16384,40000,True,hits,reserved))
         sparse = self.sparse()
-        sparse.request_state.arm(RequestMetadata('r',(0,64,33088,40000),(39999,)))
+        sparse.request_state.arm(RequestMetadata('r',(0,64,4160,8256,12352,16448,20544,24640,28736,32832,33088,40000),(33089,39999)))
         sparse.build_sparse_meta(*self.entry(64,16384,40000,True))
         entry = self.entry(16448,16384,40000)
         entry[1]['r'].block_ids[0][0] = 999
@@ -162,7 +164,7 @@ class WorkerStateTests(unittest.TestCase):
 
     def test_causal_attention_gathers_only_current_endpoint(self):
         sparse = self.sparse()
-        sparse.request_state.arm(RequestMetadata('r',(0,64,33088,40000),(39999,)))
+        sparse.request_state.arm(RequestMetadata('r',(0,64,4160,8256,12352,16448,20544,24640,28736,32832,33088,40000),(33089,39999)))
         sparse.build_sparse_meta(*self.entry(64,16384,40000,True))
         sparse.current_positions=sparse.step_positions=torch.tensor([100,110])
         sparse.projection_count=2;sparse.audit=False
@@ -182,9 +184,33 @@ class ConnectorTests(unittest.TestCase):
         c.store=NS(drain=Mock());c.requests_meta={};c.req2rag_load_chunks={}
         return c
 
+    def test_repeated_model_setup_preserves_normalized_yarn_delta_table(self):
+        from ucm.sparse.prophetkv.runtime import delta_rotation_table
+        # Model Q/K already carry YaRN's magnitude. Cache relocation must use
+        # a unit-magnitude delta rotation even when setup runs every step.
+        angles=torch.tensor([[0.,0.],[.25,.5]])
+        for factor in (2.,4.):
+            with self.subTest(factor=factor):
+                magnitude=1.+.1*torch.log(torch.tensor(factor)).item()
+                raw=torch.cat((angles.cos(),angles.sin()),dim=-1)*magnitude
+                original=raw.clone()
+                model=NS(model=NS(layers=[NS(self_attn=NS(rotary_emb=NS(cos_sin_cache=raw)))]))
+                c=self.connector()
+                c.setup_model(model)
+                self.assertIs(c.cos_sin_cache,raw)
+                c.cos_sin_cache=normalized=delta_rotation_table(c.cos_sin_cache)
+                c.prophet_delta_normalized=True
+                for _ in range(3):
+                    c.setup_model(model)
+                    self.assertIs(c.cos_sin_cache,normalized)
+                    cos,sin=c.cos_sin_cache.chunk(2,dim=-1)
+                    torch.testing.assert_close(cos.square()+sin.square(),torch.ones_like(cos))
+                torch.testing.assert_close(raw,original,rtol=0,atol=0)
+
     def test_full_reservation_continuation_no_reload_or_double_alignment(self):
         from ucm.integration.vllm.blend_connector import BlendRequestDispatchMeta, UCMBlendConnector
         c=self.connector()
+        c.active_layout=dict(request_id='r',phase='read')
         c.requests_blend_meta['r']=NS(blend_stage=NS(is_blend_cache=lambda:True))
         self.assertEqual(c.reservation_tokens(NS(request_id='r',num_prompt_tokens=33000),16448),33000)
         blocks=list(range(516))
@@ -228,7 +254,7 @@ class ConnectorTests(unittest.TestCase):
         c.delta_rope_vllm_ids=None;c.delta_rope_positions=None
         c._generate_task=lambda slots:(slots,None)
         c.bind_connector_metadata(UCMBlendConnectorMetadata({'r':
-            BlendRequestDispatchMeta(([b'a',b'b'],[1,2]),([],[]),[],(1,2),False)}))
+            BlendRequestDispatchMeta(([b'a',b'b'],[1,2]),([],[]),[],(1,2),False,dict(request_id='r',phase='read'))}))
         c.start_load_kv(None)
         self.assertEqual(values,{1:10,2:10})
         values[1]=99  # repaired KV must survive the next prefill range
@@ -241,7 +267,7 @@ class ConnectorTests(unittest.TestCase):
         # A repeated initial load must fail before it can overwrite repairs.
         with self.assertRaises(RuntimeError):
             c.bind_connector_metadata(UCMBlendConnectorMetadata({'r':
-                BlendRequestDispatchMeta(([b'a'],[1]),([],[]),[],(1,2),False)}))
+                BlendRequestDispatchMeta(([b'a'],[1]),([],[]),[],(1,2),False,dict(request_id='r',phase='read'))}))
 
     def test_preemption_rejected_and_failed_load_rejected(self):
         from ucm.integration.vllm.blend_connector import UCMBlendConnector
@@ -334,7 +360,7 @@ class ReadinessTests(unittest.TestCase):
                 num_key_value_heads=2,hidden_size=4,num_hidden_layers=2)))
             args=NS(model_path=root,tensor_parallel_size=2,cache_dir=root/'cache',hash_seed='seed')
             tokens=list(range(64))
-            meta=[f'{root}:2:torch.bfloat16:{rank}'.encode() for rank in range(2)]
+            meta=[f'rpkv-bf16-local-block64-v3:{root}:2:torch.bfloat16:{rank}'.encode() for rank in range(2)]
             def hashed(m,value):
                 return hashlib.md5(m+(value if isinstance(value,bytes) else pickle.dumps(value,protocol=pickle.HIGHEST_PROTOCOL))).digest()
             key=hashed(meta[0],(hashed(meta[0],'seed'),tuple(tokens)))

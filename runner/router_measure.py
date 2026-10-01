@@ -8,9 +8,9 @@ from runner.setups import atomic_json, file_hash
 
 def validate_profile(sample, tp):
     from runner.config import validate_sample
-    validate_sample(sample,4096,64000)
-    if tp != 4 or sample['thinking'] or sample['max_output_tokens'] != 256:
-        raise ValueError('Frozen router requires BF16 TP4, non-thinking, 256 output cap')
+    validate_sample(sample,4096,65536)
+    if tp != 4 or sample['thinking'] or len(sample['token_ids'])+sample['max_output_tokens']>65920:
+        raise ValueError('Router requires BF16 TP4 and non-thinking')
 
 
 def sync_mode(llm, rid, action, tp, capture=False):
@@ -71,11 +71,14 @@ def measure(llm, sample, request_id, policy, router_id, output, tp=4, unchanged=
     from run import generate, verify_diagnostics
     from runner.worker import router_export, drain
     validate_profile(sample,tp)
+    from runner.layout import PROMPT_PROTOCOL
+    if policy.get("prompt_protocol") != PROMPT_PROTOCOL or policy.get("evaluation_protocol") != sample.get("evaluation_protocol"):
+        raise ValueError("Policy is incompatible with this prompt/evaluation protocol; no automatic refit")
     output = Path(output);output.mkdir(parents=True,exist_ok=True)
     started = time.perf_counter()
     probe_id = request_id+'-probe'
     arm_request(llm,sample,probe_id,'prophetkv-all64-1',tp,capture=True)
-    internal, probe_ttft, _ = generate(llm.llm_engine,sample['token_ids'],1,probe_id,False)
+    internal, probe_ttft, _ = generate(llm.llm_engine,sample['token_ids'],1,probe_id,False,sample=sample)
     if len(internal.outputs[0].token_ids) != 1:
         raise RuntimeError('Router probe must produce exactly one discarded internal token')
     del internal
@@ -100,7 +103,7 @@ def measure(llm, sample, request_id, policy, router_id, output, tp=4, unchanged=
     replies = arm_request(llm,sample,answer_id,decision['action'],tp)
     sync_seconds = time.perf_counter()-sync_at
     overhead = time.perf_counter()-started
-    result, answer_ttft, elapsed = generate(llm.llm_engine,sample['token_ids'],256,answer_id,False)
+    result, answer_ttft, elapsed = generate(llm.llm_engine,sample['token_ids'],sample['max_output_tokens'],answer_id,False,sample=sample)
     # The elapsed interval before generate includes all routing work, including CPU export and barriers.
     return result, overhead+answer_ttft, overhead+elapsed, dict(router_id=router_id,
         primary=router_id=='router1',policy_sha256=policy['payload_sha256'],features=features,

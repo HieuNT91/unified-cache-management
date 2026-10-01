@@ -7,6 +7,7 @@ from runner.reporting import evaluation_metadata, score_answer
 
 
 class Tokenizer:
+    chat_template = 'test native template'
     pad_token_id=999
     def encode(self,text,**kwargs):
         return [ord(c) for c in text]

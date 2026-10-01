@@ -29,7 +29,7 @@ def main():
     entries = []
     for i, path in enumerate(args.inputs):
         sample = json.loads(path.read_text())
-        sample.update(thinking=False, max_output_tokens=1)
+        sample.update(thinking=sample['thinking'])
         prepared = args.output / f'input-{i}.json'
         atomic_json(prepared, sample)
         entries.append(dict(id=f'prompt-{i}', prepared=str(prepared)))

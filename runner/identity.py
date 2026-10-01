@@ -2,13 +2,13 @@
 import hashlib
 import pickle
 
-CACHE_FORMAT = 'ucm-bf16-block64-v2'
+CACHE_FORMAT = 'rpkv-bf16-local-block64-v3'
 HASH_PROTOCOL = 4
 
 
 class BlockHasher:
     def __init__(self, model_identity, tp, rank, persistent=False):
-        self.meta = f'{model_identity}:{tp}:torch.bfloat16:{rank}'.encode()
+        self.meta = f'{CACHE_FORMAT}:{model_identity}:{tp}:torch.bfloat16:{rank}'.encode()
         self.protocol = HASH_PROTOCOL if persistent else pickle.HIGHEST_PROTOCOL
 
     def __call__(self, value):

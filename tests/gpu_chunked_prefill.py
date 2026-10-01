@@ -26,9 +26,9 @@ def main():
     if len(sample['token_ids']) - sample['boundaries'][1] <= 32768:
         parser.error('Use a prepared input requiring at least three cached prefill steps')
     args.output.mkdir(parents=True, exist_ok=False)
-    # Preserve every prepared input token; only use a deterministic one-token
+    # Preserve every prepared input token; use the deterministic per-task
     # output cap for this integration check, leaving the source file untouched.
-    sample.update(thinking=False, max_output_tokens=1)
+    # Original RULER task caps remain unchanged; one-token probes are internal only.
     prepared = args.output.resolve() / 'input.json'
     prepared.write_text(json.dumps(sample))
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=','.join(devices), PYTHON_BIN=sys.executable)
@@ -54,7 +54,7 @@ def main():
         results[name] = record['output_token_ids']
     for name in ('prophetkv-1', 'selective-1'):
         if results[name] != results['baseline']:
-            raise RuntimeError(f'{name}: 100% repair first token differs from baseline; investigate numerical drift')
+            raise RuntimeError(f'{name}: 100% repair output differs from baseline; investigate numerical drift')
     (args.output / 'validation.json').write_text(json.dumps(dict(passed=True, first_tokens=results), indent=2))
 
 

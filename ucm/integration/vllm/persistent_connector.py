@@ -40,12 +40,20 @@ class PersistentBlendConnector(UCMBlendConnector):
         return TrackedStore(store)
 
     def get_num_new_matched_tokens(self, request, num_computed_tokens):
+        from runner.layout import METADATA_KEY, validate_request_metadata
+        metadata = (getattr(getattr(request, 'sampling_params', None), 'extra_args', None) or {}).get(METADATA_KEY)
+        metadata = validate_request_metadata(metadata, request.request_id,
+            list(request.prompt_token_ids), sparse=not is_dense_request(request.request_id))
+        if request.num_prompt_tokens != len(request.prompt_token_ids):
+            raise ValueError('Request prompt length differs from metadata')
         namespace = namespace_from_id(request.request_id)
         if is_dense_request(request.request_id):
-            if self.requests_blend_meta:
-                raise RuntimeError('Dense bypass requires retired cache request')
+            if metadata['phase'] != 'read' or self.requests_blend_meta:
+                raise RuntimeError('Dense bypass requires a retired read request')
             return 0, False
         if request.request_id in self.requests_blend_meta:
+            if metadata != self.active_layout:
+                raise ValueError('Request layout changed during allocation retry')
             # Allocation may have failed after lookup on the previous tick.
             meta = self.requests_blend_meta[request.request_id]
             return min(meta.pc_hit_block_num * self.block_size, request.num_tokens - 1), False
@@ -55,20 +63,13 @@ class PersistentBlendConnector(UCMBlendConnector):
         if config:
             from runner.identity import setup_seed
             self._seed = self.request_hasher(setup_seed(config['fingerprint']))
-            if config['readonly']:
-                tag = request.request_id.split(':')[1]
-                self.setup_boundaries = config['layouts'].get(tag)
-                if self.setup_boundaries is None or self.setup_boundaries[-1] != request.num_prompt_tokens:
-                    raise RuntimeError('Population requests are forbidden in cached experiments; rerun setup')
+            if config['readonly'] and metadata['phase'] != 'read':
+                raise RuntimeError('Population requests forbidden in read-only setup')
         else:
             self._seed = self.request_hasher(seed_value(namespace))
-        if getattr(self, "temporary_layouts", None):
-            from runner.temporary import request_phase
-            phase, bounds = request_phase(request.request_id, self.temporary_layouts)
-            self.temporary_readonly = phase == "read"
-            self.setup_boundaries = bounds if self.temporary_readonly else None
-            if self.temporary_readonly and bounds[-1] != request.num_prompt_tokens:
-                raise RuntimeError("Temporary prompt length changed")
+        self.active_layout = deepcopy(metadata)
+        self.temporary_readonly = metadata['phase'] == 'read'
+        self.setup_boundaries = self.active_layout['boundaries']
         self.prompt_lengths[request.request_id] = request.num_prompt_tokens
         result = super().get_num_new_matched_tokens(request, num_computed_tokens)
         if (config and config['readonly']) or getattr(self, 'temporary_readonly', False):
@@ -76,17 +77,17 @@ class PersistentBlendConnector(UCMBlendConnector):
             if (not meta.blend_stage.is_blend_cache()
                     or result[0] != self.setup_boundaries[1]
                     or not all(hit for chunk in meta.chunks_meta for hit in chunk.store_hits)):
-                if getattr(self, 'temporary_readonly', False):
+                if not config and getattr(self, 'temporary_readonly', False):
                     raise RuntimeError('Temporary context KV is incomplete; fail this prompt sweep')
                 raise RuntimeError('Persistent context KV is incomplete; rerun setup')
         return result
 
     def _process_req(self, tokens):
-        if not ((getattr(self, 'persistent_setup', None) and self.persistent_setup['readonly'])
-                or getattr(self, 'temporary_readonly', False)):
-            return super()._process_req(tokens)
-        # Frozen boundaries avoid delimiter heuristics and accidental prefix matches
-        # across independently constructed (possibly duplicate) chunks.
+        if self.active_layout['phase'] == 'populate':
+            keys = self.generate_hash(self.block_size, tokens, self._seed)
+            return BlendStage.BUILD_CHUNK_CACHE, keys, [], []
+        # Each chunk hash starts at local position zero. Duplicate hashes retain
+        # separate global slots and separate delta rotations in dispatch metadata.
         chunks, keys = [], []
         for start, end in zip(self.setup_boundaries[:-2], self.setup_boundaries[1:-1]):
             hashes = self.generate_hash(self.block_size, tokens[start:end], self._seed)
@@ -117,6 +118,7 @@ class PersistentBlendConnector(UCMBlendConnector):
             if ((getattr(self, 'persistent_setup', None) and self.persistent_setup['readonly'])
                     or getattr(self, 'temporary_readonly', False)) and item.dump_block_ids[0]:
                 raise RuntimeError('Read-only setup forbids cache reconstruction; rerun setup')
+            item.request_layout = deepcopy(self.active_layout)
             item.full_block_ids = tuple(request.block_ids[0])
             if len(item.load_block_ids[0]) != len(item.load_block_ids[1]):
                 raise RuntimeError('Full prompt KV reservation is missing')
@@ -133,7 +135,8 @@ class PersistentBlendConnector(UCMBlendConnector):
             if cached.num_computed_tokens[i] < self.prompt_lengths[rid]:
                 original = self.dispatches[rid]
                 dispatch[rid] = BlendRequestDispatchMeta(([], []), ([], []), [],
-                    full_block_ids=original.full_block_ids, continuing=True)
+                    full_block_ids=original.full_block_ids, continuing=True,
+                    request_layout=deepcopy(original.request_layout))
         return UCMBlendConnectorMetadata(dispatch)
 
     def bind_connector_metadata(self, metadata):
@@ -144,10 +147,11 @@ class PersistentBlendConnector(UCMBlendConnector):
                 raise RuntimeError('One request at a time is supported')
             if self.worker_request_id is not None:
                 raise RuntimeError('Cache load attempted before retiring the previous request')
-            if getattr(self, "temporary_layouts", None):
-                from runner.temporary import request_phase
-                phase, _ = request_phase(first[0], self.temporary_layouts)
-                self.store.writable = phase == "populate"
+            layout = metadata.request_meta[first[0]].request_layout
+            if layout.get('request_id') != first[0] or layout.get('phase') not in ('populate', 'read'):
+                raise RuntimeError('Worker dispatch missing request layout')
+            if hasattr(self.store, 'writable'):
+                self.store.writable = layout['phase'] == 'populate'
             self.worker_request_id = first[0]
             if hasattr(self, 'prophet_aligned'):
                 self.prophet_aligned.clear()
@@ -192,6 +196,10 @@ class PersistentBlendConnector(UCMBlendConnector):
         self.req2rag_load_chunks.pop(request.request_id, None)
         self.prompt_lengths.pop(request.request_id, None)
         self.dispatches.pop(request.request_id, None)
+        if (getattr(self, 'active_layout', None) or {}).get('request_id') == request.request_id:
+            self.active_layout = None
+            self.setup_boundaries = None
+            self.temporary_readonly = False
         path = Path(os.environ['PROPHETKV_SCHEDULER_RECEIPT'])
         tmp = path.with_suffix('.tmp')
         tmp.write_text(json.dumps(dict(request_id=request.request_id,

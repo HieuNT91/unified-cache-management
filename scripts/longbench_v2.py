@@ -14,7 +14,6 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from runner.cache import cacheblend_prompt
 from runner.config import validate_sample
 from runner.setups import atomic_json, bytes_per_shard, file_hash, fingerprint, setup_lock
 
@@ -47,17 +46,13 @@ def layout(tokenizer, content, query, protected):
                  if b > offset + begin and a < offset + begin + len(query)]
     if not positions:
         raise ValueError('Empty question')
-    suffix = max(256, len(ids) - positions[0])
-    chunks, tokens = cacheblend_prompt(ids, tokenizer, tokenizer.pad_token_id, 4095, suffix)
-    bounds = [0]
-    for chunk in chunks:
-        bounds.append(bounds[-1] + len(chunk))
-    bounds.append(len(tokens))
-    shift = len(tokens) - len(ids)
-    return dict(token_ids=tokens, tokens=len(tokens), boundaries=bounds, fresh_suffix_tokens=suffix,
-                chat_tokens=len(ids), formatted_text=text, rendered_user_prompt=content,
-                query=dict(text=query, positions=[i + shift for i in positions]),
-                thinking_enabled=True, prompt_sha256=fingerprint(tokens))
+    from runner.layout import boundaries_for, stamp_sample
+    bounds = boundaries_for(len(ids), positions[0])
+    return stamp_sample(dict(token_ids=ids, tokens=len(ids), boundaries=bounds,
+                fresh_suffix_tokens=len(ids)-bounds[-2], chat_tokens=len(ids),
+                formatted_text=text, rendered_user_prompt=content,
+                query=dict(text=query, positions=positions),
+                thinking_enabled=True, prompt_sha256=fingerprint(ids)), tokenizer.chat_template)
 
 
 def prepare_prompt(tokenizer, row, template, limit=INPUT):

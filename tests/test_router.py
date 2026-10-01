@@ -1,3 +1,5 @@
+from runner.layout import request_metadata, METADATA_KEY, PROMPT_PROTOCOL
+from runner.layout import stamp_sample
 """Native router CPU acceptance: policies, arithmetic, lifecycle, relocation and full reports."""
 import copy
 import json
@@ -34,7 +36,7 @@ def payload(action=None):
     rows=[compile_policy(source_policy(i,'cost' if i==2 else 'loss')) for i in (1,2,3)]
     if action is not None:
         for r in rows:r['tree']=dict(action=action,training_samples=195)
-    data=dict(schema=SCHEMA,primary='router1',feature_names=list(FEATURES),feature_definitions=copy.deepcopy(DEFINITIONS),
+    data=dict(prompt_protocol=PROMPT_PROTOCOL, schema=SCHEMA,primary='router1',feature_names=list(FEATURES),feature_definitions=copy.deepcopy(DEFINITIONS),
         actions=list(ACTIONS),policies=rows,provenance=dict(training_protocol_sha256='a'*64,policy_lock_sha256='b'*64,cohort_sha256='c'*64))
     data['payload_sha256']=digest(data)
     return data
@@ -48,7 +50,7 @@ def write_policy(root,action=None):
 
 def sample():
     ids=[1]*384;ids[63]=ids[127]=99
-    return dict(token_ids=ids,boundaries=[0,64,128,384],question_positions=[380,381],thinking=False,max_output_tokens=256)
+    return stamp_sample(dict(token_ids=ids,boundaries=[0,64,128,384],question_positions=[380,381],thinking=False,max_output_tokens=256))
 
 
 class PolicyTests(unittest.TestCase):
@@ -146,7 +148,8 @@ class LifecycleTests(unittest.TestCase):
         connector.requests_blend_meta={};connector.requests_meta={};connector.req2rag_load_chunks={}
         connector.prompt_lengths={};connector.dispatches={}
         backend=Mock();connector.store=TrackedStore(backend);connector.store.router_dense=True
-        request=NS(request_id=rid,num_prompt_tokens=384,num_tokens=384)
+        request=NS(request_id=rid,num_prompt_tokens=384,num_tokens=384,prompt_token_ids=sample()['token_ids'],
+            sampling_params=NS(extra_args={METADATA_KEY:request_metadata(rid,sample()['token_ids'],'read',sample())}))
         self.assertEqual(connector.get_num_new_matched_tokens(request,0),(0,False))
         backend.lookup.assert_not_called()
         connector.router_dense_id=rid
@@ -182,7 +185,7 @@ class LifecycleTests(unittest.TestCase):
                     return rows
                 raise AssertionError('Unexpected RPC')
             llm=NS(collective_rpc=rpc,llm_engine=object())
-            def generate(engine,tokens,budget,rid,thinking=False):
+            def generate(engine,tokens,budget,rid,thinking=False,**metadata):
                 events.append(('generate',budget,rid))
                 return NS(outputs=[NS(token_ids=[7])]),.02,.1
             with patch.dict(sys.modules,{'runner.worker':worker}),patch('run.generate',side_effect=generate),patch('run.verify_diagnostics'):
@@ -314,7 +317,7 @@ class NativeExecutionTests(unittest.TestCase):
                 def ready(self):events.append(('ready',));return {'complete':True}
                 def unchanged(self):events.append(('immutable',))
                 def delete(self):events.append(('delete',));return dict(deleted_shards=8)
-            def generate(engine,tokens,budget,rid,thinking=False):
+            def generate(engine,tokens,budget,rid,thinking=False,**metadata):
                 events.append(('generate',budget,rid))
                 atomic_json(Path(os.environ['PROPHETKV_SCHEDULER_RECEIPT']),dict(request_id=rid,requests_blend_meta=0,requests_meta=0))
                 return NS(num_cached_tokens=0 if not engine.current['cached'] or rid.endswith('|router-dense') else 64,

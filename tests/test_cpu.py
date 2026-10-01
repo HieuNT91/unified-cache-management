@@ -1,3 +1,4 @@
+from runner.layout import stamp_sample
 import copy
 import sys
 import types
@@ -36,9 +37,9 @@ class ConfigurationTests(unittest.TestCase):
             ids = [1] * 384
             ids[63] = ids[127] = 99
             sample = root / 'input.json'
-            sample.write_text(json.dumps(dict(token_ids=ids,boundaries=[0,64,128,384],
+            sample.write_text(json.dumps(stamp_sample(dict(token_ids=ids,boundaries=[0,64,128,384],
                 question_positions=[380],max_output_tokens=1,thinking=False,
-                model_config_sha256=hashlib.sha256(config.read_bytes()).hexdigest())))
+                model_config_sha256=hashlib.sha256(config.read_bytes()).hexdigest()))))
             cases = [('baseline', []), ('prophetkv', []),
                      ('selective_prophetkv', ['--num-layers','5']),
                      ('selective_prophetkv', ['--layers','45','48','50','56','58'])]
@@ -74,8 +75,8 @@ class ConfigurationTests(unittest.TestCase):
     def test_prompt_boundaries_and_capacity(self):
         ids = [1] * 384
         ids[63] = ids[127] = 99
-        sample = dict(token_ids=ids, boundaries=[0, 64, 128, 384], question_positions=[380, 381],
-                      max_output_tokens=256, thinking=False)
+        sample = stamp_sample(dict(token_ids=ids, boundaries=[0, 64, 128, 384], question_positions=[380, 381],
+                      max_output_tokens=256, thinking=False))
         self.assertIs(validate_sample(sample), sample)
         for key, value in [('question_positions', [1]), ('boundaries', [0, 65, 128, 384]),
                            ('max_output_tokens', 131072), ('thinking', 'false')]:

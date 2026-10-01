@@ -1,3 +1,5 @@
+from runner.layout import request_metadata, METADATA_KEY, PROMPT_PROTOCOL
+from runner.layout import stamp_sample
 """Persistent setup contracts, tested with disk artifacts and CPU-only fake engines."""
 import copy
 import io
@@ -30,13 +32,14 @@ class SetupTests(unittest.TestCase):
             num_key_value_heads=8, head_dim=1)))
         (self.model / 'model.safetensors').write_bytes(b'fixture weights, never loaded')
         (self.model / 'tokenizer.json').write_text('{}')
-        self.sample = dict(token_ids=[1]*63+[99]+[2]*63+[99]+[3]*256,
+        self.sample = stamp_sample(dict(token_ids=[1]*63+[99]+[2]*63+[99]+[3]*256,
             boundaries=[0,64,128,384], question_positions=[380,381],
             max_output_tokens=1, thinking=False,
-            model_config_sha256=setups.file_hash(self.model / 'config.json'))
+            model_config_sha256=setups.file_hash(self.model / 'config.json')))
         (self.root / 'a.json').write_text(json.dumps(self.sample))
         other = copy.deepcopy(self.sample)
         other['token_ids'][-1] = 4  # all context chunks are identical
+        stamp_sample(other)
         (self.root / 'b.json').write_text(json.dumps(other))
         self.manifest = self.root / 'prompts.jsonl'
         self.manifest.write_text('\n'.join(json.dumps(dict(id=pid, prepared=name))
@@ -158,7 +161,7 @@ class SetupTests(unittest.TestCase):
         self.args.model = moved
         self.build()
         self.assertEqual(len(self.build_calls), 1)
-        for key, value in [('tp',4), ('kv_chunk_size',8192), ('context_length',65536), ('thinking',False)]:
+        for key, value in [('tp',4), ('kv_chunk_size',2048), ('context_length',65536), ('thinking',False)]:
             old = getattr(self.args, key)
             setattr(self.args, key, value)
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'Incompatible'):
@@ -249,7 +252,7 @@ class SetupTests(unittest.TestCase):
     def test_setup_cli_dry_run_and_collection_config(self):
         env = dict(os.environ, PYTHON_BIN=sys.executable, CUDA_VISIBLE_DEVICES='')
         cmd = ['bash', 'run.sh', 'setup', '--model', str(self.model), '--manifest', str(self.manifest),
-               '--output', str(self.args.output), '--tp', '2', '--kv-chunk-size', '8192', '--dry-run']
+               '--output', str(self.args.output), '--tp', '2', '--kv-chunk-size', '4096', '--dry-run']
         result = subprocess.run(cmd, env=env, capture_output=True, text=True, check=True)
         plan = json.loads(result.stdout)
         self.assertEqual(plan['prompts'],2)
@@ -316,16 +319,23 @@ class SetupTests(unittest.TestCase):
         connector.requests_blend_meta={};connector.prompt_lengths={}
         connector.store=SetupStore(Mock(),connector.persistent_setup)
         rid='a'*32+':prompt-0:measured'
-        request=NS(request_id=rid,num_prompt_tokens=384,num_tokens=384,all_token_ids=self.sample['token_ids'])
+        request=NS(request_id=rid,num_prompt_tokens=384,num_tokens=384,all_token_ids=self.sample['token_ids'],prompt_token_ids=self.sample['token_ids'],
+            sampling_params=NS(extra_args={METADATA_KEY:request_metadata(rid,self.sample['token_ids'],'read',self.sample)}))
         self.assertEqual(connector.get_num_new_matched_tokens(request,0),(64,False))
         meta=connector.requests_blend_meta[rid]
         self.assertEqual(meta.chunks_meta[0].start_token_dix,64)
         self.assertTrue(all(meta.chunks_meta[0].store_hits))
         connector.requests_blend_meta.clear()
         request.request_id='b'*32+':populate'
+        request.prompt_token_ids=self.sample['token_ids'][:64]
+        request.num_prompt_tokens=64
+        request.sampling_params.extra_args={METADATA_KEY:request_metadata(request.request_id,request.prompt_token_ids,'populate')}
         with self.assertRaisesRegex(RuntimeError,'Population'):
             connector.get_num_new_matched_tokens(request,0)
         request.request_id=rid
+        request.prompt_token_ids=self.sample['token_ids']
+        request.num_prompt_tokens=384
+        request.sampling_params.extra_args={METADATA_KEY:request_metadata(rid,request.prompt_token_ids,'read',self.sample)}
         shard=self.args.output/'cache'/setups.required_files(inventory)[-1]
         shard.unlink()
         with self.assertRaisesRegex(RuntimeError,'rerun setup'):
@@ -334,6 +344,7 @@ class SetupTests(unittest.TestCase):
     def test_raw_collection_tokenizes_once_with_configurable_chunks(self):
         # A tiny character tokenizer exercises real chat/question offset mapping.
         class Tokenizer:
+            chat_template = 'test native template'
             def apply_chat_template(self, messages, **kwargs):
                 return messages[0]['content'] + '\nanswer:'
             def __call__(self, text, **kwargs):
@@ -387,7 +398,7 @@ class SetupTests(unittest.TestCase):
         llm.collective_rpc=Mock(side_effect=rpc)
         llm.llm_engine.engine_core.shutdown.side_effect=lambda: self.assertFalse(
             (self.root/'out'/'final_aggregation.json').exists())
-        def generate(engine, tokens, budget, rid, thinking=False):
+        def generate(engine, tokens, budget, rid, thinking=False, **metadata):
             if ':prompt-1:measured' in rid:
                 live=json.loads((self.root/'out'/'live_aggregation.json').read_text())
                 self.assertEqual(live['overall']['completed'],1)
@@ -441,7 +452,7 @@ class SetupTests(unittest.TestCase):
         llm=NS(llm_engine=NS(engine_core=NS(shutdown=Mock())),collective_rpc=Mock())
         llm.collective_rpc.side_effect=lambda fn: ([dict(rank=i,quiescent=True,transfers={'pending':0},request_bookkeeping=0)
                                                    for i in range(2)] if fn is worker.retire else [])
-        def generate(engine,tokens,budget,rid):
+        def generate(engine,tokens,budget,rid,**metadata):
             cid=setups.fingerprint(tokens)
             self.fake_build(self.args.output,descriptor,samples,[cid],self.args,{})
             return None,0.,0.
@@ -461,13 +472,15 @@ class SetupTests(unittest.TestCase):
         for chunk in (0,63,65,16385,32768,True):
             with self.assertRaises(ValueError):
                 validate_preparation(chunk)
-        for chunk in (64,4096,8192,16384):
+        for chunk in (64,1024,2048,4096):
             validate_preparation(chunk)
         with self.assertRaisesRegex(ValueError,'context-length'):
             validate_sample(self.sample,4096,383)
         oversized=copy.deepcopy(self.sample)
         oversized['token_ids'] += [1]*(131072-len(oversized['token_ids']))
         oversized['boundaries'][-1]=131072
+        oversized['question_positions']=[129]
+        stamp_sample(oversized)
         with self.assertRaisesRegex(ValueError,'plus output'):
             validate_sample(oversized)
         descriptor,_=self.build()

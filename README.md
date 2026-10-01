@@ -1,3 +1,6 @@
+> **rpkv branch:** use [the original RULER 64K and metadata-boundary guide](scripts/RPKV.md).
+> Historical exact-64000/padded-input and old-policy commands below do not apply to this branch.
+
 # ProphetKV · Qwen3-32B
 
 A focused runtime with four modes: no-cache baseline, original all-layer

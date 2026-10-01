@@ -1,4 +1,4 @@
-"""New, unsplit 13 x 200 RULER cohort; CPU only, pinned official generators."""
+"""Original task-batch preparation plus read-only historical corpus inventories."""
 import hashlib
 import json
 import os
@@ -67,25 +67,11 @@ def verify_sources(ruler,model):
 
 
 def format_corpus(tokenizer,row,task):
-    sample=format_sample(tokenizer,row,task,thinking=False,output=256)
-    content=row['input']
-    rendered=tokenizer.apply_chat_template([dict(role='user',content=content)],tokenize=False,
-                                            add_generation_prompt=True,enable_thinking=False)
-    original=tokenizer.encode(rendered,add_special_tokens=False)
-    pad=sample['padding'];at=pad['original_insertion_position'];count=pad['count']
-    expanded=original[:at]+[pad['token_id']]*count+original[at:]
-    suffix=sample['boundaries'][-1]-sample['boundaries'][-2]
-    mapping=[];cursor=0
-    for i,(a,b) in enumerate(zip(sample['boundaries'][:-2],sample['boundaries'][1:-1])):
-        marker=len(tokenizer.encode(f'\n[Context chunk {i+1}]\n',add_special_tokens=False))
-        length=min(4095-marker,len(expanded)-suffix-cursor)
-        mapping.extend(range(a+marker,a+marker+length));cursor+=length
-    mapping.extend(range(sample['boundaries'][-2],len(sample['token_ids'])))
-    if [sample['token_ids'][p] for p in mapping]!=expanded:raise ValueError('Full token reconstruction failed')
-    original_mapping=mapping[:at]+mapping[at+count:]
-    if [sample['token_ids'][p] for p in original_mapping]!=original:raise ValueError('Source token reconstruction failed')
-    sample.update(original_to_formatted=original_mapping,original_token_sha256=fingerprint(original),
-                  prompt_sha256=fingerprint(sample['token_ids']),full_reconstruction=True)
+    sample=format_sample(tokenizer,row,task)
+    sample.pop('references',None)
+    sample.update(original_to_formatted=list(range(len(sample['token_ids']))),
+        original_token_sha256=fingerprint(sample['token_ids']),
+        prompt_sha256=fingerprint(sample['token_ids']),full_reconstruction=True)
     return sample
 
 
@@ -100,55 +86,7 @@ def initialize(ruler,model,output):
 
 
 def generate(entry):
-    ruler,model,output=_WORK;task=entry['task'];data=spec()
-    folder=output/'generation'/entry['id'];receipt=folder/'receipt.json'
-    if receipt.exists():
-        saved=json.loads(receipt.read_text())
-        if saved['identity']!=entry:raise ValueError('Generation identity changed')
-        for name,digest in saved['files'].items():
-            if file_hash(output/name)!=digest:raise ValueError('Accepted preparation changed')
-        return saved['row']
-    definition=data['definitions'][task];_,constants=definitions(ruler);base=constants[definition['task']]
-    folder.mkdir(parents=True,exist_ok=True)
-    for attempt,seed in enumerate(entry['seeds']):
-        attempt_dir=folder/f'attempt-{attempt}'
-        attempt_dir.mkdir(exist_ok=True)
-        command=[sys.executable,str(ruler/'scripts/data/synthetic'/f"{definition['task']}.py"),
-            '--save_dir',str(attempt_dir),'--save_name',task,'--subset','validation',
-            '--tokenizer_path',str(model),'--tokenizer_type','hf','--max_seq_length',str(63000-attempt*512),
-            '--tokens_to_generate',str(data['output_reserve'][task]),'--num_samples','1',
-            '--random_seed',str(seed),'--template',base['template']+base.get('answer_prefix','')]
-        if 'source_index' in entry:command+=['--pre_samples',str(entry['source_index'])]
-        for key,value in definition['args'].items():command+=['--'+key,str(value)]
-        with (attempt_dir/'generator.log').open('w') as log:
-            subprocess.run(command,check=True,timeout=900,stdout=log,stderr=subprocess.STDOUT,
-                env=dict(os.environ,CUDA_VISIBLE_DEVICES='',PYTHONHASHSEED='0',HF_HUB_OFFLINE='1',
-                         OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',TOKENIZERS_PARALLELISM='false'))
-        raw_path=attempt_dir/task/'validation.jsonl'
-        raw=[json.loads(line) for line in raw_path.read_text().splitlines()]
-        if len(raw)!=1 or not raw[0].get('outputs'):raise ValueError('Invalid official generator output')
-        row=raw[0]
-        if task.startswith('qa_'):
-            question=query_span(row['input'],task)[1].removeprefix('Question:').strip()
-            if question_hash(question)!=entry['question_sha256']:raise ValueError('QA identity mismatch')
-        try:sample=format_corpus(_TOKENIZER,row,task)
-        except ValueError as error:
-            if 'exceeds exact input target' not in str(error):raise
-            continue
-        # Independent reconstruction from source before freezing any accepted input.
-        if format_corpus(_TOKENIZER,json.loads(json.dumps(row)),task)!=sample:
-            raise ValueError('Non-deterministic formatter')
-        sample['model_config_sha256']=data['model_fingerprints']['config.json']
-        relative=f"samples/{entry['id']}.json";atomic_json(output/relative,sample)
-        record=dict(id=entry['id'],ordinal=entry['ordinal'],subtask=task,prepared=relative,
-            sha256=file_hash(output/relative),prompt_sha256=sample['prompt_sha256'],identity=entry,
-            references=row['outputs'],scoring='ruler_any' if task.startswith('qa_') else 'ruler_all',
-            raw=str(raw_path.relative_to(output)),raw_sha256=file_hash(raw_path),attempt=attempt,seed=seed)
-        atomic_json(receipt,dict(identity=entry,command=command,row=record,
-                    files={relative:record['sha256'],record['raw']:record['raw_sha256']}))
-        print('Prepared '+entry['id'],flush=True)
-        return record
-    raise ValueError('All deterministic generation attempts exceeded 64000 tokens')
+    raise ValueError('Per-sample seed generation is retired; use original task-batch prepare')
 
 
 def validate_inventory(rows):
@@ -163,7 +101,9 @@ def validate_inventory(rows):
 
 def prepared_rows(output):
     """Read immutable per-sample publications, including during preparation."""
-    output=Path(output);plan=json.loads((output/'plan.json').read_text())
+    output=Path(output)
+    if (output/'preparation.json').exists():return original_rows(output)
+    plan=json.loads((output/'plan.json').read_text())
     if plan['sources_sha256']!=file_hash(SOURCES):raise ValueError('Source pins changed')
     if len(plan['entries'])!=2600 or len({e['id'] for e in plan['entries']})!=2600:
         raise ValueError('Invalid frozen generation plan')
@@ -186,55 +126,53 @@ def prepared_rows(output):
     return rows
 
 
-def verify_prepared(output,rebuild=False,model=None,limit=200):
-    from runner.router_measure import validate_profile
-    from runner.corpus import relative
-    output=Path(output);rows=prepared_rows(output)
+def verify_prepared(output,rebuild=False,model=None,limit=500):
+    output=Path(output)
+    if not (output/'preparation.json').exists():
+        raise ValueError('Legacy RULER preparation is incompatible; rebuild original task batches')
+    rows=original_rows(output)
+    if any(sum(r['subtask']==t and r['ordinal']<limit for r in rows)!=limit for t in TASKS):
+        raise ValueError('Requested tranche is not fully prepared')
     if rebuild:
         from transformers import AutoTokenizer
         tokenizer=AutoTokenizer.from_pretrained(model,local_files_only=True)
-    for row in rows:
-        for name,expected in ((row['prepared'],row['sha256']),(row['raw'],row['raw_sha256'])):
-            if file_hash(relative(output,name))!=expected:raise ValueError('Prepared artifact changed: '+name)
-        sample=json.loads(relative(output,row['prepared']).read_text());validate_profile(sample,4)
-        if len(sample['token_ids'])!=64000 or fingerprint(sample['token_ids'])!=row['prompt_sha256']:
-            raise ValueError('Input length or token hash mismatch')
-        if any(k in sample for k in ('outputs','references','answer','gold')):raise ValueError('Reference leaked into inference')
-        original=[sample['token_ids'][p] for p in sample['original_to_formatted']]
-        if fingerprint(original)!=sample['original_token_sha256']:raise ValueError('Source reconstruction mismatch')
-        if rebuild:
-            raw=json.loads(relative(output,row['raw']).read_text())
-            rebuilt=format_corpus(tokenizer,raw,row['subtask'])
-            rebuilt['model_config_sha256']=spec()['model_fingerprints']['config.json']
-            if rebuilt!=sample:raise ValueError('Independent source/span rebuild mismatch')
-    selected=[r for r in rows if r['ordinal']<limit]
-    if Counter(r['subtask'] for r in selected)!=Counter({t:limit for t in TASKS}):
-        raise ValueError('Requested tranche is not fully prepared')
-    if len(rows)==2600:validate_inventory(rows)
+        spec=json.loads((output/'spec.json').read_text())
+        batches={t:[json.loads(line) for line in (output/'raw'/t/'validation.jsonl').read_text().splitlines()] for t in TASKS}
+        for row in rows:
+            sample=json.loads((output/row['prepared']).read_text())
+            rebuilt=format_sample(tokenizer,batches[row['subtask']][row['ordinal']],row['subtask'],template=spec['templates'][row['subtask']])
+            rebuilt.update(source_row=row['ordinal'],model_config_sha256=spec['tokenizer_hashes']['config.json'],generator_config_sha256=fingerprint(spec))
+            if rebuilt!=sample:raise ValueError('Original token/span rebuild mismatch')
     return rows
 
 
-def prepare(ruler,model,output,workers=4,limit=200):
-    if type(limit) is not int or not 1<=limit<=200:raise ValueError('limit-per-task must be 1..200')
-    ruler,model,output=map(lambda p:Path(p).resolve(),(ruler,model,output))
-    verify_sources(ruler,model)
-    with setup_lock(output,build=True):
-        entries=inventory(qa_inventory(ruler))
-        plan=dict(schema='ruler-corpus-plan-v1',sources_sha256=file_hash(SOURCES),entries=entries,
-                  formatter_sha256=file_hash(Path(__file__)),base_formatter_sha256=file_hash(Path(__file__).with_name('ruler_64000.py')))
-        if (output/'plan.json').exists():
-            if json.loads((output/'plan.json').read_text())!=plan:raise ValueError('Preparation identity changed; use a new directory')
-        else:atomic_json(output/'plan.json',plan)
-        selected=[e for e in entries if e['ordinal']<limit]
-        with ProcessPoolExecutor(max_workers=workers,initializer=initialize,initargs=(ruler,model,output)) as pool:
-            list(pool.map(generate,selected))
-        rows=prepared_rows(output)
-        temp=output/'manifest.jsonl.tmp';temp.write_text(''.join(json.dumps(r)+'\n' for r in rows));temp.replace(output/'manifest.jsonl')
-        atomic_json(output/'preparation-progress.json',dict(planned=2600,prepared=len(rows),limit_per_task=limit,complete=len(rows)==2600))
-        if len(rows)==2600:
-            validate_inventory(rows)
-            paths=['plan.json','manifest.jsonl']+[name for r in rows for name in (r['prepared'],r['raw'])]
-            if not (output/'prepared.json').exists():
-                atomic_json(output/'prepared.json',dict(schema='ruler-corpus-prepared-v1',sources_sha256=file_hash(SOURCES),
-                    files={name:file_hash(output/name) for name in paths},prompts=2600))
-    return verify_prepared(output,True,model,limit)
+def prepare(ruler,model,output,workers=4,limit=500):
+    from types import SimpleNamespace
+    from scripts.ruler_64000 import prepare as prepare_original
+    # Always generate the original 500-row task batch before selecting a tranche.
+    prepare_original(SimpleNamespace(ruler=Path(ruler),model=Path(model),output=Path(output),samples=500,seed=42))
+    return original_rows(Path(output))
+
+
+def original_rows(output):
+    from scripts.ruler_64000 import EVALUATION_PROTOCOL
+    output=Path(output);receipt=json.loads((output/'preparation.json').read_text())
+    if receipt['spec']['protocol'] != EVALUATION_PROTOCOL:
+        raise ValueError('Incompatible RULER protocol')
+    for name,digest in receipt['files'].items():
+        if file_hash(output/name)!=digest:raise ValueError('Prepared original batch changed')
+    rows=[]
+    for row in map(json.loads,(output/'manifest.jsonl').read_text().splitlines()):
+        sample=json.loads((output/row['prepared']).read_text())
+        from runner.config import validate_sample
+        validate_sample(sample)
+        raw=f"raw/{row['subtask']}/validation.jsonl"
+        rows.append(dict(row,ordinal=sample['source_row'],sha256=file_hash(output/row['prepared']),
+            prompt_sha256=fingerprint(sample['token_ids']),raw=raw,raw_sha256=file_hash(output/raw),
+            raw_row=sample['source_row'],identity=dict(task=row['subtask'],ordinal=sample['source_row'],seed=42)))
+    plan=dict(schema='rpkv-original-ruler-plan-v1',protocol=EVALUATION_PROTOCOL,
+        sources_sha256=file_hash(output/'spec.json'),entries=[r['identity'] for r in rows])
+    if (output/'plan.json').exists() and json.loads((output/'plan.json').read_text())!=plan:
+        raise ValueError('Incompatible collection plan; use a new directory')
+    if not (output/'plan.json').exists():atomic_json(output/'plan.json',plan)
+    return rows
