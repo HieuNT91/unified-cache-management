@@ -18,6 +18,7 @@ import uuid
 
 EXTRA = ('prophetkv-5', 'prophetkv-10')
 STATE = Path('extensions/add5-10')
+SKIP_VALIDATION = False
 CODE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE_ROOT))
 os.environ.update(PYTHONPATH=str(CODE_ROOT), PYTHONDONTWRITEBYTECODE='1',
@@ -112,7 +113,7 @@ def normalize_percentages(values):
 
 
 def percentage_args():
-    return ['--percentages',*[a.removeprefix('prophetkv-') for a in EXTRA]]
+    return ['--percentages',*[a.removeprefix('prophetkv-') for a in EXTRA],*(['--skip-validation'] if SKIP_VALIDATION else [])]
 
 
 def combined_actions(base, percentages=None):
@@ -141,13 +142,21 @@ def prepare(root):
     from scripts.router_control import code_hashes
     from run import verify_diagnostics
     state = root/STATE
+    if SKIP_VALIDATION:
+        state.mkdir(parents=True,exist_ok=True)
+        atomic_json(state/'source-validation.json',dict(source_validation='skipped'))
     if (state/'protocol.json').exists():
         corpus = Extension(root)
         corpus.verify_sources()
         environment_check(corpus.protocol)
-        corpus.validate_new()
+        if not corpus.skip_validation:corpus.validate_new()
         return corpus
-    base = Corpus(root)
+    if SKIP_VALIDATION:
+        from runner.corpus_unchecked import UncheckedCorpus
+        base=UncheckedCorpus(root,action_scope='original')
+        print('Saved-data validation SKIPPED; reading native scores only (no layer replay).',flush=True)
+    else:
+        base = Corpus(root)
     protocol = base.protocol
     if protocol['kind'] != 'collection' or protocol['dataset'] != 'ruler':
         raise ValueError('Expected an original RULER collection')
@@ -170,40 +179,50 @@ def prepare(root):
     (state/'derived').mkdir(parents=True, exist_ok=True)
     for n, row in enumerate(rows):
         pid = row['id']
-        sample = base.inputs(pid)
-        validate(sample, 'ruler')
-        for key, hash_key in (('prepared', 'sha256'), ('raw', 'raw_sha256')):
-            path = contained(base.prepared, row[key])
-            if digest(path) != row[hash_key]:
-                raise ValueError('Original input changed: '+pid)
-            pins[str(path)] = row[hash_key]
-        receipt_path = base.prepared/'generation'/pid/'receipt.json'
-        pins[str(receipt_path)] = digest(receipt_path)
-        records = {}
-        for case in ['probe', *base.actions]:
-            record = accepted(root, case, row, protocol)
-            if record is None:
-                raise ValueError('Missing original record: '+case+'/'+pid)
-            records[case] = record
-            folder = record_dir(root, case, pid)
-            receipt = folder/'validated.json'
-            pins[str(receipt)] = digest(receipt)
-            for name, expected in read(receipt)['files'].items():
-                pins[str(contained(folder, name))] = expected
-            pins[str(contained(root, record['initialization']))] = record['initialization_sha256']
-        attention = base.attention(pid)  # Original archive inventory, never the enlarged inventory.
-        for case in ['probe', *base.actions]:
-            ds = read(record_dir(root, case, pid)/'diagnostics.json')
-            if case == 'probe':
-                verify_diagnostics(ds, sample, 'prophetkv', .01, 4, range(64))
-                probe_attention = derive(attention, sample, [dict(id='prophetkv-1', ratio=.01)])
-                match_answer(ds, sample, 'prophetkv-1', probe_attention,
-                             [dict(id='nocache', method='baseline', ratio=None),
-                              dict(id='prophetkv-1', method='prophetkv', ratio=.01)])
-            elif case == 'nocache':
-                verify_diagnostics(ds, sample, 'baseline', None, 4, range(64))
-            else:
-                match_answer(ds, sample, case, attention, protocol['actions'])
+        if SKIP_VALIDATION:
+            sample=read(contained(base.prepared,row['prepared']))
+            probe_folder=record_dir(root,'probe',pid)
+            probe=read(probe_folder/'result.json')
+            # NPZ reads are lazy: only decompress the small native score vector,
+            # never the per-layer arrays or the other ranks' archives.
+            artifact=min(probe['artifacts'],key=lambda item:item['rank'])
+            with np.load(contained(probe_folder,artifact['path']),allow_pickle=False) as archive:
+                attention=dict(scores=archive['scores'].copy())
+        else:
+            sample = base.inputs(pid)
+            validate(sample, 'ruler')
+            for key, hash_key in (('prepared', 'sha256'), ('raw', 'raw_sha256')):
+                path = contained(base.prepared, row[key])
+                if digest(path) != row[hash_key]:
+                    raise ValueError('Original input changed: '+pid)
+                pins[str(path)] = row[hash_key]
+            receipt_path = base.prepared/'generation'/pid/'receipt.json'
+            pins[str(receipt_path)] = digest(receipt_path)
+            records = {}
+            for case in ['probe', *base.actions]:
+                record = accepted(root, case, row, protocol)
+                if record is None:
+                    raise ValueError('Missing original record: '+case+'/'+pid)
+                records[case] = record
+                folder = record_dir(root, case, pid)
+                receipt = folder/'validated.json'
+                pins[str(receipt)] = digest(receipt)
+                for name, expected in read(receipt)['files'].items():
+                    pins[str(contained(folder, name))] = expected
+                pins[str(contained(root, record['initialization']))] = record['initialization_sha256']
+            attention = base.attention(pid)  # Original archive inventory, never the enlarged inventory.
+            for case in ['probe', *base.actions]:
+                ds = read(record_dir(root, case, pid)/'diagnostics.json')
+                if case == 'probe':
+                    verify_diagnostics(ds, sample, 'prophetkv', .01, 4, range(64))
+                    probe_attention = derive(attention, sample, [dict(id='prophetkv-1', ratio=.01)])
+                    match_answer(ds, sample, 'prophetkv-1', probe_attention,
+                                 [dict(id='nocache', method='baseline', ratio=None),
+                                  dict(id='prophetkv-1', method='prophetkv', ratio=.01)])
+                elif case == 'nocache':
+                    verify_diagnostics(ds, sample, 'baseline', None, 4, range(64))
+                else:
+                    match_answer(ds, sample, case, attention, protocol['actions'])
         arrays = derive(attention, sample, inventory)
         path = state/'derived'/f'{pid}.npz'
         temporary = path.with_suffix('.tmp')
@@ -211,18 +230,20 @@ def prepare(root):
             np.savez_compressed(stream, scores=arrays['scores'], **arrays['selections'])
         temporary.replace(path)
         derived[pid] = dict(archive_sha256=digest(path), base_probe_sha256=digest(record_dir(root, 'probe', pid)/'validated.json'))
-        if (n+1) % 10 == 0 or n+1 == len(rows):
-            print(f'Validated original inputs, answers and attention: {n+1}/{len(rows)}', flush=True)
+        if n==0 or (n+1) % 10 == 0 or n+1 == len(rows):
+            label='Derived masks from saved scores (validation skipped)' if SKIP_VALIDATION else 'Validated original inputs, answers and attention'
+            print(f'{label}: {n+1}/{len(rows)}', flush=True)
     atomic_json(state/'sources.json', dict(files=pins, rows=rows))
     extended = dict(protocol, schema='ruler-inplace-actions-v2', actions=inventory, added_actions=list(EXTRA),
                     base_protocol_sha256=protocol_identity(protocol), sources_sha256=digest(state/'sources.json'),
                     code=code_hashes(), derived=derived)
+    if SKIP_VALIDATION:extended['source_validation']='skipped'
     atomic_json(state/'protocol.json', extended)
     return Extension(root)
 
 
 class Extension:
-    def __init__(self, root, state=None):
+    def __init__(self, root, state=None, skip_validation=None):
         from runner.corpus_records import protocol_identity
         from runner.tree_policy import actions
         self.root = Path(root)
@@ -230,6 +251,10 @@ class Extension:
         self.state = contained(self.root,self.relative_state)
         self.protocol = read(self.state/'protocol.json')
         self.added_actions=tuple(self.protocol['added_actions'])
+        mode=self.state/'source-validation.json'
+        saved_skip=mode.is_file() and read(mode).get('source_validation')=='skipped'
+        self.skip_validation=bool((SKIP_VALIDATION if skip_validation is None else skip_validation) or
+                                  self.protocol.get('source_validation')=='skipped' or saved_skip)
         self.base_protocol = read(self.root/'protocol.json')
         if protocol_identity(self.base_protocol) != self.protocol['base_protocol_sha256']:
             raise ValueError('Original protocol changed')
@@ -240,6 +265,9 @@ class Extension:
         self.actions = actions(self.protocol['actions'])
 
     def verify_sources(self):
+        if self.skip_validation:
+            print('Skipping saved source hashes and attention replay.',flush=True)
+            return
         from runner import corpus_progress as progress
         for name, expected in progress.track(self.sources['files'].items(), 'Validating original checksums', 'files', lambda item: item[0]):
             if not Path(name).is_file() or digest(name) != expected:
@@ -254,17 +282,18 @@ class Extension:
         pid = row['id']
         path = self.state/'derived'/f'{pid}.npz'
         provenance = self.protocol['derived'][pid]
-        if digest(path) != provenance['archive_sha256']:
-            raise ValueError('Derived attention changed')
         receipt = record_dir(self.root, 'probe', pid)/'validated.json'
-        if digest(receipt) != provenance['base_probe_sha256']:
-            raise ValueError('Original probe receipt changed')
         sample_path = contained(self.protocol['prepared'], row['prepared'])
-        if digest(sample_path) != row['sha256']:
-            raise ValueError('Original input changed')
+        if not self.skip_validation:
+            if digest(path) != provenance['archive_sha256']:
+                raise ValueError('Derived attention changed')
+            if digest(receipt) != provenance['base_probe_sha256']:
+                raise ValueError('Original probe receipt changed')
+            if digest(sample_path) != row['sha256']:
+                raise ValueError('Original input changed')
         with np.load(path, allow_pickle=False) as data:
             attention = dict(scores=data['scores'].copy(), selections={a: data[a].copy() for a in self.actions if a != 'nocache'})
-        if replay:
+        if replay and not self.skip_validation:
             probe = accepted(self.root, 'probe', row, self.base_protocol)
             if probe is None:
                 raise ValueError('Missing original probe')
@@ -278,6 +307,9 @@ class Extension:
     def outcome(self, row, case, full=False):
         from runner.corpus_records import accepted, record_dir
         from runner.corpus import match_answer
+        if self.skip_validation and not full:
+            folder=record_dir(self.root,case,row['id'])
+            return read(folder/'result.json') if (folder/'validated.json').is_file() else None
         record = accepted(self.root, case, row, self.protocol)
         if record is not None:
             if (record.get('derived_mask_provenance') != self.protocol['derived'][row['id']] or
@@ -320,7 +352,8 @@ def collect(root, group, attempt):
         engine = Engine(corpus.state, corpus.protocol, group, 'cached', attempt, pending)
         try:
             initialization = engine.session/'initialization.json'
-            atomic_json(initialization, dict(read(initialization), execution_code=code_hashes()))
+            atomic_json(initialization, dict(read(initialization), execution_code=code_hashes(),
+                source_validation='skipped' if corpus.skip_validation else 'full'))
             for row in pending:
                 attention = corpus.attention(row, replay=True)
                 engine.begin(row)
@@ -336,6 +369,7 @@ def collect(root, group, attempt):
                     record, ds = engine.answer(corpus.actions[case], case, attention)
                     record['initialization'] = str(STATE/record['initialization'])
                     record['derived_mask_provenance'] = corpus.protocol['derived'][row['id']]
+                    record['source_validation']='skipped' if corpus.skip_validation else 'full'
                     staged.append((case, record, ds))
                 deletion = engine.end()
                 if deletion.get('deleted_shards', 0) <= 0:
@@ -350,11 +384,19 @@ def collect(root, group, attempt):
                 startup = corpus.state/f'startup-group{group}.json'
                 if not startup.exists():
                     atomic_json(startup, dict(prompt_id=row['id'], group=group, complete=True,
-                        actions=list(EXTRA), original_attention_replayed=True, all_rank_scores_masks=True,
+                        actions=list(EXTRA), original_attention_replayed=not corpus.skip_validation, all_rank_scores_masks=True,
+                        source_validation='skipped' if corpus.skip_validation else 'full',
                         all64_selection=True, retirement_validated=True, cache_deletion=deletion,
                         initialization=str(STATE/engine.session.relative_to(corpus.state)/'initialization.json')))
         finally:
             engine.close()
+
+
+def saved_records(root,cases):
+    """Trust immutable commit markers in the explicitly requested fast mode."""
+    return {case:[read(path.parent/'result.json')
+                  for path in sorted((Path(root)/'records'/case).glob('*/validated.json'))]
+            for case in cases}
 
 
 def summarize(root, same_count=False, final=False):
@@ -375,8 +417,11 @@ def summarize(root, same_count=False, final=False):
     corpus = Extension(root)
     expected = [dict(prompt_id=r['id'], subtask=r['subtask']) for r in corpus.rows]
     old = [a['id'] for a in corpus.base_protocol['actions']]
-    records = committed_records(root, old+['probe'], protocol_identity(corpus.base_protocol))
-    records.update(committed_records(root, EXTRA, protocol_identity(corpus.protocol)))
+    if corpus.skip_validation:
+        records=saved_records(root,old+['probe',*EXTRA])
+    else:
+        records = committed_records(root, old+['probe'], protocol_identity(corpus.base_protocol))
+        records.update(committed_records(root, EXTRA, protocol_identity(corpus.protocol)))
     probes = records.pop('probe')
     if {r['prompt_id'] for r in probes} != {r['prompt_id'] for r in expected}:
         raise ValueError('Original probe cohort changed')
@@ -396,7 +441,9 @@ def summarize(root, same_count=False, final=False):
         new_answers=sum(counts[a] for a in EXTRA), expected_new_answers=len(expected)*len(EXTRA),
         accepted_probes=len(probes), available_counts=counts, reports=reports,
         timing='Fixed-action answer-engine TTFT; original and added actions were measured in different sessions.',
-        validation='Result hashes and per-action protocol checked; live reports do not certify completion.')
+        source_validation='skipped' if corpus.skip_validation else 'full',
+        validation=('Saved records trusted; source hashes/replay skipped; new answers checked at collection time.' if corpus.skip_validation else
+            'Result hashes and per-action protocol checked; live reports do not certify completion.'))
     if same_count:
         report['matching'] = matching
     supervisor = corpus.state/'supervisor.json'
@@ -405,7 +452,7 @@ def summarize(root, same_count=False, final=False):
         report['supervisor'] = dict(saved, alive=alive(saved))
     stem = 'report' if final else 'same_count_summary' if same_count else 'live_summary'
     with locked(corpus.state/'report.lock'):
-        text = f"# RULER original + {', '.join(EXTRA)}\n\nAnswers: {report['accepted_answers']}/{report['expected_answers']}; added: {report['new_answers']}/{report['expected_new_answers']}.\n\n{report['timing']}\n"
+        text = f"# RULER original + {', '.join(EXTRA)}\n\nAnswers: {report['accepted_answers']}/{report['expected_answers']}; added: {report['new_answers']}/{report['expected_new_answers']}.\n\n{report['timing']}\n\n{report['validation']}\n"
         if same_count:
             text += f"\nMatched prompt IDs: {matching['matched_samples']}.\n"
         table = []
@@ -442,14 +489,16 @@ def finalize(root):
     if read(corpus.state/'cleanup.json').get('owned_engines_exited') is not True:
         raise ValueError('Missing extension engine-exit receipt')
     corpus.verify_sources()
-    corpus.validate_new()
+    if not corpus.skip_validation:corpus.validate_new()
     if (corpus.state/'complete.json').exists():
         done = read(corpus.state/'complete.json')
-        check_files(corpus.state, done['reports'])
-        check_files(root, done['new_receipts'])
+        if not corpus.skip_validation:
+            check_files(corpus.state, done['reports'])
+            check_files(root, done['new_receipts'])
         return done
     report = summarize(root, final=True)
     done = dict(complete=True, owned_engines_exited=True, prompts=len(corpus.rows),
+                source_validation='skipped' if corpus.skip_validation else 'full',
                 new_answers=report['new_answers'], answers=report['accepted_answers'],
                 reused_probes=report['accepted_probes'],
                 new_receipts={str(Path('records')/case/row['id']/'validated.json'):
@@ -503,6 +552,7 @@ def supervise(root):
 
         try:
             corpus = prepare(root)
+            state['source_validation']='skipped' if corpus.skip_validation else 'full'
             check_hardware(corpus.protocol)
             cleanup_caches(state_dir, corpus.protocol)
             for group in range(len(corpus.protocol['groups'])):
@@ -606,14 +656,17 @@ print(p.pid,flush=True)
 
 
 def main():
-    global EXTRA, STATE
+    global EXTRA, STATE, SKIP_VALIDATION
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('verify', 'detach', 'resume', 'status', 'status_same_count', 'report', 'supervise', 'worker'))
     parser.add_argument('--root', required=True, type=Path)
     parser.add_argument('--percentages',type=int,nargs='+',default=[5,10],help='Additional budgets; default 5 10. Use the same list for every control command.')
+    parser.add_argument('--skip-validation',action='store_true',help='Trust saved inputs/results/native scores; skip source scans and layer replay. New-answer checks stay enabled.')
     parser.add_argument('--group', type=int, help=argparse.SUPPRESS)
     parser.add_argument('--attempt', help=argparse.SUPPRESS)
     args = parser.parse_args()
+    SKIP_VALIDATION=args.skip_validation
+    if SKIP_VALIDATION:print('Saved-data validation SKIPPED; new-answer checks remain enabled.',file=sys.stderr,flush=True)
     percentages=normalize_percentages(args.percentages)
     EXTRA=tuple(f'prophetkv-{p}' for p in percentages)
     STATE=Path('extensions')/('add'+'-'.join(map(str,percentages)))
@@ -627,7 +680,8 @@ def main():
         with base_exclusive(root):
             idle(root/STATE)
             corpus = prepare(root)
-        print(f'Verified {len(corpus.rows)} original prompts; {len(corpus.rows)*len(EXTRA)} new answers. No GPU work launched.')
+        label='Prepared (saved-data validation skipped)' if corpus.skip_validation else 'Verified'
+        print(f'{label}: {len(corpus.rows)} original prompts; {len(corpus.rows)*len(EXTRA)} new answers. No GPU work launched.')
     elif args.command in ('detach', 'resume'):
         detach(root, args.command == 'resume')
     elif args.command == 'supervise':

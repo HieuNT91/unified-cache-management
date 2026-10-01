@@ -5,7 +5,7 @@ source "$CODE_ROOT/scripts/server_env.sh"
 ucm_load_server_env "$CODE_ROOT"
 command="${1:-}"
 if [[ -z "$command" ]]; then
-  echo 'Usage: ruler_corpus_add_ratios.sh {verify|detach|resume|status|status_same_count|report} [--root PATH] [--percentages 50 70 90]' >&2
+  echo 'Usage: ruler_corpus_add_ratios.sh {verify|detach|resume|status|status_same_count|report} [--root PATH] [--percentages 50 70 90] [--skip-validation]' >&2
   exit 2
 fi
 shift

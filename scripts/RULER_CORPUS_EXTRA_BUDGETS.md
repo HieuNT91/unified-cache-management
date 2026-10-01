@@ -48,8 +48,7 @@ supervision; offline router training can still run in the foreground.
 
 CPU preparation and source replay happen inside the supervisor before GPU work;
 first answers may take time. A separate `verify --percentages 50 70 90` is optional
-and performs expensive preparation/replay without launching GPUs. The offline
-trainer's `--skip-validation` flag does not apply to GPU collection.
+and performs expensive preparation/replay without launching GPUs. The collection launcher also supports `--skip-validation` as described below.
 
 For an interrupted batch, after its owned processes have exited:
 
@@ -90,3 +89,51 @@ requires representation from all 13 tasks. Once all 120/task are complete,
 completion and engine-exit evidence for every selected extension batch.
 
 No tests or local/remote GPU execution were performed for this launcher update.
+
+## Skip saved-data validation
+
+Add `--skip-validation` to skip old input/answer/diagnostic checksum scans and
+full per-layer/per-rank attention replay. Preparation reads only the native FP32
+score vector from one original NPZ archive per sample, derives the new masks,
+and saves them. It does not decompress the large layer arrays. Saved record
+commit markers are trusted on resume, status and final reporting in this mode.
+Newly generated answers still undergo diagnostic/score/mask, readiness,
+retirement and publication checks. Runtime/model compatibility, original cohort
+completion, duplicate locks and exact GPU UUID ownership checks remain enabled.
+The current inference input is still checked when its new request begins.
+
+```bash
+cd "$CODE"
+git pull --ff-only origin prophetkv/clean-qwen3-32b-yarn4
+export PYTHON_BIN=/data/jh/envs/ucm/bin/python
+export EXPERIMENT_DIR=/data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20
+bash "$CODE/scripts/ruler_corpus_add_ratios.sh" detach \
+  --percentages 50 70 90 --skip-validation
+bash "$CODE/scripts/ruler_corpus_add_ratios.sh" status \
+  --percentages 50 70 90 --skip-validation
+```
+
+After interruption and owned-process exit, use `resume` instead of `detach`:
+
+```bash
+bash "$CODE/scripts/ruler_corpus_add_ratios.sh" resume \
+  --percentages 50 70 90 --skip-validation
+```
+
+The flag is forwarded to the supervisor and workers. It can also be passed to
+`verify` (preparation only), `report`, and `status_same_count`. Newly prepared
+extensions store `source_validation: skipped` and inherit it on later commands.
+For an extension originally prepared with full validation, passing the flag on
+resume does not rewrite its protocol or accepted records; the new session,
+new answers and completion report carry the skipped-source label. A separate
+`source-validation.json` remembers this choice without changing accepted records,
+so subsequent commands also inherit the skipped-source mode.
+
+An already-running process cannot pick up the flag or changed code. This update
+does not stop or replace it. Use a new invocation after the owned processes exit;
+do not launch a duplicate. Fast collection still spends time deriving masks and
+building KV caches; skipping replay does not eliminate these operations.
+
+Use `--skip-validation` for subsequent offline training/reading of a batch that
+trusted its saved sources. The fully validated reader rejects such batches
+rather than silently presenting them as fully source-validated.

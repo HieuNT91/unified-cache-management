@@ -149,6 +149,8 @@ class ExtendedCorpus(Corpus):
         if len(self.rows) != len(self.extension.rows) or not self.rows:
             raise ValueError('Duplicate or empty extension cohort')
         self.done = json.loads(completion.read_text())
+        if self.extension.skip_validation or self.done.get('source_validation')=='skipped':
+            raise ValueError('Extension trusted saved sources; use --skip-validation for offline reading')
         n = len(self.rows)
         if (self.done.get('complete') is not True or self.done.get('owned_engines_exited') is not True or
                 self.done.get('prompts') != n or self.done.get('new_answers') != len(self.extra)*n or
