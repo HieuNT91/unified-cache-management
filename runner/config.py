@@ -94,6 +94,16 @@ def validate_sample(sample, kv_chunk_size=4096, context_length=WINDOW, window=WI
     if not question or question != sorted(set(question)) or any(
             type(q) is not int or not bounds[-2] <= q < bounds[-1] for q in question):
         raise ValueError('Question must be entirely in the fresh suffix')
+    if sample.get('layout', 'padded') == 'aligned':
+        # No delimiter: chunks are located only by their frozen boundaries.
+        if sample.get('chunk_end_token_id') != -1:
+            raise ValueError('Aligned layout has no chunk delimiter')
+        forbidden = sample['forbidden_token_id']
+        if forbidden in ids:
+            raise ValueError('Aligned layout must not contain the padding/end-of-text token')
+        return _check_lengths(sample, ids, context_length, window)
+    if sample.get('layout', 'padded') != 'padded':
+        raise ValueError('Unknown prompt layout')
     marker = ids[bounds[1] - 1]
     # Consecutive padding blocks are merged by the connector.
     for start, end in zip(bounds[:-2], bounds[1:-1]):
@@ -107,6 +117,10 @@ def validate_sample(sample, kv_chunk_size=4096, context_length=WINDOW, window=WI
                 raise ValueError('Internal delimiter splits a context chunk')
     if any(ids[p] == marker for p in range(bounds[-2] + 63, len(ids), 64)):
         raise ValueError('Delimiter in fresh suffix')
+    return _check_lengths(sample, ids, context_length, window)
+
+
+def _check_lengths(sample, ids, context_length, window):
     if len(ids) > context_length:
         raise ValueError('Formatted prompt exceeds context-length; truncation is forbidden')
     budget = sample['max_output_tokens']
@@ -115,3 +129,10 @@ def validate_sample(sample, kv_chunk_size=4096, context_length=WINDOW, window=WI
     if type(sample['thinking']) is not bool:
         raise ValueError('thinking must be boolean')
     return sample
+
+
+def chunk_end_token(sample):
+    """Connector delimiter for a prepared sample; -1 when the layout has none."""
+    if sample.get('layout', 'padded') == 'aligned':
+        return -1
+    return sample['token_ids'][sample['boundaries'][1] - 1]

@@ -18,7 +18,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from runner.cache import cacheblend_prompt
+from runner.cache import aligned_prompt, cacheblend_prompt
 from runner.config import validate_sample
 from runner.profiles import PROFILES
 from runner.setups import atomic_json, file_hash, fingerprint
@@ -36,7 +36,7 @@ def query_span(content, task):
     return begin + 1, end
 
 
-def format_sample(tokenizer, row, task, window, output):
+def format_sample(tokenizer, row, task, window, output, layout='padded'):
     content = row['input']
     begin, end = query_span(content, task)
     encoded = tokenizer(content, add_special_tokens=False, return_offsets_mapping=True)
@@ -48,7 +48,10 @@ def format_sample(tokenizer, row, task, window, output):
     marker = tokenizer.convert_tokens_to_ids('<|endoftext|>')
     if marker is None or marker in ids:
         raise ValueError('Expected Qwen3 <|endoftext|> delimiter absent from the source prompt')
-    chunks, tokens = cacheblend_prompt(ids, tokenizer, marker, 4095, suffix)
+    if layout == 'aligned':
+        chunks, tokens, suffix = aligned_prompt(ids, tokenizer, 4096, suffix)
+    else:
+        chunks, tokens = cacheblend_prompt(ids, tokenizer, marker, 4095, suffix)
     bounds = [0]
     for chunk in chunks:
         bounds.append(bounds[-1] + len(chunk))
@@ -60,7 +63,10 @@ def format_sample(tokenizer, row, task, window, output):
     sample = dict(token_ids=tokens, boundaries=bounds, question_positions=query, thinking=False,
                   max_output_tokens=output, task=task, question=content[begin:end],
                   source_tokens=len(ids), source_index=row['index'], source_row_sha256=fingerprint(row),
-                  truncated=False, answer_prefix_policy='RULER answer prefix kept verbatim from source row')
+                  truncated=False, answer_prefix_policy='RULER answer prefix kept verbatim from source row',
+                  layout=layout)
+    if layout == 'aligned':
+        sample.update(chunk_end_token_id=-1, forbidden_token_id=marker)
     validate_sample(sample, 4096, window, window)
     return sample
 
@@ -72,6 +78,9 @@ def main():
     parser.add_argument('--tasks', nargs='+', required=True)
     parser.add_argument('--samples', type=int, default=100)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--layout', choices=('padded', 'aligned'), default='padded',
+                        help='padded: <|endoftext|> pads each chunk (repo default); '
+                             'aligned: chunks cut to whole blocks, no delimiter or padding')
     args = parser.parse_args()
     if os.environ.get('CUDA_VISIBLE_DEVICES') != '':
         raise ValueError("CPU preparation requires CUDA_VISIBLE_DEVICES=''")
@@ -92,7 +101,7 @@ def main():
             raise ValueError(f'Expected {args.samples} rows in {source}')
         output = GEN_LEN['niah' if task.startswith('niah_') else task]
         for ordinal, row in enumerate(rows):
-            sample = format_sample(tokenizer, row, task, window, output)
+            sample = format_sample(tokenizer, row, task, window, output, args.layout)
             sample['source_row'] = ordinal
             sample['model_config_sha256'] = config_hash
             relative = f'samples/{task}-{ordinal:03d}.json'
@@ -106,7 +115,7 @@ def main():
     path = args.output / 'manifest.jsonl'
     path.write_text(''.join(json.dumps(manifest[i]) + '\n' for i in order))
     summary = dict(prompts=len(manifest), subtasks=dict(Counter(r['subtask'] for r in manifest)),
-                   min_tokens=min(lengths), max_tokens=max(lengths), window=window,
+                   min_tokens=min(lengths), max_tokens=max(lengths), window=window, layout=args.layout,
                    sources=files, model=str(args.model), tokenizer_config=config_hash,
                    adapter=file_hash(Path(__file__)), chunker=file_hash(ROOT / 'runner/cache.py'))
     atomic_json(args.output / 'preparation.json', summary)

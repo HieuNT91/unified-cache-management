@@ -9,7 +9,7 @@ import time
 from types import SimpleNamespace
 import uuid
 
-from runner.config import VERSIONS, engine_config, validate_sample
+from runner.config import VERSIONS, chunk_end_token, engine_config, validate_sample
 from runner.reporting import AggregationReporter, OutputAnalyzer, evaluation_metadata, score_answer
 from runner.setups import (atomic_json, file_hash, fingerprint, manifest_entries,
                            check_environment, start_engine, retirement, runtime_identity)
@@ -155,6 +155,8 @@ def load_inputs(args):
         selected.append((index, dict(id=row['id'], evaluation=evaluation, sha256=hashes[-1]), sample))
     if not selected:
         raise ValueError('Empty prompt shard')
+    if len({chunk_end_token(sample) for _, _, sample in selected}) != 1:
+        raise ValueError('All prompts in a sweep need the same chunk layout and delimiter')
     args.identity_spec = dict(inputs=hashes, manifest=file_hash(args.manifest), model=config_hash,
                                 runtime=runtime_identity(), tp=args.tp, configs=sweep_configs(args),
                                 context_length=getattr(args, 'context_length', 114688),
@@ -177,7 +179,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
     sample = selected[0][2]
     cfg = engine_config(args.model, configs[0]['method'], configs[0]['ratio'] or .2,
         tp=args.tp, memory=args.memory, cache_dir=cache,
-        end_token=sample['token_ids'][sample['boundaries'][1]-1], profile=getattr(args, 'profile', 'qwen3-32b'))
+        end_token=chunk_end_token(sample), profile=getattr(args, 'profile', 'qwen3-32b'))
     if cached:
         cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts'] = {
             f'prompt-{index}': sample['boundaries'] for index, _, sample in selected}
@@ -335,7 +337,7 @@ def _run_sweep(args):
             max_retained_context_tokens=max(s['boundaries'][-2] for _,_,s in selected),
             baseline=engine_config(args.model,'baseline',tp=args.tp,memory=args.memory,profile=args.profile),
             cached=engine_config(args.model,'prophetkv',tp=args.tp,memory=args.memory,
-                cache_dir=cache,end_token=selected[0][2]['token_ids'][selected[0][2]['boundaries'][1]-1],
+                cache_dir=cache,end_token=chunk_end_token(selected[0][2]),
                 profile=args.profile)),indent=2))
         return
     devices = check_environment(args.tp)

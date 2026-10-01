@@ -36,6 +36,36 @@ def cacheblend_prompt(token_ids, tokenizer, end_token_id, payload_size, suffix_s
 
 
 
+def aligned_prompt(token_ids, tokenizer, chunk_size, suffix_size):
+    """CacheBlend chunks without a delimiter or padding.
+
+    Each chunk is its numbered marker plus source tokens, cut so that the
+    chunk is a whole number of 64-token blocks (`chunk_size` at most). The
+    unaligned remainder of the body joins the fresh suffix, which is
+    recomputed anyway. Concatenating the chunks and the suffix reproduces the
+    source tokens with only the markers inserted.
+    """
+    if chunk_size % 64:
+        raise ValueError("chunk size must be a multiple of 64")
+    body_end = len(token_ids) - suffix_size
+    chunks, start, chunk_index = [], 0, 0
+    while True:
+        marker = tokenizer.encode(
+            f"\n[Context chunk {chunk_index + 1}]\n", add_special_tokens=False
+        )
+        length = min(chunk_size, ((len(marker) + body_end - start) // 64) * 64)
+        if length <= len(marker):
+            break
+        payload = token_ids[start : start + length - len(marker)]
+        chunks.append(marker + payload)
+        start += len(payload)
+        chunk_index += 1
+    if len(chunks) < 2:
+        raise ValueError("Prompt is too short to split into CacheBlend chunks")
+    suffix = token_ids[start:]
+    return chunks, [token for chunk in chunks for token in chunk] + suffix, len(suffix)
+
+
 def verify_cache(args, token_groups):
     """Check every expected block and TP shard in this UCM 0.3.0 NFS store.
 

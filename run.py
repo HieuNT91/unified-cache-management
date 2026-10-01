@@ -172,6 +172,8 @@ def run(args):
     if args.max_output_tokens is not None:
         sample['max_output_tokens'] = args.max_output_tokens
     validate_sample(sample, window=spec['window'])
+    if sample.get('layout', 'padded') != 'padded':
+        raise ValueError('Single-input runs detect chunks by delimiter; use run.sh sweep for aligned layouts')
     if sample['model_config_sha256'] != digest(args.model / 'config.json'):
         raise ValueError('Input was prepared with a different model configuration')
     cfg = engine_config(args.model, args.method, args.ratio, args.layers, args.num_layers,
