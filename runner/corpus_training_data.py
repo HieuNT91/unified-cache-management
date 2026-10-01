@@ -2,14 +2,18 @@
 import json
 from pathlib import Path
 
+from runner import corpus_progress as progress
 from runner.corpus import Corpus, load_attention, relative
 from runner.corpus_records import accepted, protocol_identity, record_dir
 from runner.setups import file_hash
 from scripts.corpus_add_ratios import EXTRA, STATE, Extension, combined_actions
 
 
-def open_corpus(root, prepared=None, tree=None, action_scope='all'):
+def open_corpus(root, prepared=None, tree=None, action_scope='all', skip_validation=False):
     """Default to all collected actions; old trees keep their original evidence."""
+    if skip_validation:
+        from runner.corpus_unchecked import UncheckedCorpus
+        return UncheckedCorpus(root, prepared, action_scope, tree)
     root = Path(root)
     if action_scope not in ('original', 'all'):
         raise ValueError('Unknown action scope')
@@ -24,6 +28,11 @@ def open_corpus(root, prepared=None, tree=None, action_scope='all'):
 
 def training_view(corpus, action_scope='all'):
     # Also cover direct Python calls to train(Corpus(...), ...).
+    if getattr(corpus, 'skip_validation', False):
+        if corpus.action_scope == action_scope:
+            return corpus
+        from runner.corpus_unchecked import UncheckedCorpus
+        return UncheckedCorpus(corpus.root, corpus.prepared, action_scope)
     if action_scope == 'original':
         return Corpus(corpus.root, corpus.prepared) if isinstance(corpus, ExtendedCorpus) else corpus
     if action_scope != 'all':
@@ -66,10 +75,10 @@ class ExtendedCorpus(Corpus):
         expected = {f'records/{a}/{pid}/validated.json' for pid in self.rows for a in EXTRA}
         if set(self.done.get('new_receipts', {})) != expected:
             raise ValueError('Incomplete extension receipt inventory')
-        for name, digest in self.done['new_receipts'].items():
+        for name, digest in progress.track(self.done['new_receipts'].items(), 'Checking extension receipts', 'files', lambda item: item[0]):
             if file_hash(relative(self.root, name)) != digest:
                 raise ValueError('Completed extension receipt changed: '+name)
-        for name, digest in self.done['reports'].items():
+        for name, digest in progress.track(self.done['reports'].items(), 'Checking extension reports', 'files', lambda item: item[0]):
             if file_hash(relative(self.state, name)) != digest:
                 raise ValueError('Completed extension report changed: '+name)
         if file_hash(self.prepared/'plan.json') != self.protocol['plan_sha256']:
@@ -133,9 +142,10 @@ class ExtendedCorpus(Corpus):
         self.extension.verify_sources()
         self.extension.validate_new(full=True)
         pins = {}
+        progress.detail('waiting for corpus publication lock')
         with (self.root/'publication.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_SH)
-            for pid, row in self.rows.items():
+            for pid, row in progress.track(self.rows.items(), 'Validating snapshot', 'samples', lambda item: item[0]):
                 self.inputs(pid)
                 if file_hash(relative(self.prepared, row['raw'])) != row['raw_sha256']:
                     raise ValueError('Original raw input changed')

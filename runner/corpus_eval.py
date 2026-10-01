@@ -3,6 +3,7 @@ from collections import Counter
 import csv
 import html
 from pathlib import Path
+from runner import corpus_progress as progress
 from runner.setups import atomic_json,file_hash,fingerprint
 from runner.tree_policy import validate,decide
 from runner.corpus import relative
@@ -40,7 +41,8 @@ def report(rows,output,metadata=None):
 
 def replay(corpus,decisions,output,metadata=None):
     rows=[];seen=set()
-    for d in decisions:
+    label=Path(output).name
+    for d in progress.track(decisions, 'Replaying '+label, 'samples', lambda d: d['sample_id']):
         pid=d['sample_id'];action=d['action']
         if pid in seen:raise ValueError('Duplicate sample decision')
         seen.add(pid)
@@ -52,6 +54,7 @@ def replay(corpus,decisions,output,metadata=None):
             baseline_accuracy=baseline['accuracy'],answer_ttft_seconds=answer,
             estimated_router_ttft_seconds=answer+probe['timings']['routing_overhead_seconds'],
             baseline_ttft_seconds=baseline['timings']['answer_engine_ttft_seconds']))
+    if getattr(corpus,'skip_validation',False):metadata=dict(metadata or {},dataset_validation='skipped')
     return report(rows,output,metadata)
 
 
@@ -63,16 +66,17 @@ def evaluation_ids(corpus,tree,snapshot=None,evaluation='heldout'):
     if evaluation=='training':
         if snapshot is not None:raise ValueError('Training evaluation uses the exact original training set')
         ids=tree['training_ids'];pins=tree.get('training_hashes',{})
-        if not pins:raise ValueError('Missing frozen training evidence; use a tree fitted with --evaluation training')
+        if not pins and not getattr(corpus,'skip_validation',False):raise ValueError('Missing frozen training evidence; use --skip-validation for a tree trained without validation')
     elif snapshot is None:
         ids=tree['heldout_ids'];pins=tree.get('heldout_hashes',{})
-        if not pins:raise ValueError('Missing frozen held-out artifact hashes')
+        if not pins and not getattr(corpus,'skip_validation',False):raise ValueError('Missing frozen held-out artifact hashes; use --skip-validation for a tree trained without validation')
     else:
         if snapshot['protocol_sha256']!=protocol_identity(corpus.protocol):raise ValueError('Evaluation snapshot protocol mismatch')
         ids=[r['id'] for r in snapshot['samples']];pins=snapshot['acceptance_hashes']
     if not ids or len(set(ids))!=len(ids) or (evaluation=='heldout' and set(ids)&set(tree['training_ids'])):
         raise ValueError('Empty, duplicate, or training-overlapping held-out evaluation')
-    for name,expected in pins.items():
+    if getattr(corpus,'skip_validation',False):return ids
+    for name,expected in progress.track(pins.items(), 'Validating evaluation evidence', 'files', lambda item: item[0]):
         if file_hash(relative(corpus.root,name))!=expected:raise ValueError('Frozen evaluation evidence changed')
     for pid in ids:
         for case in ['probe',*corpus.actions]:
@@ -82,8 +86,10 @@ def evaluation_ids(corpus,tree,snapshot=None,evaluation='heldout'):
 
 def test_tree(corpus,tree,output,snapshot=None,evaluation='heldout'):
     ids=evaluation_ids(corpus,tree,snapshot,evaluation)
-    decisions=[dict(sample_id=pid,action=decide(tree,corpus.features(pid))['action']) for pid in ids]
+    decisions=[dict(sample_id=pid,action=decide(tree,corpus.features(pid))['action'])
+               for pid in progress.track(ids, 'Applying '+tree['id'], 'samples')]
     return replay(corpus,decisions,output,dict(tree_sha256=tree['payload_sha256'],
-        frozen_heldout=evaluation=='heldout' and snapshot is None,evaluation=evaluation,
+        frozen_heldout=evaluation=='heldout' and snapshot is None and not getattr(corpus,'skip_validation',False),evaluation=evaluation,
         training_overlap=evaluation=='training',inference='offline',refit=False,
+        **({'dataset_validation':'skipped'} if getattr(corpus,'skip_validation',False) else {}),
         interpretation='Training-set resubstitution; no held-out performance claim' if evaluation=='training' else 'Held-out evaluation'))

@@ -90,6 +90,48 @@ callers use `runner.corpus_training_data.open_corpus(root, action_scope='origina
 or the default combined view; pass the same `action_scope` to `train`. The raw
 `Corpus` reader continues to describe the original collection.
 
+## Foreground progress and skipping dataset validation
+
+Offline `train`, `test`, `replay`, and `snapshot` print flushed progress to stderr
+from command startup. Stage changes appear immediately; five-second heartbeats
+show elapsed time, completed/total counts and the current file, sample, setting,
+or fold. An unchanged count is explicitly labeled as still processing, including
+while waiting on a publication lock. Final JSON remains on stdout. Logging applies
+to new invocations; an already-running process keeps its original code.
+
+For a completed collection whose saved results/features you want to trust, add
+`--skip-validation`. This reads the small saved probe/result JSON files directly:
+no source checksum scans, attention archive loading/replay, diagnostic revalidation,
+or feature reconstruction. Presence of result/acceptance files determines the
+available sample inventory; missing records are not invented. The mode is recorded
+as `dataset_validation: skipped` in the snapshot, tree, summary and offline report.
+It does not provide checked artifact evidence. Schema/shape checks needed to fit a
+tree still apply. Timing uses the original recorded values in either mode.
+
+Run in the foreground; the wrapper continues to load `.env`:
+
+```bash
+export PYTHON_BIN=/data/jh/envs/ucm/bin/python
+export EXPERIMENT_DIR=/data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20
+export PREPARED_DIR="$("$PYTHON_BIN" -c 'import json,sys; print(json.load(open(sys.argv[1]))["prepared"])' "$EXPERIMENT_DIR/protocol.json")"
+export OUT="/data/jh/unified-cache-management/router-six-actions-train120-eval120-$(date +%Y%m%d-%H%M%S)"
+bash scripts/ruler_corpus.sh train --skip-validation \
+  --action-scope all --evaluation training --train-samples 1560 \
+  --trainer ruler13-v1 --seed 42 --policy-count 3 --output "$OUT"
+cat "$OUT/summary.txt"
+```
+
+Training evaluates all three trees automatically on the same 120 samples/task.
+A later standalone evaluation of these unchecked trees also needs the flag:
+
+```bash
+bash scripts/ruler_corpus.sh test --skip-validation --evaluation training \
+  --tree "$OUT/router1.json" --output "${OUT}-router1-repeat"
+```
+
+No GPU process is launched by these commands. Use a new training output directory;
+this command does not resume a partially completed CPU training run.
+
 ## Optional held-out split
 
 The default `--evaluation heldout` preserves the original split behavior. For

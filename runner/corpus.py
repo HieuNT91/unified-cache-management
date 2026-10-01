@@ -124,17 +124,19 @@ class Corpus:
                                     sample['boundaries'][1],sample['boundaries'][-2])
 
     def snapshot(self):
+        from runner import corpus_progress as progress
         # Freeze visible receipt names first. Publication is immutable and atomic.
         from runner.corpus_records import record_dir
         from runner.corpus_records import protocol_identity
         cases=['probe',*self.actions]
         visible={(pid,c):record_dir(self.root,c,pid)/'validated.json' for pid in self.rows for c in cases}
         import fcntl
+        progress.detail('waiting for corpus publication lock')
         with (self.root/'publication.lock').open('a') as lock:
             fcntl.flock(lock,fcntl.LOCK_SH)
             visible={key:file_hash(p) for key,p in visible.items() if p.exists()}
         complete=[];counts={c:0 for c in cases};pins={}
-        for pid,row in self.rows.items():
+        for pid,row in progress.track(self.rows.items(), 'Validating snapshot', 'samples', lambda item: item[0]):
             for path_key,hash_key in (('prepared','sha256'),('raw','raw_sha256')):
                 path=relative(self.prepared,row[path_key])
                 if not path.is_file() or file_hash(path)!=row[hash_key]:raise ValueError('Corrupt accepted preparation')

@@ -3,6 +3,7 @@ import itertools
 from collections import Counter
 from pathlib import Path
 import numpy as np
+from runner import corpus_progress as progress
 from runner.router_policy import FEATURES, number, digest
 from runner.tree_policy import actions, SCHEMA, FEATURE_DEFINITIONS, export, decide
 from runner.setups import atomic_json, file_hash
@@ -129,9 +130,10 @@ def search(samples,features,scores,times,overhead,inventory,seed=42,count=3):
     x=np.array([[row[f] if number(row.get(f)) else 0. for f in FEATURES] for row in features])
     y=np.maximum(0,scores[:,[dense]]-scores[:,sparse]);folds=fold_ids(samples,seed)
     baseline=macro(scores[:,dense],samples);table=[];cache={}
-    for index,h in enumerate(GRID):
+    for index,h in progress.track(list(enumerate(GRID)), 'Searching trees', 'settings', lambda item: f'setting {item[0]+1}/{len(GRID)} ({item[1]["family"]})'):
         decisions=np.empty(n,int);statistics=[];leaves=0
         for fold in range(5):
+            progress.detail(f'setting {index+1}/{len(GRID)} ({h["family"]}); fold {fold+1}/5')
             tr=np.flatnonzero(folds!=fold);va=np.flatnonzero(folds==fold)
             key=(tuple((k,v) for k,v in h.items() if k!='threshold'),fold)
             if key not in cache:cache[key]=fit(x[tr],y[tr],times[tr],overhead[tr],h,dense,sparse)
@@ -146,7 +148,7 @@ def search(samples,features,scores,times,overhead,inventory,seed=42,count=3):
             speedup=speed,leaf_count=leaves,feasible=bool(baseline-score<=.02+1e-12 and speed>=4.-1e-12),
             oof_actions=decisions.tolist(),fold_statistics=statistics))
     selected=rank(table,count);policies=[]
-    for index,winner in enumerate(selected):
+    for index,winner in progress.track(list(enumerate(selected)), 'Fitting selected trees', 'policies', lambda item: f'router{item[0]+1}'):
         h=GRID[winner['index']];raw,costs,norm=fit(x,y,times,overhead,h,dense,sparse)
         def compile_node(node):
             if 'feature' not in node:return dict(action=names[choose(node,costs,h,dense,sparse)],training_samples=node['n'])
@@ -170,7 +172,9 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
     if trainer!='ruler13-v1':raise ValueError('Unknown trainer version')
     if type(policy_count) is not int or not 1<=policy_count<=len(GRID):raise ValueError('Invalid policy count')
     if evaluation not in ('heldout','training'):raise ValueError('Unknown evaluation mode')
-    snapshot=corpus.snapshot()
+    unchecked=getattr(corpus,'skip_validation',False)
+    with progress.stage('Reading saved sample inventory' if unchecked else 'Creating validated snapshot'):
+        snapshot=corpus.snapshot()
     if evaluation=='training':
         total=len(snapshot['samples'])
         if n is not None and n!=total:
@@ -188,21 +192,24 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
     atomic_json(output/'snapshot.json',snapshot);atomic_json(output/'split.json',membership)
     by_id={r['id']:r for r in snapshot['samples']};samples=[by_id[i] for i in membership['train_ids']]
     features=[];scores=[];times=[];overhead=[]
-    for row in samples:
+    for row in progress.track(samples, 'Extracting features and outcomes', 'samples', lambda row: row['id']):
         pid=row['id'];features.append(corpus.features(pid))
         outcomes=[corpus.outcome(pid,a) for a in corpus.actions]
         if any(o is None for o in outcomes):raise ValueError('Frozen training sample lost an accepted outcome')
         scores.append([o['accuracy'] for o in outcomes]);times.append([o['timings']['answer_engine_ttft_seconds'] for o in outcomes])
         overhead.append(corpus.probe(pid)['timings']['routing_overhead_seconds'])
+    progress.detail('writing feature/outcome matrices')
     atomic_json(output/'matrices.json',dict(ids=membership['train_ids'],features=features,scores=scores,answer_ttft=times,probe_overhead=overhead))
     policies,table,folds=search(samples,features,scores,times,overhead,corpus.protocol['actions'],seed,policy_count)
     settings=dict(trainer=trainer,seed=seed,policy_count=policy_count,primary='router1',grid=GRID,folds=folds,
         action_scope=action_scope,evaluation=evaluation,evaluation_ids=membership['evaluation_ids'],
         train_ids=membership['train_ids'],targets=dict(macro_loss=.02,speedup=4),actions=corpus.protocol['actions'],
         training_hardware=corpus.protocol.get('hardware',{}),snapshot_sha256=file_hash(output/'snapshot.json'))
-    atomic_json(output/'settings.json',settings);atomic_json(output/'search.json',table)
+    if unchecked:settings['dataset_validation']='skipped'
+    with progress.stage('Writing search results'):
+        atomic_json(output/'settings.json',settings);atomic_json(output/'search.json',table)
     trees=[]
-    for policy in policies:
+    for policy in progress.track(policies, 'Exporting trees', 'policies', lambda policy: policy['id']):
         raw=policy.pop('raw_tree');atomic_json(output/(policy['id']+'-fit.json'),raw)
         tree=dict(policy,schema=SCHEMA,feature_names=list(FEATURES),feature_definitions=FEATURE_DEFINITIONS,
             actions=corpus.protocol['actions'],training_ids=membership['train_ids'],heldout_ids=membership['heldout_ids'],
@@ -211,6 +218,7 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
                 corpus_protocol_sha256=snapshot['protocol_sha256'],plan_sha256=corpus.protocol['plan_sha256'],
                 hardware=corpus.protocol.get('hardware',{})))
         tree['evaluation']=evaluation
+        if unchecked:tree['dataset_validation']='skipped'
         if evaluation=='training':
             tree['training_hashes']=dict(snapshot['acceptance_hashes'])
         tree=export(output/(policy['id']+'.json'),tree);trees.append(tree)
@@ -228,8 +236,9 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
             expected='nocache' if missing else names[choose(leaf(raw,[row[f] for f in FEATURES]),policy['training_costs'],policy['setting'],dense,sparse)]
             if decide(tree,row)['action']!=expected:raise ValueError('Export decision mismatch')
     from runner.corpus_eval import test_tree
-    reports={tree['id']:test_tree(corpus,tree,output/(tree['id']+'-'+evaluation),evaluation=evaluation)
-             for tree in trees}
+    reports={}
+    for tree in progress.track(trees, 'Evaluating routers offline', 'policies', lambda tree: tree['id']):
+        reports[tree['id']]=test_tree(corpus,tree,output/(tree['id']+'-'+evaluation),evaluation=evaluation)
     summary=dict(training_samples=n,heldout_samples=len(membership['heldout_ids']),primary='router1',
         action_scope=action_scope,evaluation=evaluation,evaluation_samples=len(membership['evaluation_ids']),
         training_overlap=evaluation=='training',
@@ -247,14 +256,17 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
             estimated_router_ttft_seconds=overall['estimated_router_ttft_seconds'],
             baseline_ttft_seconds=overall['baseline_ttft_seconds'],
             estimated_speedup=overall['estimated_speedup'],actions=overall['actions'])
-    if snapshot.get('source')=='completed-add5-10-extension':
+    if unchecked:summary['dataset_validation']='skipped'
+    if snapshot.get('source') in ('completed-add5-10-extension','add5-10-saved-records'):
         summary['data_source']=snapshot['source']
         summary['timing']+='; original and added fixed actions were measured in different sessions'
+    progress.detail('writing summary and completion receipt: '+str(output))
     atomic_json(output/'summary.json',summary)
     import json
     (output/'summary.txt').write_text(json.dumps(summary,indent=2)+'\n')
     atomic_json(output/'complete.json',dict(complete=True,primary='router1',training=n,heldout=len(membership['heldout_ids']),
         evaluation=evaluation,evaluated=len(membership['evaluation_ids']),training_overlap=evaluation=='training',
         settings_searched=len(GRID),policies=policy_count,estimated_timing=True,
+        **({'dataset_validation':'skipped'} if unchecked else {}),
         files={str(p.relative_to(output)):file_hash(p) for p in output.rglob('*') if p.is_file()}))
     return summary

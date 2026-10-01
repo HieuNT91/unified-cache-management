@@ -352,6 +352,7 @@ def parser():
     p.add_argument('--trainer',default='ruler13-v1');p.add_argument('--seed',type=int,default=42);p.add_argument('--policy-count',type=int,default=3)
     p.add_argument('--action-scope',choices=('original','all'),default='all',help='Offline readers: original inventory or include the completed 5/10 extension')
     p.add_argument('--evaluation',choices=('heldout','training'),default='heldout',help='Train/test: held-out split, or fit and evaluate on exactly the same complete samples')
+    p.add_argument('--skip-validation',action='store_true',help='Offline only: trust saved features/results; skip artifact hashing and attention replay')
     p.add_argument('--mode',choices=('offline',),default='offline')
     p.add_argument('--inference',action='store_true',help=argparse.SUPPRESS)
     return p
@@ -359,6 +360,17 @@ def parser():
 
 def main():
     a=parser().parse_args()
+    if a.command in ('train','test','replay','snapshot'):
+        from runner.corpus_progress import session
+        mode='dataset validation SKIPPED; reading saved features/results' if a.skip_validation else 'opening and validating corpus'
+        with session('Offline '+a.command, detail=mode+' '+str(a.root), output=a.output):
+            return execute(a)
+    return execute(a)
+
+
+def execute(a):
+    if a.skip_validation and a.command not in ('train','test','replay','snapshot'):
+        raise ValueError('--skip-validation is for offline commands only')
     for name,value in vars(a).items():
         if isinstance(value,Path):setattr(a,name,value.resolve())
     if os.environ.get('CUDA_VISIBLE_DEVICES',''):raise ValueError('Coordinator must be CPU-only')
@@ -376,7 +388,7 @@ def main():
     elif a.command in ('train','replay','test','snapshot'):
         from runner.corpus_training_data import open_corpus
         requested_tree=load(a.tree) if a.command in ('test','snapshot') and a.tree else None
-        corpus=open_corpus(a.root,a.prepared,tree=requested_tree,action_scope=a.action_scope)
+        corpus=open_corpus(a.root,a.prepared,tree=requested_tree,action_scope=a.action_scope,skip_validation=a.skip_validation)
         if corpus.protocol['kind']!='collection' or corpus.protocol['dataset']!='ruler':raise ValueError('Training/offline replay only accepts RULER corpus collections')
         if a.command=='train':
             from runner.corpus_train import train

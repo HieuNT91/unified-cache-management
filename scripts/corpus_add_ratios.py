@@ -224,10 +224,11 @@ class Extension:
         self.actions = actions(self.protocol['actions'])
 
     def verify_sources(self):
-        for name, expected in self.sources['files'].items():
+        from runner import corpus_progress as progress
+        for name, expected in progress.track(self.sources['files'].items(), 'Validating original checksums', 'files', lambda item: item[0]):
             if not Path(name).is_file() or digest(name) != expected:
                 raise ValueError('Original artifact changed: '+name)
-        for row in self.rows:
+        for row in progress.track(self.rows, 'Validating derived attention', 'samples', lambda row: row['id']):
             self.attention(row)
 
     def attention(self, row, replay=False):
@@ -279,11 +280,12 @@ class Extension:
                 and any(self.outcome(r, a) is None for a in EXTRA)]
 
     def validate_new(self, full=True):
+        from runner import corpus_progress as progress
         allowed = {r['id'] for r in self.rows}
         for case in EXTRA:
             if any(p.parent.name not in allowed for p in (self.root/'records'/case).glob('*/validated.json')):
                 raise ValueError('Unexpected added-action prompt')
-            for row in self.rows:
+            for row in progress.track(self.rows, 'Validating '+case+' outcomes', 'records', lambda row: row['id']):
                 self.outcome(row, case, full=full)
 
 
