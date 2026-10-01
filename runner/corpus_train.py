@@ -17,26 +17,44 @@ COST_GRID=[dict(family='cost',depth=d,min_leaf=l,lam=w,penalty=p)
 GRID=LOSS_GRID+COST_GRID
 
 
-def search_grid(depths=None,accuracy_weight=None,selection_objective='legacy',max_accuracy_loss_pp=2.):
+def grid_values(name,values,default,integer=False,upper=None):
+    values=tuple(default if values is None else values)
+    if not values or any((type(v) is not int or v<1) if integer else
+            (not number(v) or not math.isfinite(v) or v<0) for v in values):
+        raise ValueError(name+' requires '+('positive integers' if integer else 'finite nonnegative numbers'))
+    if upper is not None and any(v>upper for v in values):raise ValueError(name+' exceeds '+str(upper))
+    return sorted(set(values))
+
+
+def search_grid(depths=None,accuracy_weight=None,selection_objective='legacy',max_accuracy_loss_pp=2.,
+                min_leaf=None,lambdas=None,loss_thresholds=None,shrinkages=None,leaf_penalties=None,min_speedup=None):
     if selection_objective not in ('legacy','min-budget','min-ttft'):raise ValueError('Unknown selection objective')
     if not number(max_accuracy_loss_pp) or not 0<=max_accuracy_loss_pp<=100:
         raise ValueError('max-accuracy-loss-pp must be between 0 and 100')
-    depths=(1,2,3) if depths is None else tuple(depths)
-    if not depths or any(type(d) is not int or not 1<=d<=32 for d in depths):
-        raise ValueError('depths must contain integers from 1 to 32')
-    depths=sorted(set(depths))
+    if min_speedup is not None:
+        grid_values('min-speedup',[min_speedup],())
+        if selection_objective!='legacy':raise ValueError('--min-speedup applies only to legacy selection; min-ttft/min-budget have no speedup gate')
+    depths=grid_values('depths',depths,(1,2,3),integer=True,upper=32)
+    leaves=grid_values('min-leaf',min_leaf,(10,20),integer=True)
+    penalties=grid_values('leaf-penalties',leaf_penalties,(0.,.005,.02))
     if accuracy_weight is not None:
-        if not number(accuracy_weight) or not math.isfinite(accuracy_weight) or accuracy_weight<0:
-            raise ValueError('accuracy-weight must be finite and nonnegative')
+        grid_values('accuracy-weight',[accuracy_weight],())
+        if lambdas is not None:raise ValueError('Use --lambdas or --accuracy-weight, not both')
+    cost_only=selection_objective=='min-budget' or accuracy_weight is not None
+    if cost_only and (loss_thresholds is not None or shrinkages is not None):
+        raise ValueError('Loss thresholds/shrinkages require loss trees; omit them with min-budget or --accuracy-weight')
+    default_weights=(0.,.1,.25,.5,1.,2.,5.,10.,20.,50.,100.) if selection_objective=='min-budget' else (1,2,5,10,20,50,100)
+    weights=grid_values('lambdas',lambdas,default_weights) if accuracy_weight is None else [float(accuracy_weight)]
+    costs=[dict(family='cost',depth=d,min_leaf=l,lam=w,penalty=p)
+           for d,l,w,p in itertools.product(depths,leaves,weights,penalties)]
     if selection_objective=='min-budget':
-        weights=(0.,.1,.25,.5,1.,2.,5.,10.,20.,50.,100.) if accuracy_weight is None else (float(accuracy_weight),)
-        return [dict(family='cost',cost_basis='budget',depth=d,min_leaf=l,lam=w,penalty=p)
-                for d,l,w,p in itertools.product(depths,(10,20),weights,(0.,.005,.02))]
-    if accuracy_weight is not None:
-        return [dict(family='cost',depth=d,min_leaf=l,lam=float(accuracy_weight),penalty=p)
-                for d,l,p in itertools.product(depths,(10,20),(0.,.005,.02))]
-    return [dict(h,depth=d) for family in (LOSS_GRID,COST_GRID) for d in depths
-            for h in family if h['depth']==1]
+        return [dict(h,cost_basis='budget') for h in costs]
+    if cost_only:return costs
+    thresholds=grid_values('loss-thresholds',loss_thresholds,(0.,.02,.05,.10,.20),upper=1.)
+    shrink=grid_values('shrinkages',shrinkages,(0,5,20))
+    losses=[dict(family='loss',depth=d,min_leaf=l,shrinkage=r,threshold=t)
+            for d,l,r,t in itertools.product(depths,leaves,shrink,thresholds)]
+    return losses+costs
 
 
 def split(samples,n,seed):
@@ -155,8 +173,10 @@ def rank(table,count=3,accuracy_weight=None,selection_objective='legacy'):
 
 
 def search(samples,features,scores,times,overhead,inventory,seed=42,count=3,
-           depths=None,accuracy_weight=None,selection_objective='legacy',max_accuracy_loss_pp=2.):
-    grid=search_grid(depths,accuracy_weight,selection_objective,max_accuracy_loss_pp)
+           depths=None,accuracy_weight=None,selection_objective='legacy',max_accuracy_loss_pp=2.,
+           min_leaf=None,lambdas=None,loss_thresholds=None,shrinkages=None,leaf_penalties=None,min_speedup=None):
+    grid=search_grid(depths,accuracy_weight,selection_objective,max_accuracy_loss_pp,
+                     min_leaf,lambdas,loss_thresholds,shrinkages,leaf_penalties,min_speedup)
     definitions=actions(inventory);names=list(definitions);dense=names.index('nocache');sparse=[i for i in range(len(names)) if i!=dense]
     budgets=np.array([1. if name=='nocache' else definitions[name]['ratio'] for name in names])
     scores=np.asarray(scores,float);times=np.asarray(times,float);overhead=np.asarray(overhead,float);n=len(samples)
@@ -183,7 +203,7 @@ def search(samples,features,scores,times,overhead,inventory,seed=42,count=3,
         speed=float(times[:,dense].mean()/elapsed.mean())
         table.append(dict(h,index=index,macro_score=score,macro_loss=baseline-score,mean_total_ttft=float(elapsed.mean()),
             speedup=speed,leaf_count=leaves,
-            feasible=bool(baseline-score<=max_accuracy_loss_pp/100+1e-12 and (selection_objective!='legacy' or speed>=4.-1e-12)),
+            feasible=bool(baseline-score<=max_accuracy_loss_pp/100+1e-12 and (selection_objective!='legacy' or speed>=(4. if min_speedup is None else min_speedup)-1e-12)),
             mean_selected_budget=float(budgets[decisions].mean()),oof_action_counts=dict(Counter(names[i] for i in decisions)),
             oof_actions=decisions.tolist(),fold_statistics=statistics))
         if accuracy_weight is not None and selection_objective=='legacy':
@@ -208,12 +228,15 @@ def _compiled_leaves(tree):
 
 def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
           action_scope='all',evaluation='heldout',depths=None,accuracy_weight=None,
-          selection_objective='legacy',max_accuracy_loss_pp=2.):
+          selection_objective='legacy',max_accuracy_loss_pp=2.,
+          min_leaf=None,lambdas=None,loss_thresholds=None,shrinkages=None,leaf_penalties=None,min_speedup=None):
     from runner.corpus_training_data import training_view
     corpus=training_view(corpus,action_scope)
     if corpus.protocol.get('dataset')!='ruler' or corpus.protocol.get('kind')!='collection':raise ValueError('Only RULER corpus collections may train routers')
     if trainer!='ruler13-v1':raise ValueError('Unknown trainer version')
-    grid=search_grid(depths,accuracy_weight,selection_objective,max_accuracy_loss_pp)
+    grid_options=dict(min_leaf=min_leaf,lambdas=lambdas,loss_thresholds=loss_thresholds,
+                      shrinkages=shrinkages,leaf_penalties=leaf_penalties,min_speedup=min_speedup)
+    grid=search_grid(depths,accuracy_weight,selection_objective,max_accuracy_loss_pp,**grid_options)
     if type(policy_count) is not int or not 1<=policy_count<=len(grid):raise ValueError('Invalid policy count')
     if evaluation not in ('heldout','training'):raise ValueError('Unknown evaluation mode')
     unchecked=getattr(corpus,'skip_validation',False)
@@ -244,12 +267,15 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
         overhead.append(corpus.probe(pid)['timings']['routing_overhead_seconds'])
     progress.detail('writing feature/outcome matrices')
     atomic_json(output/'matrices.json',dict(ids=membership['train_ids'],features=features,scores=scores,answer_ttft=times,probe_overhead=overhead))
-    policies,table,folds=search(samples,features,scores,times,overhead,corpus.protocol['actions'],seed,policy_count,depths,accuracy_weight,selection_objective,max_accuracy_loss_pp)
+    policies,table,folds=search(samples,features,scores,times,overhead,corpus.protocol['actions'],seed,policy_count,depths,accuracy_weight,selection_objective,max_accuracy_loss_pp,**grid_options)
     objective=dict(mode='legacy' if accuracy_weight is None else 'weighted',accuracy_weight=accuracy_weight,
         depths=sorted({h['depth'] for h in grid}),
         formula='task-macro mean(total_ttft / fitting_fold_dense_median + accuracy_weight * max(0, dense_score - action_score))'
             if accuracy_weight is not None else 'feasibility first; TTFT then accuracy if feasible, accuracy then TTFT otherwise')
-    objective.update(selection_objective=selection_objective,max_accuracy_loss_pp=max_accuracy_loss_pp)
+    speedup_target=(4. if min_speedup is None else min_speedup) if selection_objective=='legacy' else None
+    objective.update(selection_objective=selection_objective,max_accuracy_loss_pp=max_accuracy_loss_pp,
+        min_speedup=speedup_target,search_space={key:sorted({h[key] for h in grid if key in h})
+            for key in ('depth','min_leaf','lam','threshold','shrinkage','penalty')})
     if selection_objective!='legacy':
         objective.update(mode=selection_objective,
             formula=('mean selected budget (nocache=1); tie: estimated TTFT, accuracy' if selection_objective=='min-budget'
@@ -257,7 +283,7 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
             fitting_cost='budget + lambda * positive_loss' if selection_objective=='min-budget' else 'normalized TTFT + lambda * positive_loss')
     settings=dict(trainer=trainer,seed=seed,policy_count=policy_count,primary='router1',grid=grid,folds=folds,objective=objective,
         action_scope=action_scope,evaluation=evaluation,evaluation_ids=membership['evaluation_ids'],
-        train_ids=membership['train_ids'],targets=dict(macro_loss=max_accuracy_loss_pp/100,speedup=4 if selection_objective=='legacy' else None),actions=corpus.protocol['actions'],
+        train_ids=membership['train_ids'],targets=dict(macro_loss=max_accuracy_loss_pp/100,speedup=speedup_target),actions=corpus.protocol['actions'],
         training_hardware=corpus.protocol.get('hardware',{}),snapshot_sha256=file_hash(output/'snapshot.json'))
     if unchecked:settings['dataset_validation']='skipped'
     with progress.stage('Writing search results'):

@@ -301,6 +301,74 @@ This retains nocache, so it encourages smaller sparse choices without forbidding
 dense fallback. If no candidate meets the accuracy limit, no ineligible policy
 is exported. The foreground launcher still loads `.env` and prints progress.
 
+## Configure the full hyperparameter search from CLI
+
+The earlier 216-setting description is the **default**, not a fixed search size.
+Every list flag below forms a search axis; duplicate values are removed. Each
+setting gets five-fold OOF predictions; selected trees are then refitted on all
+training rows. This is one shared policy per setting across all 13 tasks.
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--depths 1 2 3` | 1, 2, 3 | Maximum depths; allowed 1–32. |
+| `--min-leaf 5 10 20` | 10, 20 | Minimum samples per child leaf. Smaller values allow more specialized splits. |
+| `--lambdas 0 .5 2 10` | 1, 2, 5, 10, 20, 50, 100 | Cost-tree accuracy-loss weights. Smaller values favor time (or budget in min-budget mode). |
+| `--loss-thresholds .02 .05 .10` | 0, .02, .05, .10, .20 | Loss-tree predicted-loss limits. Fractions: .05 means 5 percentage points. Larger thresholds permit more loss. |
+| `--shrinkages 0 5 20` | 0, 5, 20 | Loss-tree pseudo-counts shrinking leaf estimates toward the training-fold prior. |
+| `--leaf-penalties 0 .005 .02` | 0, .005, .02 | Cost-tree split penalties. Smaller penalties allow more splits. |
+| `--objective min-ttft` | legacy | Alias for `--selection-objective`; choices legacy, min-ttft, min-budget. |
+| `--max-loss-pp 2` | 2 | Alias for `--max-accuracy-loss-pp`; OOF macro loss limit in percentage points. |
+| `--min-speedup 0` | 4 | Legacy feasibility target; 0 removes the speedup gate. Only accepted with legacy selection. |
+
+Depth and leaf grids must contain positive integers; other grids require finite,
+nonnegative values. Loss thresholds must be <=1. The two constraint modes have
+no speedup gate. With legacy weighted ranking (`--accuracy-weight`), the legacy
+feasibility target is only a reported indicator and does not govern ranking.
+
+`--lambdas` changes the cost-tree search grid, while `--accuracy-weight` retains
+its earlier meaning: one cost weight, cost-only fitting, and weighted ranking in
+legacy mode. Do not pass both. Min-budget mode is also cost-only and defaults to
+lambda 0/.1/.25/.5/1/2/5/10/20/50/100. Loss thresholds and shrinkages are rejected
+in cost-only modes rather than silently ignored. An explicit lambda grid alone
+still searches both loss and cost families under legacy/min-ttft selection.
+
+The resolved search axes are saved under `objective.search_space`, with every
+expanded setting in `settings.json` and every fitted tree's setting in its export.
+Larger grids increase CPU work. For mixed families the setting count is:
+
+```text
+number of depths * number of min-leaf values *
+  (number of shrinkages * number of thresholds + number of lambdas * number of penalties)
+```
+
+To prioritize TTFT, start with min-ttft and a 2pp loss limit. This example searches
+56 settings, using the original `.env` paths plus the overrides below:
+
+```bash
+cd "$CODE"
+git pull --ff-only origin prophetkv/clean-qwen3-32b-yarn4
+export PYTHON_BIN=/data/jh/envs/ucm/bin/python
+export EXPERIMENT_DIR=/data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20
+export PREPARED_DIR="$("$PYTHON_BIN" -c 'import json,sys; print(json.load(open(sys.argv[1]))["prepared"])' "$EXPERIMENT_DIR/protocol.json")"
+export OUT="/data/jh/unified-cache-management/router-ttft-grid-$(date +%Y%m%d-%H%M%S)"
+bash "$CODE/scripts/ruler_corpus.sh" train --skip-validation \
+  --action-scope all --evaluation training --train-samples 1560 \
+  --trainer ruler13-v1 --seed 42 --policy-count 3 \
+  --objective min-ttft --max-loss-pp 2 \
+  --depths 3 5 --min-leaf 5 10 \
+  --lambdas 0 .5 2 10 \
+  --loss-thresholds .02 .05 .10 --shrinkages 0 5 \
+  --leaf-penalties 0 .005 \
+  --output "$OUT"
+cat "$OUT/summary.txt"
+```
+
+Compare a separate run with `--max-loss-pp 5` only if the accuracy tradeoff is
+acceptable. Smaller leaves and deeper trees can overfit; they do not guarantee
+lower TTFT. Recorded probe overhead is still included in estimated router TTFT.
+These commands fit and evaluate the same 120 samples/task, report offline only,
+load `.env`, print progress, and skip dataset validation. No nohup is needed.
+
 ## Optional held-out split
 
 The default `--evaluation heldout` preserves the original split behavior. For
