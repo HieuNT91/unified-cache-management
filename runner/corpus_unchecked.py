@@ -14,16 +14,25 @@ class UncheckedCorpus:
         self.root = Path(root).resolve()
         self.action_scope = action_scope
         original = self.read(self.root/'protocol.json')
-        extension = self.root/'extensions/add5-10'
-        if tree is not None and tree['actions'] == original['actions']:
-            self.action_scope = 'original'
-        combined = self.action_scope == 'all' and (extension/'protocol.json').is_file()
-        self.protocol = self.read(extension/'protocol.json') if combined else original
+        from runner.corpus_extensions import discover,joined_protocol
+        from runner.corpus_training_data import normalize_action_scope
+        self.action_scope=normalize_action_scope(action_scope)
+        if tree is not None and self.action_scope=='all':
+            self.action_scope=normalize_action_scope([a['id'] for a in tree['actions']])
+        requested=None if isinstance(self.action_scope,str) else self.action_scope
+        extensions=[] if self.action_scope=='original' else discover(self.root,requested)
+        self.protocol=joined_protocol(original,extensions)
         self.prepared = Path(prepared or self.protocol['prepared'])
         self.actions = {a['id']: dict(a) for a in self.protocol['actions']}
-        self.source = 'add5-10-saved-records' if combined else 'original'
-        if combined:
-            rows = self.read(extension/'sources.json')['rows']
+        self.source = ('add5-10-saved-records' if len(extensions)==1 and str(extensions[0][0])=='extensions/add5-10'
+                       else 'multi-extension-saved-records' if extensions else 'original')
+        if extensions:
+            # Use union of source rows; snapshot requires all selected outcomes.
+            by_id={}
+            for state,_ in extensions:
+                for row in self.read(self.root/state/'sources.json')['rows']:
+                    by_id[row['id']]=row
+            rows=list(by_id.values())
         elif (self.prepared/'manifest.jsonl').is_file():
             rows = [json.loads(line) for line in (self.prepared/'manifest.jsonl').read_text().splitlines() if line.strip()]
         else:

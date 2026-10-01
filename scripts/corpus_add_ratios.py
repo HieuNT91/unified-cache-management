@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect only 5/10% into an existing corpus using this checkout's runtime."""
+"""Collect additional budgets into an existing corpus using this checkout's runtime."""
 import argparse
 from collections import Counter
 from contextlib import contextmanager
@@ -104,10 +104,21 @@ def selected_rows(base, limit, tasks):
     return rows
 
 
-def combined_actions(base):
+def normalize_percentages(values):
+    values=tuple(sorted(set(values)))
+    if not values or any(type(p) is not int or not 1<=p<=100 for p in values):
+        raise ValueError('percentages must be integers from 1 to 100')
+    return values
+
+
+def percentage_args():
+    return ['--percentages',*[a.removeprefix('prophetkv-') for a in EXTRA]]
+
+
+def combined_actions(base, percentages=None):
     from runner.tree_policy import actions
-    result = [*base, dict(id=EXTRA[0], method='prophetkv', ratio=.05),
-              dict(id=EXTRA[1], method='prophetkv', ratio=.10)]
+    percentages=normalize_percentages(percentages if percentages is not None else [int(a.removeprefix('prophetkv-')) for a in EXTRA])
+    result = [*base, *(dict(id=f'prophetkv-{p}',method='prophetkv',ratio=p/100) for p in percentages)]
     actions(result)  # Reject duplicate IDs AND duplicate ratios.
     return sorted(result, key=lambda a: a['ratio'] or 0)
 
@@ -145,6 +156,9 @@ def prepare(root):
     rows = selected_rows(base, limit, TASKS)
     done = completion(root, protocol, len(rows))
     inventory = combined_actions(protocol['actions'])
+    for other in (root/'extensions').glob('add*/protocol.json'):
+        if other.parent!=state and set(read(other).get('added_actions',[]))&set(EXTRA):
+            raise ValueError('Requested budgets already registered in '+str(other.parent))
     for case in EXTRA:
         if (root/'records'/case).exists():
             raise ValueError('Unregistered added-action records already exist: '+case)
@@ -208,12 +222,14 @@ def prepare(root):
 
 
 class Extension:
-    def __init__(self, root):
+    def __init__(self, root, state=None):
         from runner.corpus_records import protocol_identity
         from runner.tree_policy import actions
         self.root = Path(root)
-        self.state = self.root/STATE
+        self.relative_state = Path(state) if state is not None else STATE
+        self.state = contained(self.root,self.relative_state)
         self.protocol = read(self.state/'protocol.json')
+        self.added_actions=tuple(self.protocol['added_actions'])
         self.base_protocol = read(self.root/'protocol.json')
         if protocol_identity(self.base_protocol) != self.protocol['base_protocol_sha256']:
             raise ValueError('Original protocol changed')
@@ -266,7 +282,7 @@ class Extension:
         if record is not None:
             if (record.get('derived_mask_provenance') != self.protocol['derived'][row['id']] or
                     record.get('cache_deletion', {}).get('deleted_shards', 0) <= 0 or
-                    not record['initialization'].startswith(str(STATE/'sessions')+'/')):
+                    not record['initialization'].startswith(str(self.relative_state/'sessions')+'/')):
                 raise ValueError('Missing extension provenance or cache deletion evidence')
             if full:
                 attention = self.attention(row)
@@ -277,12 +293,12 @@ class Extension:
 
     def pending(self, group):
         return [r for r in self.rows if r['ordinal'] % len(self.protocol['groups']) == group
-                and any(self.outcome(r, a) is None for a in EXTRA)]
+                and any(self.outcome(r, a) is None for a in self.added_actions)]
 
     def validate_new(self, full=True):
         from runner import corpus_progress as progress
         allowed = {r['id'] for r in self.rows}
-        for case in EXTRA:
+        for case in self.added_actions:
             if any(p.parent.name not in allowed for p in (self.root/'records'/case).glob('*/validated.json')):
                 raise ValueError('Unexpected added-action prompt')
             for row in progress.track(self.rows, 'Validating '+case+' outcomes', 'records', lambda row: row['id']):
@@ -352,7 +368,7 @@ def summarize(root, same_count=False, final=False):
         if not final and state.exists():
             saved = read(state)
             result = dict(status=saved['state'], supervisor=dict(saved, alive=alive(saved)),
-                          message='Extension preparation is pending; see extensions/add5-10/supervisor.log')
+                          message='Extension preparation is pending; see '+str(STATE/'supervisor.log'))
             print(json.dumps(result, indent=2))
             return result
         raise ValueError('No prepared extension; run detach or verify first')
@@ -389,7 +405,7 @@ def summarize(root, same_count=False, final=False):
         report['supervisor'] = dict(saved, alive=alive(saved))
     stem = 'report' if final else 'same_count_summary' if same_count else 'live_summary'
     with locked(corpus.state/'report.lock'):
-        text = f"# RULER original + 5%/10%\n\nAnswers: {report['accepted_answers']}/{report['expected_answers']}; added: {report['new_answers']}/{report['expected_new_answers']}.\n\n{report['timing']}\n"
+        text = f"# RULER original + {', '.join(EXTRA)}\n\nAnswers: {report['accepted_answers']}/{report['expected_answers']}; added: {report['new_answers']}/{report['expected_new_answers']}.\n\n{report['timing']}\n"
         if same_count:
             text += f"\nMatched prompt IDs: {matching['matched_samples']}.\n"
         table = []
@@ -477,7 +493,7 @@ def supervise(root):
         def launch(corpus, group, retry):
             attempt = uuid.uuid4().hex
             cmd = [sys.executable, '-u', str(Path(__file__).resolve()), 'worker', '--root', str(root),
-                   '--group', str(group), '--attempt', attempt]
+                   '--group', str(group), '--attempt', attempt, *percentage_args()]
             with (state_dir/f'group{group}-{attempt}.log').open('a') as log:
                 child = subprocess.Popen(cmd, cwd=CODE_ROOT, env=environment(','.join(corpus.protocol['groups'][group])),
                                          stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -553,7 +569,7 @@ def detach(root, resume=False):
         if (state/'supervisor.json').exists() and not resume:
             raise ValueError('Use resume for missing new records')
         command = ['nohup', sys.executable, '-u', str(Path(__file__).resolve()), 'supervise',
-                   '--root', str(root)]
+                   '--root', str(root), *percentage_args()]
         with locked(root/'launch.lock'):
             idle(root)
             completion(root, protocol, count)
@@ -590,12 +606,17 @@ print(p.pid,flush=True)
 
 
 def main():
+    global EXTRA, STATE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('verify', 'detach', 'resume', 'status', 'status_same_count', 'report', 'supervise', 'worker'))
     parser.add_argument('--root', required=True, type=Path)
+    parser.add_argument('--percentages',type=int,nargs='+',default=[5,10],help='Additional budgets; default 5 10. Use the same list for every control command.')
     parser.add_argument('--group', type=int, help=argparse.SUPPRESS)
     parser.add_argument('--attempt', help=argparse.SUPPRESS)
     args = parser.parse_args()
+    percentages=normalize_percentages(args.percentages)
+    EXTRA=tuple(f'prophetkv-{p}' for p in percentages)
+    STATE=Path('extensions')/('add'+'-'.join(map(str,percentages)))
     root = args.root.resolve()
     if not (root/'protocol.json').is_file():
         raise ValueError('Missing existing collection protocol: '+str(root))
@@ -606,7 +627,7 @@ def main():
         with base_exclusive(root):
             idle(root/STATE)
             corpus = prepare(root)
-        print(f'Verified {len(corpus.rows)} original prompts; {len(corpus.rows)*2} new answers. No GPU work launched.')
+        print(f'Verified {len(corpus.rows)} original prompts; {len(corpus.rows)*len(EXTRA)} new answers. No GPU work launched.')
     elif args.command in ('detach', 'resume'):
         detach(root, args.command == 'resume')
     elif args.command == 'supervise':

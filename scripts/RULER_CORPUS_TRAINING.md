@@ -472,3 +472,11 @@ scripts/ruler_corpus.sh test --tree /trees/router1.json --mode offline \
 `summary.json` and `summary.txt` disclose each selected policy's feasibility,
 OOF macro loss/speedup, leaf count and duplicate ranks. They retain router1 as
 primary even when targets are unmet.
+
+## Additional collection batches
+
+For 50%/70%/90%, see [RULER_CORPUS_EXTRA_BUDGETS.md](RULER_CORPUS_EXTRA_BUDGETS.md).
+The collector now accepts `--percentages`; the offline reader joins all registered
+batches for `--action-scope all`. On the L20 corpus this gives nine actions after
+the new batch finishes, including the existing 5%/10% records. Explicit action
+subsets and old exported-tree testing retain their selected source inventory.

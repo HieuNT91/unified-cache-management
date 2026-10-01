@@ -6,7 +6,8 @@ from runner import corpus_progress as progress
 from runner.corpus import Corpus, load_attention, relative
 from runner.corpus_records import accepted, protocol_identity, record_dir
 from runner.setups import file_hash
-from scripts.corpus_add_ratios import EXTRA, STATE, Extension, combined_actions
+from scripts.corpus_add_ratios import STATE, Extension, combined_actions
+from runner.corpus_extensions import discover,joined_protocol
 
 
 def normalize_action_scope(value):
@@ -44,9 +45,13 @@ def open_corpus(root, prepared=None, tree=None, action_scope='all', skip_validat
         if set(scope)<=set(a['id'] for a in original['actions']):base_scope='original'
     if skip_validation:
         from runner.corpus_unchecked import UncheckedCorpus
-        corpus=UncheckedCorpus(root,prepared,base_scope)
-    elif base_scope=='all' and (root/STATE).exists():
-        corpus=ExtendedCorpus(root,prepared)
+        corpus=UncheckedCorpus(root,prepared,scope)
+    elif base_scope=='all':
+        extensions=discover(root,None if isinstance(scope,str) else scope)
+        if len(extensions)>1:corpus=MultiExtensionCorpus(root,prepared,extensions)
+        elif extensions:corpus=ExtendedCorpus(root,prepared,extensions[0][0])
+        elif (root/STATE).exists():corpus=ExtendedCorpus(root,prepared)
+        else:corpus=Corpus(root,prepared)
     else:
         corpus=Corpus(root,prepared)
     return select_actions(corpus,scope)
@@ -59,7 +64,7 @@ def training_view(corpus, action_scope='all'):
         return open_corpus(corpus.root,corpus.prepared,action_scope=scope,
                            skip_validation=getattr(corpus,'skip_validation',False))
     if not isinstance(scope,str):
-        if isinstance(corpus,ExtendedCorpus) or getattr(corpus,'source',None)=='add5-10-saved-records':
+        if isinstance(corpus,(ExtendedCorpus,MultiExtensionCorpus)) or getattr(corpus,'source',None) in ('add5-10-saved-records','multi-extension-saved-records'):
             return open_corpus(corpus.root,corpus.prepared,action_scope=scope,
                                skip_validation=getattr(corpus,'skip_validation',False))
         # Direct callers may have supplied an original reader for added actions.
@@ -71,9 +76,13 @@ def training_view(corpus, action_scope='all'):
         if corpus.action_scope == scope:return corpus
         return open_corpus(corpus.root,corpus.prepared,action_scope=scope,skip_validation=True)
     if scope == 'original':
-        return Corpus(corpus.root, corpus.prepared) if isinstance(corpus, ExtendedCorpus) else corpus
-    if not isinstance(corpus, ExtendedCorpus) and (Path(corpus.root)/STATE).exists():
-        return ExtendedCorpus(corpus.root, getattr(corpus, 'prepared', None))
+        return Corpus(corpus.root, corpus.prepared) if isinstance(corpus,(ExtendedCorpus,MultiExtensionCorpus)) else corpus
+    extensions=discover(corpus.root)
+    if len(extensions)>1 and not isinstance(corpus,MultiExtensionCorpus):
+        return MultiExtensionCorpus(corpus.root,getattr(corpus,'prepared',None),extensions)
+    if not isinstance(corpus,(ExtendedCorpus,MultiExtensionCorpus)):
+        if extensions:return ExtendedCorpus(corpus.root,getattr(corpus,'prepared',None),extensions[0][0])
+        if (Path(corpus.root)/STATE).exists():return ExtendedCorpus(corpus.root,getattr(corpus,'prepared',None))
     return corpus
 
 
@@ -108,30 +117,33 @@ class SelectedCorpus(Corpus):
             result=UncheckedCorpus.snapshot(self)
         else:
             result=Corpus.snapshot(self)
-            if isinstance(self._source,ExtendedCorpus):
-                result.update(source='completed-add5-10-extension',metadata_hashes=dict(self._source.metadata_hashes))
+            if isinstance(self._source,(ExtendedCorpus,MultiExtensionCorpus)):
+                result.update(source=self._source.source,metadata_hashes=dict(self._source.metadata_hashes))
         result['action_scope']=list(self.actions)
         return result
 
 
 class ExtendedCorpus(Corpus):
-    """Read-only six-action view; collection protocols/receipts are never rewritten."""
-    def __init__(self, root, prepared=None):
+    """Read-only single-batch view; collection protocols/receipts are never rewritten."""
+    def __init__(self, root, prepared=None, state=STATE):
         self.root = Path(root).resolve()
-        self.state = self.root/STATE
+        self.relative_state=Path(state)
+        self.state = relative(self.root,self.relative_state)
+        self.source='completed-add5-10-extension' if self.relative_state==STATE else 'completed-multi-extension'
         completion = self.state/'complete.json'
         if not completion.is_file():
-            raise ValueError('5%/10% extension is incomplete; finish collection and final reporting before training')
+            raise ValueError('Action extension is incomplete; finish collection and final reporting before training')
         from scripts.corpus_control import idle
         idle(self.root)
         idle(self.state)
-        self.extension = Extension(self.root)
+        self.extension = Extension(self.root,self.relative_state)
+        self.extra=self.extension.added_actions
         self.protocol = self.extension.protocol
         self.actions = self.extension.actions
         self.prepared = Path(self.protocol['prepared'])
         if prepared is not None and Path(prepared).resolve() != self.prepared.resolve():
             raise ValueError('Extension training must use its original pinned prepared directory')
-        if self.protocol['actions'] != combined_actions(self.extension.base_protocol['actions']):
+        if self.protocol['actions'] != combined_actions(self.extension.base_protocol['actions'],[int(a.removeprefix('prophetkv-')) for a in self.extra]):
             raise ValueError('Extension action inventory changed')
         self.rows = {r['id']: r for r in self.extension.rows}
         if len(self.rows) != len(self.extension.rows) or not self.rows:
@@ -139,12 +151,12 @@ class ExtendedCorpus(Corpus):
         self.done = json.loads(completion.read_text())
         n = len(self.rows)
         if (self.done.get('complete') is not True or self.done.get('owned_engines_exited') is not True or
-                self.done.get('prompts') != n or self.done.get('new_answers') != len(EXTRA)*n or
+                self.done.get('prompts') != n or self.done.get('new_answers') != len(self.extra)*n or
                 self.done.get('answers') != len(self.actions)*n or self.done.get('reused_probes') != n):
             raise ValueError('Extension completion counts or engine-exit gate changed')
         if json.loads((self.state/'cleanup.json').read_text()).get('owned_engines_exited') is not True:
             raise ValueError('Missing extension engine-exit evidence')
-        expected = {f'records/{a}/{pid}/validated.json' for pid in self.rows for a in EXTRA}
+        expected = {f'records/{a}/{pid}/validated.json' for pid in self.rows for a in self.extra}
         if set(self.done.get('new_receipts', {})) != expected:
             raise ValueError('Incomplete extension receipt inventory')
         for name, digest in progress.track(self.done['new_receipts'].items(), 'Checking extension receipts', 'files', lambda item: item[0]):
@@ -156,15 +168,15 @@ class ExtendedCorpus(Corpus):
         if file_hash(self.prepared/'plan.json') != self.protocol['plan_sha256']:
             raise ValueError('Original prepared plan changed')
         self.metadata_hashes = {name: file_hash(relative(self.root, name)) for name in (
-            'protocol.json', str(STATE/'protocol.json'), str(STATE/'sources.json'),
-            str(STATE/'complete.json'), str(STATE/'cleanup.json'))}
+            'protocol.json', str(self.relative_state/'protocol.json'), str(self.relative_state/'sources.json'),
+            str(self.relative_state/'complete.json'), str(self.relative_state/'cleanup.json'))}
         self._features = {}
 
     def _receipt(self, prompt_id, case):
         name = f'records/{case}/{prompt_id}/validated.json'
         path = relative(self.root, name)
-        pins = self.done['new_receipts'] if case in EXTRA else self.extension.sources['files']
-        expected = pins.get(name if case in EXTRA else str(path))
+        pins = self.done['new_receipts'] if case in self.extra else self.extension.sources['files']
+        expected = pins.get(name if case in self.extra else str(path))
         if expected is None or not path.is_file() or file_hash(path) != expected:
             raise ValueError('Frozen training receipt changed or missing: '+name)
         return expected
@@ -178,7 +190,7 @@ class ExtendedCorpus(Corpus):
         if action not in self.actions:
             raise ValueError('Unknown corpus action')
         self._receipt(prompt_id, action)
-        if action in EXTRA:
+        if action in self.extra:
             return self.extension.outcome(self.rows[prompt_id], action)
         return accepted(self.root, action, self.rows[prompt_id], self.extension.base_protocol,
                         prepared=self.prepared)
@@ -235,6 +247,43 @@ class ExtendedCorpus(Corpus):
             plan_sha256=self.protocol['plan_sha256'], actions=self.protocol['actions'],
             samples=[dict(id=pid, task=r['subtask'], ordinal=r['ordinal'], input_sha256=r['sha256'])
                      for pid, r in self.rows.items()], acceptance_hashes=pins,
-            metadata_hashes=dict(self.metadata_hashes), source='completed-add5-10-extension',
+            metadata_hashes=dict(self.metadata_hashes), source=self.source,
             counts=dict(planned=n, prepared=n, complete=n, incomplete=0, unprepared=0,
                         accepted={case: n for case in ['probe', *self.actions]}))
+
+
+class MultiExtensionCorpus(Corpus):
+    """Join disjoint batches while validating each record under its own protocol."""
+    def __init__(self,root,prepared=None,extensions=None):
+        self.root=Path(root).resolve()
+        extensions=discover(self.root) if extensions is None else extensions
+        self.base=Corpus(self.root,prepared)
+        self.batches=[ExtendedCorpus(self.root,prepared,state) for state,_ in extensions]
+        self.protocol=joined_protocol(self.base.protocol,extensions)
+        self.actions={a['id']:a for a in self.protocol['actions']}
+        self.prepared=self.base.prepared
+        self.rows={pid:row for batch in self.batches for pid,row in batch.rows.items()}
+        self.owners={action:batch for batch in self.batches for action in batch.extra}
+        self.metadata_hashes={name:value for batch in self.batches for name,value in batch.metadata_hashes.items()}
+        self.source='completed-multi-extension'
+
+    def inputs(self,prompt_id):return self.base.inputs(prompt_id)
+    def probe(self,prompt_id):return self.base.probe(prompt_id)
+    def features(self,prompt_id):return self.base.features(prompt_id)
+    def attention(self,prompt_id):return self.base.attention(prompt_id)
+
+    def outcome(self,prompt_id,action):
+        if action not in self.actions:raise ValueError('Unknown corpus action')
+        owner=self.owners.get(action,self.base)
+        if prompt_id not in owner.rows:return None
+        return owner.outcome(prompt_id,action)
+
+    def snapshot(self):
+        for batch in self.batches:
+            batch.extension.verify_sources()
+            batch.extension.validate_new(full=True)
+        result=Corpus.snapshot(self)
+        for name,expected in self.metadata_hashes.items():
+            if file_hash(relative(self.root,name))!=expected:raise ValueError('Extension metadata changed')
+        result.update(source=self.source,metadata_hashes=dict(self.metadata_hashes))
+        return result

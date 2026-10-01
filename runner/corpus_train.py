@@ -341,7 +341,7 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
             estimated_speedup=overall['estimated_speedup'],actions=overall['actions'],
             mean_selected_budget_percent=100*sum(budget_by_action[a]*c for a,c in overall['actions'].items())/sum(overall['actions'].values()))
     if unchecked:summary['dataset_validation']='skipped'
-    if snapshot.get('source') in ('completed-add5-10-extension','add5-10-saved-records'):
+    if snapshot.get('source') in ('completed-add5-10-extension','add5-10-saved-records','completed-multi-extension','multi-extension-saved-records'):
         summary['data_source']=snapshot['source']
         summary['timing']+='; original and added fixed actions were measured in different sessions'
     progress.detail('writing summary and completion receipt: '+str(output))
