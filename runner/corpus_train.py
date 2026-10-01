@@ -1,5 +1,6 @@
 """ruler13-v1: pooled five-fold positive-loss/cost trees, CPU only."""
 import itertools
+import math
 from collections import Counter
 from pathlib import Path
 import numpy as np
@@ -14,6 +15,20 @@ LOSS_GRID=[dict(family='loss',depth=d,min_leaf=l,shrinkage=s,threshold=t)
 COST_GRID=[dict(family='cost',depth=d,min_leaf=l,lam=w,penalty=p)
     for d,l,w,p in itertools.product((1,2,3),(10,20),(1,2,5,10,20,50,100),(0.,.005,.02))]
 GRID=LOSS_GRID+COST_GRID
+
+
+def search_grid(depths=None,accuracy_weight=None):
+    depths=(1,2,3) if depths is None else tuple(depths)
+    if not depths or any(type(d) is not int or not 1<=d<=32 for d in depths):
+        raise ValueError('depths must contain integers from 1 to 32')
+    depths=sorted(set(depths))
+    if accuracy_weight is not None:
+        if not number(accuracy_weight) or not math.isfinite(accuracy_weight) or accuracy_weight<0:
+            raise ValueError('accuracy-weight must be finite and nonnegative')
+        return [dict(family='cost',depth=d,min_leaf=l,lam=float(accuracy_weight),penalty=p)
+                for d,l,p in itertools.product(depths,(10,20),(0.,.005,.02))]
+    return [dict(h,depth=d) for family in (LOSS_GRID,COST_GRID) for d in depths
+            for h in family if h['depth']==1]
 
 
 def split(samples,n,seed):
@@ -106,21 +121,27 @@ def macro(values,samples):
     return float(np.mean([np.mean([v for v,r in zip(values,samples) if r['task']==t]) for t in sorted({r['task'] for r in samples})]))
 
 
-def rank(table,count=3):
+def rank(table,count=3,accuracy_weight=None):
     good=sorted((r for r in table if r['feasible']),key=lambda r:(r['mean_total_ttft'],-r['macro_score'],r['depth'],r['leaf_count'],r['index']))
     bad=sorted((r for r in table if not r['feasible']),key=lambda r:(-r['macro_score'],r['mean_total_ttft'],r['depth'],r['leaf_count'],r['index']))
+    ordered=good+bad
+    if accuracy_weight is not None:
+        ordered=sorted(table,key=lambda r:(r['weighted_objective'],r['mean_total_ttft'],
+            -r['macro_score'],r['depth'],r['leaf_count'],r['index']))
     chosen=[];vectors=set()
-    for r in good+bad:
+    for r in ordered:
         vector=tuple(r['oof_actions'])
         if vector not in vectors:chosen.append(r);vectors.add(vector)
         if len(chosen)==count:return chosen
-    for r in good+bad:
+    for r in ordered:
         if r['index'] not in {p['index'] for p in chosen}:chosen.append(r)
         if len(chosen)==count:return chosen
     raise ValueError('Requested more policies than settings')
 
 
-def search(samples,features,scores,times,overhead,inventory,seed=42,count=3):
+def search(samples,features,scores,times,overhead,inventory,seed=42,count=3,
+           depths=None,accuracy_weight=None):
+    grid=search_grid(depths,accuracy_weight)
     definitions=actions(inventory);names=list(definitions);dense=names.index('nocache');sparse=[i for i in range(len(names)) if i!=dense]
     scores=np.asarray(scores,float);times=np.asarray(times,float);overhead=np.asarray(overhead,float);n=len(samples)
     if (scores.shape!=times.shape or scores.shape!=(n,len(names)) or overhead.shape!=(n,) or len(features)!=n or
@@ -130,14 +151,14 @@ def search(samples,features,scores,times,overhead,inventory,seed=42,count=3):
     x=np.array([[row[f] if number(row.get(f)) else 0. for f in FEATURES] for row in features])
     y=np.maximum(0,scores[:,[dense]]-scores[:,sparse]);folds=fold_ids(samples,seed)
     baseline=macro(scores[:,dense],samples);table=[];cache={}
-    for index,h in progress.track(list(enumerate(GRID)), 'Searching trees', 'settings', lambda item: f'setting {item[0]+1}/{len(GRID)} ({item[1]["family"]})'):
-        decisions=np.empty(n,int);statistics=[];leaves=0
+    for index,h in progress.track(list(enumerate(grid)), 'Searching trees', 'settings', lambda item: f'setting {item[0]+1}/{len(grid)} ({item[1]["family"]})'):
+        decisions=np.empty(n,int);statistics=[];leaves=0;normalizers=np.empty(n,float)
         for fold in range(5):
-            progress.detail(f'setting {index+1}/{len(GRID)} ({h["family"]}); fold {fold+1}/5')
+            progress.detail(f'setting {index+1}/{len(grid)} ({h["family"]}); fold {fold+1}/5')
             tr=np.flatnonzero(folds!=fold);va=np.flatnonzero(folds==fold)
             key=(tuple((k,v) for k,v in h.items() if k!='threshold'),fold)
             if key not in cache:cache[key]=fit(x[tr],y[tr],times[tr],overhead[tr],h,dense,sparse)
-            tree,costs,norm=cache[key];leaves+=leaf_count(tree)
+            tree,costs,norm=cache[key];leaves+=leaf_count(tree);normalizers[va]=norm
             statistics.append(dict(fold=fold,train_ids=[samples[i]['id'] for i in tr],validation_ids=[samples[i]['id'] for i in va],
                                    costs=costs.tolist(),dense_median=norm,shrinkage_prior=y[tr].mean(0).tolist()))
             for i in va:decisions[i]=dense if missing[i] else choose(leaf(tree,x[i]),costs,h,dense,sparse)
@@ -147,9 +168,12 @@ def search(samples,features,scores,times,overhead,inventory,seed=42,count=3):
         table.append(dict(h,index=index,macro_score=score,macro_loss=baseline-score,mean_total_ttft=float(elapsed.mean()),
             speedup=speed,leaf_count=leaves,feasible=bool(baseline-score<=.02+1e-12 and speed>=4.-1e-12),
             oof_actions=decisions.tolist(),fold_statistics=statistics))
-    selected=rank(table,count);policies=[]
+        if accuracy_weight is not None:
+            positive_loss=np.maximum(0,scores[:,dense]-scores[np.arange(n),decisions])
+            table[-1]['weighted_objective']=macro(elapsed/normalizers+accuracy_weight*positive_loss,samples)
+    selected=rank(table,count,accuracy_weight);policies=[]
     for index,winner in progress.track(list(enumerate(selected)), 'Fitting selected trees', 'policies', lambda item: f'router{item[0]+1}'):
-        h=GRID[winner['index']];raw,costs,norm=fit(x,y,times,overhead,h,dense,sparse)
+        h=grid[winner['index']];raw,costs,norm=fit(x,y,times,overhead,h,dense,sparse)
         def compile_node(node):
             if 'feature' not in node:return dict(action=names[choose(node,costs,h,dense,sparse)],training_samples=node['n'])
             return dict(feature=FEATURES[node['feature']],threshold=node['threshold'],le=compile_node(node['left']),gt=compile_node(node['right']))
@@ -165,12 +189,13 @@ def _compiled_leaves(tree):
 
 
 def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
-          action_scope='all',evaluation='heldout'):
+          action_scope='all',evaluation='heldout',depths=None,accuracy_weight=None):
     from runner.corpus_training_data import training_view
     corpus=training_view(corpus,action_scope)
     if corpus.protocol.get('dataset')!='ruler' or corpus.protocol.get('kind')!='collection':raise ValueError('Only RULER corpus collections may train routers')
     if trainer!='ruler13-v1':raise ValueError('Unknown trainer version')
-    if type(policy_count) is not int or not 1<=policy_count<=len(GRID):raise ValueError('Invalid policy count')
+    grid=search_grid(depths,accuracy_weight)
+    if type(policy_count) is not int or not 1<=policy_count<=len(grid):raise ValueError('Invalid policy count')
     if evaluation not in ('heldout','training'):raise ValueError('Unknown evaluation mode')
     unchecked=getattr(corpus,'skip_validation',False)
     with progress.stage('Reading saved sample inventory' if unchecked else 'Creating validated snapshot'):
@@ -200,8 +225,12 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
         overhead.append(corpus.probe(pid)['timings']['routing_overhead_seconds'])
     progress.detail('writing feature/outcome matrices')
     atomic_json(output/'matrices.json',dict(ids=membership['train_ids'],features=features,scores=scores,answer_ttft=times,probe_overhead=overhead))
-    policies,table,folds=search(samples,features,scores,times,overhead,corpus.protocol['actions'],seed,policy_count)
-    settings=dict(trainer=trainer,seed=seed,policy_count=policy_count,primary='router1',grid=GRID,folds=folds,
+    policies,table,folds=search(samples,features,scores,times,overhead,corpus.protocol['actions'],seed,policy_count,depths,accuracy_weight)
+    objective=dict(mode='legacy' if accuracy_weight is None else 'weighted',accuracy_weight=accuracy_weight,
+        depths=sorted({h['depth'] for h in grid}),
+        formula='task-macro mean(total_ttft / fitting_fold_dense_median + accuracy_weight * max(0, dense_score - action_score))'
+            if accuracy_weight is not None else 'feasibility first; TTFT then accuracy if feasible, accuracy then TTFT otherwise')
+    settings=dict(trainer=trainer,seed=seed,policy_count=policy_count,primary='router1',grid=grid,folds=folds,objective=objective,
         action_scope=action_scope,evaluation=evaluation,evaluation_ids=membership['evaluation_ids'],
         train_ids=membership['train_ids'],targets=dict(macro_loss=.02,speedup=4),actions=corpus.protocol['actions'],
         training_hardware=corpus.protocol.get('hardware',{}),snapshot_sha256=file_hash(output/'snapshot.json'))
@@ -211,7 +240,7 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
     trees=[]
     for policy in progress.track(policies, 'Exporting trees', 'policies', lambda policy: policy['id']):
         raw=policy.pop('raw_tree');atomic_json(output/(policy['id']+'-fit.json'),raw)
-        tree=dict(policy,schema=SCHEMA,feature_names=list(FEATURES),feature_definitions=FEATURE_DEFINITIONS,
+        tree=dict(policy,schema=SCHEMA,max_depth=policy['setting']['depth'],objective=objective,feature_names=list(FEATURES),feature_definitions=FEATURE_DEFINITIONS,
             actions=corpus.protocol['actions'],training_ids=membership['train_ids'],heldout_ids=membership['heldout_ids'],
             heldout_hashes={k:v for k,v in snapshot['acceptance_hashes'].items() if k.split('/')[2] in membership['heldout_ids']},
             provenance=dict(snapshot_sha256=file_hash(output/'snapshot.json'),training_run_sha256=file_hash(output/'settings.json'),
@@ -243,7 +272,7 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
         action_scope=action_scope,evaluation=evaluation,evaluation_samples=len(membership['evaluation_ids']),
         training_overlap=evaluation=='training',
         interpretation='Training-set resubstitution; no held-out performance claim' if evaluation=='training' else 'Held-out evaluation',
-        trainer=trainer,actions=corpus.protocol['actions'],settings_searched=len(GRID),
+        trainer=trainer,actions=corpus.protocol['actions'],settings_searched=len(grid),objective=objective,
         timing='Estimated probe-inclusive OOF TTFT; not live router latency',
         policies=[dict(id=t['id'],feasible=t['oof']['feasible'],oof_macro_loss=t['oof']['macro_loss'],
             oof_speedup=t['oof']['speedup'],leaves=_compiled_leaves(t['tree']),duplicate_of=t['duplicate_of']) for t in trees])
@@ -266,7 +295,7 @@ def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
     (output/'summary.txt').write_text(json.dumps(summary,indent=2)+'\n')
     atomic_json(output/'complete.json',dict(complete=True,primary='router1',training=n,heldout=len(membership['heldout_ids']),
         evaluation=evaluation,evaluated=len(membership['evaluation_ids']),training_overlap=evaluation=='training',
-        settings_searched=len(GRID),policies=policy_count,estimated_timing=True,
+        settings_searched=len(grid),objective=objective,policies=policy_count,estimated_timing=True,
         **({'dataset_validation':'skipped'} if unchecked else {}),
         files={str(p.relative_to(output)):file_hash(p) for p in output.rglob('*') if p.is_file()}))
     return summary

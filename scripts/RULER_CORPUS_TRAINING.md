@@ -132,6 +132,62 @@ bash scripts/ruler_corpus.sh test --skip-validation --evaluation training \
 No GPU process is launched by these commands. Use a new training output directory;
 this command does not resume a partially completed CPU training run.
 
+## Tree depths and accuracy versus TTFT
+
+`--depths 1 2 3 4 5` searches those maximum tree depths. Use `--depths 5`
+for just depth 5; trees may stop earlier when splits do not help or minimum leaf
+sizes prevent them. Accepted depths are 1–32, default 1/2/3. Exported trees retain
+their depth bound for offline testing and shared-tree inference. Existing frozen
+router policies are unchanged. Deeper trees can overfit and take longer to fit.
+
+`--accuracy-weight W` switches fitting and OOF ranking to a weighted cost:
+
+```text
+estimated router TTFT / fitting-fold median dense answer TTFT
+  + W * max(0, dense score - selected action score)
+```
+
+Scores use the 0–1 scale. `0` optimizes time, `10` assigns a cost of 0.1 to a
+one-percentage-point loss, and `100` assigns a cost of 1.0 to that same loss.
+Larger weights favor preserving accuracy; they do not guarantee an accuracy
+floor. Improvements over dense do not offset losses on other samples. TTFT here
+includes saved probe overhead and remains an offline estimate.
+
+With a supplied weight, the search uses cost trees only: two minimum leaf sizes
+(10/20) × three leaf penalties (0/.005/.02), or six settings per requested depth.
+Each setting is fitted in five folds, then selected policies are refitted on the
+whole training set. Ranking minimizes the task-macro mean of the weighted OOF
+cost, using each held-out row's fitting-fold timing normalizer. The old <=2pp/4×
+feasibility indicator is still reported but does not override weighted ranking.
+Distinct OOF decision vectors are preferred for additional policies.
+`--policy-count 3` means three exported policies, not three available actions.
+
+Omit `--accuracy-weight` to retain the legacy mixed loss/cost search and ranking,
+with 72 settings per depth. Omit both options for the original 216 settings.
+Depths, objective and weight are saved in `settings.json`, each tree, and the
+summary. Changing these flags requires a new output directory and invocation;
+it does not modify an already-running trainer.
+
+For all 120 samples/task, with depths 1–5 and weight 10, run from your clean
+branch checkout (or use the absolute `$CODE/scripts/ruler_corpus.sh` path):
+
+```bash
+export PYTHON_BIN=/data/jh/envs/ucm/bin/python
+export EXPERIMENT_DIR=/data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20
+export PREPARED_DIR="$("$PYTHON_BIN" -c 'import json,sys; print(json.load(open(sys.argv[1]))["prepared"])' "$EXPERIMENT_DIR/protocol.json")"
+export OUT="/data/jh/unified-cache-management/router-depth5-weight10-$(date +%Y%m%d-%H%M%S)"
+bash scripts/ruler_corpus.sh train --skip-validation \
+  --action-scope all --evaluation training --train-samples 1560 \
+  --trainer ruler13-v1 --seed 42 --policy-count 3 \
+  --depths 1 2 3 4 5 --accuracy-weight 10 --output "$OUT"
+cat "$OUT/summary.txt"
+```
+
+This loads `.env` with exported-variable precedence, prints foreground progress,
+uses all available actions (including 5% and 10%), and reports offline results.
+All 13 tasks train one shared router per selected policy. Evaluation reuses the
+same 1560 training samples; it is not an independent held-out test.
+
 ## Optional held-out split
 
 The default `--evaluation heldout` preserves the original split behavior. For
@@ -161,7 +217,7 @@ Jaccard between layer groups 0–31 and 32–63. Questions, references, task IDs
 evidence and output predictions never enter policy features. Missing features
 select `nocache`; corrupt data raises an error.
 
-`ruler13-v1` searches all 216 settings:
+`ruler13-v1` defaults to these 216 settings:
 
 - 90 positive-loss trees: depth 1/2/3, minimum leaf 10/20, shrinkage 0/5/20,
   decision threshold 0/.02/.05/.10/.20.
@@ -175,7 +231,7 @@ prior, mean action costs and normalizer. Small task groups spread across five
 folds; a fold need not contain every task when a task has fewer than five training
 samples. No validation/held-out statistics enter a fold's fitting constants.
 
-Feasibility requires OOF macro accuracy loss <=2 percentage points and estimated
+Under the default selection rules, feasibility requires OOF macro accuracy loss <=2 percentage points and estimated
 TTFT speedup >=4×. Feasible settings rank by time, accuracy, depth, leaf count and
 grid order; remaining ranks prioritize accuracy then time. Distinct OOF decisions
 are preferred. Three policies are refitted by default; `--policy-count` changes

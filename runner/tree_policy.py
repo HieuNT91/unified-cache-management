@@ -40,8 +40,10 @@ def validate(data):
     train=data.get('training_ids',[]);test=data.get('heldout_ids',[])
     if not train or len(set(train))!=len(train) or len(set(test))!=len(test) or set(train)&set(test):
         raise ValueError('Invalid frozen train/test membership')
+    max_depth=data.get('max_depth',3)
+    if type(max_depth) is not int or not 1<=max_depth<=32:raise ValueError('Invalid maximum tree depth')
     def visit(node,depth=0):
-        if not isinstance(node,dict) or depth>3:raise ValueError('Invalid tree depth')
+        if not isinstance(node,dict) or depth>max_depth:raise ValueError('Invalid tree depth')
         if 'action' in node:
             if (set(node)!={'action','training_samples'} or node['action'] not in inventory or
                     type(node['training_samples']) is not int or node['training_samples']<1):raise ValueError('Invalid tree leaf')
