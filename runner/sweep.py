@@ -38,12 +38,22 @@ def sentence_units(tokenizer, ids, bounds):
     return units
 
 
+def split_short_units(units, end, min_len):
+    """Units shorter than min_len tokens (list items) are selected token by token; longer statements stay whole."""
+    out = []
+    for a, z in zip(units, units[1:] + [end]):
+        out.extend([a] if z - a >= min_len else range(a, z))
+    return out
+
+
 def selection_inputs(args, tokenizer, sample):
     """Probe readers and selection units of one prompt: the question tokens (default) or the last prompt token
     (the reader of the first answer token), and token-level (default) or sentence-unit selection."""
     bounds = sample['boundaries']
     probe = [bounds[-1] - 1] if getattr(args, 'probe_query', 'question') == 'last' else list(sample['question_positions'])
     units = sentence_units(tokenizer, sample['token_ids'], bounds) if getattr(args, 'units', 'none') == 'sent' else []
+    if units and getattr(args, 'unit_min_len', 0) > 0:
+        units = split_short_units(units, bounds[-2], args.unit_min_len)
     return probe, units
 
 
@@ -51,7 +61,8 @@ def sweep_configs(args):
     configs = configurations(getattr(args, 'percentages', (1,5,10,15,20,30)), getattr(args, 'layers', (11,12,13,14,15)),
                              getattr(args, 'no_selective', False), getattr(args, 'num_layers', 64))
     variant = '_'.join(x for x in ('last' if getattr(args, 'probe_query', 'question') == 'last' else '',
-                                   'sent' if getattr(args, 'units', 'none') == 'sent' else '') if x)
+                                   'sent' if getattr(args, 'units', 'none') == 'sent' else '',
+                                   f"ml{args.unit_min_len}" if getattr(args, 'unit_min_len', 0) else '') if x)
     if variant:
         for c in configs:
             c['name'] = c['name'].replace('prophetkv-', f'prophetkv_{variant}-').replace('selective-', f'selective_{variant}-')
@@ -419,6 +430,8 @@ def main():
                         help='probe readers: the question tokens (ProphetKV) or the last prompt token')
     parser.add_argument('--units',choices=['none','sent'],default='none',
                         help='select tokens one by one (ProphetKV) or whole sentence units')
+    parser.add_argument('--unit-min-len',type=int,default=0,
+                        help='with --units sent: units shorter than this many tokens are selected token by token')
     parser.add_argument('--no-selective',action='store_true',
                         help='Run baseline and all-layer ProphetKV only (no resume semantics)')
     run_sweep(parser.parse_args())
