@@ -114,12 +114,32 @@ primary settings, plan, protocols, prepared inputs and committed answers intact.
 Primary and extra must use disjoint UUIDs and the same model/data/path settings.
 
 At engine launch, device names, free memory and existing compute processes are
-checked. A800 uses utilization0.90 and an8GiB/rank workspace estimate. The explicit
-L20 TP2 RULER profile uses utilization0.95 and3GiB/rank workspace. Admission
+checked. Both TP2 server profiles use utilization0.95 and automatic KV sizing:
+vLLM profiles model/runtime memory and allocates the remaining budget to KV,
+without `num_gpu_blocks_override`. This is the default; no additional `.env`
+variable is needed. The workspace estimates are8GiB/rank on A800 and3GiB/rank
+on L20. These are admission estimates, not explicit runtime reservations. Admission
 counts model BF16 bytes/TP plus full original-position KV/TP plus workspace,
-divided by utilization. It records the breakdown and refuses insufficient/busy
-devices. This estimate is not remote GPU validation; initialization and runtime
-checks must also pass. No automatic reduction of precision, prompt or cap occurs.
+divided by utilization, and also requires at least95% of each GPU's total memory
+to be free. It records the minimum-capacity breakdown and refuses insufficient/busy
+devices. Initialization records the actual block count and requires equal capacity
+on both ranks, at least2048 blocks on A800 LongBench and1031 on L20 RULER.
+Block size64, full per-layer YaRN checks, context/output limits, BF16 and one
+request per engine remain unchanged. Legacy TP4/local profiles retain fixed KV.
+The95% budget does not guarantee a particular `nvidia-smi` reading or faster
+single-request inference. This estimate is not remote GPU validation;
+initialization and runtime checks must also pass.
+
+### Updating from the fixed-cache TP2 version
+
+The automatic-memory change applies to new runs. Do not pull into a checkout
+used by an active or configured collection: its source hashes are frozen, and
+old settings/records cannot be resumed with changed code. Keep that checkout for
+the original run and update a separate checkout. In its `.env.a800` or `.env.l20`,
+use new `EXPERIMENT_DIR`, `PREPARED_DIR` and `CACHE_ROOT` paths (for example with
+an `-auto95` suffix), then run `configure`, `prepare`, `detach` as below.
+Do not launch on occupied GPUs. A800 primary and later extra must use the same
+updated version and shared paths; do not mix a fixed-cache primary with a new extra.
 
 ## Collection commands
 

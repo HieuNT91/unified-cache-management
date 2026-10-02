@@ -102,6 +102,52 @@ class TP2Tests(unittest.TestCase):
             with self.assertRaises(ValueError):validate_initialization(receipts[:1],dataset,tp=2)
             with self.assertRaises(ValueError):validate_initialization([receipts[0]]*2,dataset,tp=2)
 
+    def test_server_tp2_auto_cache_preserves_execution_limits(self):
+        from runner.tree_profiles import config,allocation
+        for dataset,hardware in [('longbench-v2','server'),('ruler','l20-tp2')]:
+            for cached in (False,True):
+                with self.subTest(dataset=dataset,cached=cached):
+                    cfg=config('/m',dataset,cached,'/c',hardware=hardware,tp=2)
+                    self.assertNotIn('num_gpu_blocks_override',cfg)
+                    self.assertEqual(cfg['gpu_memory_utilization'],.95)
+                    self.assertEqual(cfg['max_model_len'],allocation(dataset)['kv_tokens'])
+                    self.assertEqual(cfg['dtype'],'bfloat16')
+                    self.assertEqual(cfg['max_num_seqs'],1)
+                    self.assertEqual(cfg['block_size'],64)
+                    self.assertEqual(cfg['hf_overrides']['ucm_activation_tile'],4096)
+                    self.assertEqual('kv_transfer_config' in cfg,cached)
+
+    def test_auto_cache_capacity_and_rope_checks_on_every_rank(self):
+        from runner.tree_profiles import validate_initialization,allocation
+        for dataset,hardware in [('longbench-v2','server'),('ruler','l20-tp2')]:
+            p=allocation(dataset)
+            receipts=[dict(rank=r,kv_tokens=p['kv_tokens'],kv_blocks=p['kv_blocks']+500,block_size=64,
+                           rope=[dict(formula_bitwise_equal=True,table_positions=131072) for _ in range(64)]) for r in range(2)]
+            validate_initialization(receipts,dataset,hardware,tp=2)
+            for rank in range(2):
+                for value in (p['kv_blocks']-1,p['kv_blocks']+499,None,True,1.5):
+                    bad=copy.deepcopy(receipts);bad[rank]['kv_blocks']=value
+                    with self.subTest(dataset=dataset,rank=rank,blocks=value):
+                        with self.assertRaisesRegex(ValueError,'capacity'):validate_initialization(bad,dataset,hardware,tp=2)
+                for key,value in [('kv_tokens',p['kv_tokens']+64),('block_size',128)]:
+                    bad=copy.deepcopy(receipts);bad[rank][key]=value
+                    with self.assertRaises(ValueError):validate_initialization(bad,dataset,hardware,tp=2)
+                bad=copy.deepcopy(receipts);bad[rank]['rope'][63]['formula_bitwise_equal']=False
+                with self.assertRaises(ValueError):validate_initialization(bad,dataset,hardware,tp=2)
+
+    def test_tp4_and_local_cache_allocations_remain_fixed(self):
+        from runner.tree_profiles import config,allocation,validate_initialization
+        for dataset,hardware in [('longbench-v2','server'),('ruler','server'),('ruler','rtx4500ada')]:
+            p=allocation(dataset,hardware)
+            cfg=config('/m',dataset,True,'/c',hardware=hardware)
+            self.assertEqual(cfg['num_gpu_blocks_override'],p['kv_blocks'])
+            self.assertEqual(cfg['gpu_memory_utilization'],.9 if hardware=='server' else .95)
+            receipts=[dict(rank=r,kv_tokens=p['kv_tokens'],kv_blocks=p['kv_blocks'],block_size=64,
+                           rope=[dict(formula_bitwise_equal=True,table_positions=131072)]*64) for r in range(4)]
+            validate_initialization(receipts,dataset,hardware)
+            for receipt in receipts:receipt['kv_blocks']+=1
+            with self.assertRaisesRegex(ValueError,'capacity'):validate_initialization(receipts,dataset,hardware)
+
     def test_tp2_memory_gate_counts_half_weights_and_kv_per_rank(self):
         from scripts.corpus_control import check_hardware
         with tempfile.TemporaryDirectory() as tmp:
@@ -110,10 +156,29 @@ class TP2Tests(unittest.TestCase):
             inventory='a,NVIDIA L20,100000,100000\nb,NVIDIA L20,100000,100000'
             with patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,'']):
                 receipt=check_hardware(settings)
-            expected=(32*2**30+65920*262144/2+8*2**30)/.9/2**20
+            expected=(32*2**30+65920*262144/2+8*2**30)/.95/2**20
             self.assertAlmostEqual(receipt['required_mib_per_rank'],expected)
+            self.assertEqual(receipt['kv_cache_mode'],'auto')
+            self.assertTrue(receipt['kv_bytes_are_minimum'])
             with patch('scripts.corpus_control.subprocess.check_output',return_value=inventory.replace('100000','40000')):
                 with self.assertRaisesRegex(ValueError,'cannot fit'):check_hardware(settings)
+
+    def test_auto_cache_requires_budget_free_on_both_servers(self):
+        from scripts.corpus_control import check_hardware
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);atomic_json(root/'model.safetensors.index.json',dict(metadata=dict(total_size=61.2*2**30)))
+            for dataset,hardware,name,total in [('longbench-v2','server','A800',81920),('ruler','l20-tp2','L20',49152)]:
+                settings=dict(dataset=dataset,hardware_profile=hardware,model=str(root),tp=2,groups=[['a','b']])
+                inventory=f'a,NVIDIA {name},{total},{total*.95}\nb,NVIDIA {name},{total},{total*.95}'
+                with patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,'']):
+                    self.assertEqual(check_hardware(settings)['gpu_memory_utilization'],.95)
+                # Both devices can fit the minimum, but rank1 cannot provide the
+                # requested automatic budget. Refuse without launching an engine.
+                low=f'a,NVIDIA {name},{total},{total}\nb,NVIDIA {name},{total},{total*.94}'
+                with patch('scripts.corpus_control.subprocess.check_output',return_value=low):
+                    with self.assertRaisesRegex(ValueError,'automatic KV budget'):check_hardware(settings)
+                with patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,'b']):
+                    with self.assertRaisesRegex(ValueError,'occupied'):check_hardware(settings)
 
     def test_ruler_prepares_100_seed42_and_schedules_five_complete_shards(self):
         self.check_ruler_preparation(100)

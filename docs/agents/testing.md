@@ -100,3 +100,9 @@ checks the2600-row preparation,520 prompts per TP2 pair, immutable configured
 sample count, declared-count export/import rejection and synthetic3103-row
 combined fitting/evaluation. The original100-row and LongBench paths remain
 covered. No source dataset generation, real-data fitting or GPU launch ran.
+
+The TP2 automatic KV allocation update passed all266 CPU tests. Coverage accepts
+larger caches with matching per-rank capacity, rejects insufficient/mismatched
+caches and invalid YaRN/context receipts, checks the95% free-memory budget on
+A800/L20, and preserves fixed TP4/local allocations. No GPU inference or
+remote experiment ran; actual memory occupancy and performance remain unverified.

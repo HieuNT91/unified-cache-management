@@ -15,6 +15,10 @@ These rules govern the current worktree. Historical notes under
   importer retains100-row support and reads the declared sample count.
 - New collection uses twelve actions; A800 primary and extra have separate
   immutable GPU assignments. Extra may be configured after primary starts.
+  TP2 server engines use automatic KV sizing with a95% memory budget; full
+  context minimum capacity and equal block counts on both ranks are audited.
+  TP4/local profiles retain fixed allocations. Memory-mode updates require a
+  new checkout/run and must not rewrite old settings, results or source pins.
   RULER now supports13x200 (current preference) or the original13x100, seed42, five TP2 pairs, original per-task caps/non-thinking.
   LongBench is503, thinking/cap16384, two TP2 pairs per launcher. Features follow
   all controls and engine exit; no automatic fitting. Portable training uses

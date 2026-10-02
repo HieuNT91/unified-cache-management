@@ -67,14 +67,14 @@ def model_artifact(root,name):
 
 
 def check_hardware(settings):
-    from runner.tree_profiles import PROFILES,hardware_profile,allocation
-    profile=hardware_profile(settings.get('hardware_profile','server'),settings['dataset'])
+    from runner.tree_profiles import hardware_profile,allocation
+    from runner.tensor_parallel import protocol_tp
+    tp=protocol_tp(settings)
+    profile=hardware_profile(settings.get('hardware_profile','server'),settings['dataset'],tp)
     raw=subprocess.check_output(['nvidia-smi','--query-gpu=uuid,name,memory.total,memory.free','--format=csv,noheader,nounits'],text=True)
     inventory={r[0].strip():dict(name=r[1].strip(),total_mib=float(r[2]),free_mib=float(r[3])) for r in csv.reader(raw.splitlines())}
     requested=sum(settings['groups'],[])
     index=json.loads((Path(settings['model'])/'model.safetensors.index.json').read_text())
-    from runner.tensor_parallel import protocol_tp
-    tp=protocol_tp(settings)
     if settings.get('hardware_profile')=='l20-tp2' and tp!=2:
         raise ValueError('L20 TP2 allocation requires exactly two ranks')
     weights=index['metadata']['total_size']/tp
@@ -86,11 +86,15 @@ def check_hardware(settings):
         if not any(model in inventory[gpu]['name'] for model in profile['names']):raise ValueError('GPU does not match the explicit hardware profile')
         if inventory[gpu]['total_mib']<required or inventory[gpu]['free_mib']<required:
             raise ValueError(f'Profile cannot fit GPU {gpu}: requires at least {required:.0f} MiB; no precision/input shortening is applied')
+        if (profile['kv_cache_mode']=='auto' and
+                inventory[gpu]['free_mib']<inventory[gpu]['total_mib']*profile['memory']):
+            raise ValueError(f'GPU {gpu} has insufficient free memory for the {profile["memory"]:.0%} automatic KV budget')
     busy=subprocess.check_output(['nvidia-smi','--query-compute-apps=gpu_uuid','--format=csv,noheader'],text=True).splitlines()
     if set(requested)&{r.strip() for r in busy}:raise ValueError('Configured GPUs are occupied; existing processes left untouched')
     return dict(groups=[[dict(uuid=g,name=inventory[g]['name'],total_mib=inventory[g]['total_mib']) for g in group] for group in settings['groups']],
                 required_mib_per_rank=required, tp=tp, weights_bytes_per_rank=weights, kv_bytes_per_rank=kv,
-                workspace_bytes_per_rank=profile['workspace_gib']*2**30, gpu_memory_utilization=profile['memory'])
+                workspace_bytes_per_rank=profile['workspace_gib']*2**30, gpu_memory_utilization=profile['memory'],
+                kv_cache_mode=profile['kv_cache_mode'], kv_bytes_are_minimum=profile['kv_cache_mode']=='auto')
 
 
 def configure(a):

@@ -6,16 +6,17 @@ PROFILES={
 }
 
 
-def hardware_profile(name='server',dataset='ruler'):
+def hardware_profile(name='server',dataset='ruler',tp=4):
     if name=='server':
-        return dict(names=('A800','L20'),memory=.9,workspace_gib=8.)
+        return dict(names=('A800','L20'),memory=.95 if tp==2 else .9,workspace_gib=8.,
+                    kv_cache_mode='auto' if tp==2 else 'fixed')
     if name=='l20-tp2' and dataset=='ruler':
-        # Explicit deployment allocation; startup still enforces free capacity.
-        return dict(names=('L20',),memory=.95,workspace_gib=3.)
+        return dict(names=('L20',),memory=.95,workspace_gib=3.,
+                    kv_cache_mode='auto' if tp==2 else 'fixed')
     if name=='rtx4500ada' and dataset in PROFILES:
         # Local 24 GiB TP4 profile: validated clean YaRN4/16K-prefill runs,
         # with 4096-token activation tiles and full original-position KV.
-        return dict(names=('RTX 4500 Ada Generation',),memory=.95,workspace_gib=2.5)
+        return dict(names=('RTX 4500 Ada Generation',),memory=.95,workspace_gib=2.5,kv_cache_mode='fixed')
     raise ValueError('Unsupported hardware/dataset profile')
 
 
@@ -42,10 +43,14 @@ def config(model,dataset,cached,cache,delimiter=None,hardware='server',tp=4):
     from runner.tensor_parallel import validate_tp
     validate_tp(tp)
     p=allocation(dataset,hardware)
+    profile=hardware_profile(hardware,dataset,tp)
     result=engine_config(model,'prophetkv' if cached else 'baseline',ratio=.01,tp=tp,cache_dir=cache,
-                        memory=hardware_profile(hardware,dataset)['memory'])
-    result.update(max_model_len=p['kv_tokens'],num_gpu_blocks_override=p['kv_blocks'],
+                        memory=profile['memory'])
+    # In TP2 server runs vLLM profiles runtime memory and spends the remaining
+    # budget on KV. Context/output limits remain independent of cache capacity.
+    result.update(max_model_len=p['kv_tokens'],
                   hf_overrides=dict(max_position_embeddings=32768,ucm_activation_tile=4096))
+    if profile['kv_cache_mode']=='fixed':result['num_gpu_blocks_override']=p['kv_blocks']
     return result
 
 
@@ -53,12 +58,17 @@ def validate_initialization(receipts,dataset,hardware='server',tp=4):
     from runner.tensor_parallel import validate_tp
     validate_tp(tp)
     p=allocation(dataset,hardware)
+    automatic=hardware_profile(hardware,dataset,tp)['kv_cache_mode']=='auto'
     ranks = [r.get('rank') for r in receipts]
     # Legacy TP4 initialization receipts did not include rank IDs.
     if len(receipts)!=tp or ((tp==2 or any(r is not None for r in ranks)) and
                             sorted(-1 if r is None else r for r in ranks)!=list(range(tp))):
         raise ValueError('Missing initialization rank')
+    blocks=[r.get('kv_blocks') for r in receipts]
+    if (any(type(n) is not int or n<p['kv_blocks'] for n in blocks) or
+            len(set(blocks))!=1 or (not automatic and blocks[0]!=p['kv_blocks'])):
+        raise ValueError('KV cache capacity audit failed: insufficient, inconsistent or unexpected blocks')
     for r in receipts:
-        if (r['kv_tokens']!=p['kv_tokens'] or r['kv_blocks']!=p['kv_blocks'] or r['block_size']!=64 or
+        if (r['kv_tokens']!=p['kv_tokens'] or r['block_size']!=64 or
                 len(r['rope'])!=64 or any(not a['formula_bitwise_equal'] or a['table_positions']!=131072 for a in r['rope'])):
             raise ValueError('KV or native YaRN4 initialization audit failed')
