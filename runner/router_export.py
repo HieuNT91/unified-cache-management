@@ -125,5 +125,6 @@ if __name__ == '__main__':
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--training-root',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
-    p.add_argument('--cohort',type=Path,default=Path(__file__).resolve().parents[1]/'scripts/router_cohort.json')
+    p.add_argument('--cohort',type=Path,required=True,
+                   help='Original frozen cohort descriptor belonging to the finalized training run')
     a=p.parse_args();export(a.training_root,a.output,a.cohort)

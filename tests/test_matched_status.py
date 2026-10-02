@@ -124,7 +124,7 @@ class MatchedStatusTests(unittest.TestCase):
                 commit(root,'nocache',record('p',score=0.,ttft=100.),protocol_identity(protocol))
                 atomic_json(root/'records'/'probe'/'q'/'validated.json',dict(complete=True))
                 atomic_json(root/'report.json',dict(original=True));before=file_hash(root/'report.json')
-                with patch('scripts.corpus_control.verify',side_effect=AssertionError('No model verification in status')),patch('scripts.corpus_control.load',return_value={'provenance':{'hardware':{}}}):
+                with patch('scripts.corpus_control.load_run',side_effect=AssertionError('No model verification in status')),patch('scripts.corpus_control.load',return_value={'provenance':{'hardware':{}}}):
                     report=snapshot_report(root,same_count=True)
                 self.assertEqual(report['matching']['prompt_ids'],['q'])
                 self.assertEqual(set(report['accepted_answers'].values()),{1})
@@ -140,7 +140,7 @@ class MatchedStatusTests(unittest.TestCase):
             (root/'server.env').write_text('')
             env=dict(os.environ,PYTHON_BIN=str(fake),UCM_ENV_FILE=str(root/'server.env'))
             for name in ('a800_longbench','l20_ruler','a800_router','ruler_corpus','router_infer'):
-                result=subprocess.run(['bash',str(ROOT/'scripts'/f'{name}.sh'),'status_same_count'],env=env,capture_output=True,text=True)
+                result=subprocess.run(['bash',str(ROOT/'scripts'/'launcher'/f'{name}.sh'),'status_same_count'],env=env,capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stderr)
                 visible,args=json.loads(result.stdout)
                 self.assertEqual(visible,'')

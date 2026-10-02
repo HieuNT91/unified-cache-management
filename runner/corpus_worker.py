@@ -22,7 +22,8 @@ def capture_state(worker):
     from vllm.distributed import get_tensor_model_parallel_rank
     sparse=get_ucm_sparse()
     return dict(rank=get_tensor_model_parallel_rank(),capture=bool(sparse.router_capture),
-                arrays=sparse.router_arrays is not None)
+                arrays=sparse.router_arrays is not None or getattr(sparse,'router_head_arrays',None) is not None
+                or bool(getattr(sparse,'router_head_layers',())))
 
 
 def alignment_state(worker):
@@ -60,6 +61,10 @@ def export(worker,output,sample,inventory=None):
             boundaries=np.asarray(sample['boundaries'],dtype=np.int64),
             question_positions=np.asarray(sample['question_positions'],dtype=np.int64),
             original_to_formatted=np.asarray(sample.get('original_to_formatted',list(range(len(sample['token_ids'])))),dtype=np.int64))
+        head_layers=getattr(sparse,'router_head_layers',())
+        if head_layers:
+            if getattr(sparse,'router_head_arrays',None) is None:raise RuntimeError('Missing per-head capture')
+            arrays.update(head_layers=np.asarray(head_layers,dtype=np.int64),heads=sparse.router_head_arrays.cpu().numpy())
         arrays.update({a:selection(scores,sample['boundaries'][1],d['ratio']) for a,d in inventory.items() if a!='nocache'})
         start=time.perf_counter()
         with temporary.open('wb') as handle:
@@ -70,10 +75,11 @@ def export(worker,output,sample,inventory=None):
                     serialization_seconds=serialization_seconds)
     finally:
         sparse.router_arrays=None;sparse.router_capture=False
+        sparse.router_head_arrays=None;sparse.router_head_layers=()
         temporary.unlink(missing_ok=True)
 
 
-def tree_mode(worker,request_id,definition,capture=False):
+def tree_mode(worker,request_id,definition,capture=False,head_layers=()):
     """Generic actions using the same request-scoped dense guard as frozen routers."""
     from runner.worker import configure
     from runner.router_guard import is_dense_request
@@ -84,6 +90,11 @@ def tree_mode(worker,request_id,definition,capture=False):
     configure(worker,'prophetkv',definition['ratio'] or .01)
     sparse=get_ucm_sparse()
     if sparse.router_arrays is not None or sparse.router_capture:raise RuntimeError('Capture leaked')
+    if head_layers:
+        from runner.longbench_features import HEAD_LAYERS
+        if not capture or tuple(head_layers)!=HEAD_LAYERS:raise ValueError('Unexpected feature head layers')
+    if getattr(sparse,'router_head_arrays',None) is not None:raise RuntimeError('Head capture leaked')
+    sparse.router_head_layers=tuple(head_layers);sparse.router_head_arrays=None
     sparse.router_capture=capture;sparse.router_native_layers=set()
     sparse.connector.router_dense_id=request_id if dense else None
     sparse.connector.store.router_dense=dense
@@ -91,4 +102,6 @@ def tree_mode(worker,request_id,definition,capture=False):
     from ucm.sparse.prophetkv.attention import install
     for layer in sparse.model.layers:install(layer.self_attn.attn,sparse)
     get_tp_group().barrier()
-    return dict(rank=get_tensor_model_parallel_rank(),request_id=request_id,definition=definition,capture=capture)
+    result=dict(rank=get_tensor_model_parallel_rank(),request_id=request_id,definition=definition,capture=capture)
+    if head_layers:result['head_layers']=list(head_layers)
+    return result

@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,7 +20,7 @@ class ServerEnvTests(unittest.TestCase):
     def load(self, body, **overrides):
         return subprocess.run(['bash','-c',
             'set -euo pipefail; source "$1"; ucm_load_server_env "$2"; '+body,
-            'loader',str(ROOT/'scripts/server_env.sh'),str(self.root)],
+            'loader',str(ROOT/'scripts/launcher/server_env.sh'),str(self.root)],
             env=dict(self.env,**overrides),capture_output=True,text=True)
 
     def test_default_file_quotes_expansion_and_exported_overrides(self):
@@ -62,7 +63,7 @@ class ServerEnvTests(unittest.TestCase):
         for launcher in ('l20_ruler.sh','a800_longbench.sh'):
             for command in ('status','stop','counts'):
                 with self.subTest(launcher=launcher,command=command):
-                    result=subprocess.run(['bash',str(ROOT/'scripts'/launcher),command],cwd='/tmp',
+                    result=subprocess.run(['bash',str(ROOT/'scripts'/'launcher'/launcher),command],cwd='/tmp',
                         env=dict(self.env,UCM_ENV_FILE=str(config)),capture_output=True,text=True)
                     self.assertEqual(result.returncode,0,result.stderr)
                     data=json.loads(result.stdout)
@@ -72,6 +73,72 @@ class ServerEnvTests(unittest.TestCase):
                     self.assertTrue(data['argv'][0].endswith(expected))
                     if command!='stop':
                         self.assertEqual(data['argv'][data['argv'].index('--manifest')+1],'/prepared inputs/manifest.jsonl')
+
+    def test_all_launchers_resolve_checkout_and_default_env_after_relocation(self):
+        checkout = self.root/'relocated checkout'
+        launchers = checkout/'scripts/launcher'
+        shutil.copytree(ROOT/'scripts/launcher', launchers)
+        executable = self.root/'fake python'
+        executable.write_text(f'#!{sys.executable}\nimport json,os,sys\n'
+            'print(json.dumps(dict(argv=sys.argv[1:],gpu_a=os.environ.get("GPU_A"))))\n')
+        executable.chmod(0o755)
+        (checkout/'.env').write_text(f'PYTHON_BIN="{executable}"\nGPU_A="from-checkout-env"\n')
+        targets = {
+            'a800_longbench.sh': ('sweep_report.py', '--output'),
+            'l20_ruler.sh': ('sweep_report.py', '--output'),
+            'a800_router.sh': ('router_control.py', '--root'),
+            'router_infer.sh': ('corpus_control.py', '--root'),
+            'ruler_corpus.sh': ('corpus_control.py', '--root'),
+            'ruler_corpus_add_ratios.sh': ('corpus_add_ratios.py', '--root'),
+        }
+        for launcher, (controller, result_arg) in targets.items():
+            with self.subTest(launcher=launcher):
+                result = subprocess.run(['bash', str(launchers/launcher), 'status'],
+                    cwd='/tmp', env=self.env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                data = json.loads(result.stdout)
+                self.assertEqual(data['gpu_a'], 'from-checkout-env')
+                self.assertEqual(data['argv'][0], str(checkout/'scripts'/controller))
+                output = Path(data['argv'][data['argv'].index(result_arg)+1])
+                self.assertEqual(output.parent, checkout/'outputs')
+
+    def test_router_and_corpus_launchers_stop_the_configured_root(self):
+        executable = self.root/'fake python'
+        executable.write_text(f'#!{sys.executable}\nimport json,os,sys\n'
+            'print(json.dumps(dict(argv=sys.argv[1:],cuda=os.environ.get("CUDA_VISIBLE_DEVICES"))))\n')
+        executable.chmod(0o755)
+        config = self.root/'server.env'
+        config.write_text(f'PYTHON_BIN="{executable}"\nEXPERIMENT_DIR="/existing run"\n')
+        for launcher, controller in {
+            'a800_router.sh': 'router_control.py',
+            'router_infer.sh': 'corpus_control.py',
+            'ruler_corpus.sh': 'corpus_control.py',
+            'ruler_corpus_add_ratios.sh': 'corpus_add_ratios.py',
+        }.items():
+            with self.subTest(launcher=launcher):
+                result = subprocess.run(['bash', str(ROOT/'scripts/launcher'/launcher), 'stop'],
+                    cwd='/tmp', env=dict(self.env, UCM_ENV_FILE=str(config)), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                data = json.loads(result.stdout)
+                self.assertEqual(data['argv'][:2], [str(ROOT/'scripts'/controller), 'stop'])
+                self.assertEqual(data['argv'][data['argv'].index('--root')+1], '/existing run')
+                self.assertEqual(data['cuda'], '')
+
+    def test_stop_cli_needs_no_model_prepared_inputs_or_policy(self):
+        for launcher in ('a800_router.sh', 'router_infer.sh', 'ruler_corpus.sh', 'ruler_corpus_add_ratios.sh'):
+            with self.subTest(launcher=launcher):
+                root = self.root/launcher
+                root.mkdir()
+                (root/'settings.json').write_text('{}')
+                (root/'protocol.json').write_text('{}')
+                state = root/'extensions/add5-10' if launcher == 'ruler_corpus_add_ratios.sh' else root
+                state.mkdir(parents=True, exist_ok=True)
+                config = self.root/'stop.env'
+                config.write_text(f'PYTHON_BIN="{sys.executable}"\nEXPERIMENT_DIR="{root}"\n')
+                result = subprocess.run(['bash', str(ROOT/'scripts/launcher'/launcher), 'stop'],
+                    cwd='/tmp', env=dict(self.env, UCM_ENV_FILE=str(config)), capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(json.loads((state/'stop-receipt.json').read_text())['owned_engines_exited'])
 
     def test_both_launchers_pass_fast_validation_before_any_gpu_work(self):
         executable=self.root/'fake-python'
@@ -83,7 +150,7 @@ class ServerEnvTests(unittest.TestCase):
                           'PREPARED_DIR="/prepared inputs"\nRESUME_VALIDATION=fast\n')
         for launcher in ('l20_ruler.sh','a800_longbench.sh'):
             with self.subTest(launcher=launcher):
-                result=subprocess.run(['bash',str(ROOT/'scripts'/launcher),'resume'],cwd='/tmp',
+                result=subprocess.run(['bash',str(ROOT/'scripts'/'launcher'/launcher),'resume'],cwd='/tmp',
                     env=dict(self.env,UCM_ENV_FILE=str(config)),capture_output=True,text=True)
                 self.assertEqual(result.returncode,17,result.stderr)
                 args=json.loads(result.stdout)
@@ -123,7 +190,7 @@ else:raise AssertionError(args)
             'RESUME_SINGLE_GROUP=1\nRESUME_EXCLUDE_PERCENTAGES="15"\nGPU_A="surviving-group"\nGPU_B="withdrawn-group"\n')
         for fail in (False,True):
             if log.exists():log.unlink()
-            result=subprocess.run(['bash',str(ROOT/'scripts/a800_longbench.sh'),'resume'],cwd='/tmp',
+            result=subprocess.run(['bash',str(ROOT/'scripts/launcher/a800_longbench.sh'),'resume'],cwd='/tmp',
                 env=dict(self.env,UCM_ENV_FILE=str(config),EVENT_LOG=str(log),FAIL_SHARD0=str(int(fail))),capture_output=True,text=True)
             self.assertEqual(result.returncode,1 if fail else 0,result.stderr)
             events=[json.loads(line) for line in log.read_text().splitlines()]

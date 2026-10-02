@@ -44,7 +44,7 @@ def paired_check(record, diagnostics, fixed, fixed_diagnostics):
     return dict(action=action,output_tokens_equal=True,scores_masks_equal=True,group=record['group'])
 
 
-def accepted(root, case, row, protocol, full=True):
+def accepted(root, case, row, protocol, full=False):
     folder=record_dir(root,case,row['id']);receipt=folder/'validated.json'
     if not receipt.exists():
         return None
@@ -55,7 +55,7 @@ def accepted(root, case, row, protocol, full=True):
         relative=Path(name)
         if relative.is_absolute() or '..' in relative.parts:
             raise ValueError('Invalid accepted artifact path')
-        if file_hash(folder/relative) != expected:
+        if not (folder/relative).is_file() or ((full or name=='result.json') and file_hash(folder/relative) != expected):
             raise ValueError('Accepted artifact changed: '+str(folder/relative))
     record=json.loads((folder/'result.json').read_text())
     if (record['prompt_id'] != row['id'] or record['method'] != case or record['group'] != row['ordinal']%2
@@ -99,11 +99,11 @@ def run_group(root, group, case, attempt):
     from run import generate, verify_diagnostics
     from runner.worker import setup, arm, drain
     from runner.reporting import OutputAnalyzer, evaluation_metadata, score_answer
-    from scripts.router_inputs import verify_prepared
+    from scripts.router_inputs import load_prepared
     from runner.cache import wait_for_cache
     from ucm.sparse.prophetkv.lifecycle import seed_value, delete_retired_files
     root=Path(root).resolve();protocol=json.loads((root/'protocol.json').read_text())
-    rows=[r for r in verify_prepared(protocol['prepared']) if r['ordinal']%2==group]
+    rows=[r for r in load_prepared(protocol['prepared']) if r['ordinal']%2==group]
     devices=check_environment(4)
     if devices != protocol['groups'][group]:
         raise ValueError('GPU group changed')
@@ -118,7 +118,11 @@ def run_group(root, group, case, attempt):
         cache=Path(protocol['cache_root'])/fingerprint(str(root))[:16]/f'group{group}'/uuid.uuid4().hex
         cache.mkdir(parents=True,exist_ok=False)
         atomic_json(session_root/'ownership.json',dict(cache=str(cache),group=group,pid=os.getpid(),identity=identity(os.getpid())))
-        samples=[(r,json.loads((Path(protocol['prepared'])/r['prepared']).read_text())) for r in pending]
+        samples=[]
+        for row in pending:
+            path=Path(protocol['prepared'])/row['prepared']
+            if file_hash(path)!=row['sha256']:raise ValueError('Prepared input changed')
+            samples.append((row,json.loads(path.read_text())))
         for _,s in samples:validate_profile(s,4)
         policy=load_policy(root/'trees.json') if is_router else None
         if is_router:

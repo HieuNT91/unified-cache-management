@@ -12,17 +12,19 @@ from runner.corpus import load_attention,match_answer,selection
 from runner.tree_policy import actions,decide
 from runner.router_policy import features_from_arrays
 from runner.tree_profiles import config,validate,validate_initialization
-from runner.corpus_records import record_dir,accepted,publish
+from runner.corpus_records import record_dir,accepted,publish,answer_validation,NATIVE_ANSWER_VALIDATION,PROBE_ANSWER_VALIDATION
 
 PROBE=dict(id='independent-probe',method='prophetkv',ratio=.01)
 
 
-def arm_tree(llm,sample,rid,definition,capture=False):
+def arm_tree(llm,sample,rid,definition,capture=False,head_layers=()):
     from runner.corpus_worker import tree_mode
     from runner.worker import arm
-    replies=llm.collective_rpc(tree_mode,kwargs=dict(request_id=rid,definition=definition,capture=capture))
+    kwargs=dict(request_id=rid,definition=definition,capture=capture)
+    if head_layers:kwargs['head_layers']=list(head_layers)
+    replies=llm.collective_rpc(tree_mode,kwargs=kwargs)
     if sorted(r['rank'] for r in replies)!=list(range(4)) or any(
-            r!=dict(rank=r['rank'],request_id=rid,definition=definition,capture=capture) for r in replies):
+            r!=dict(rank=r['rank'],**kwargs) for r in replies):
         raise ValueError('TP action synchronization failed')
     if definition['method']!='baseline':
         llm.collective_rpc(arm,kwargs=dict(request_id=rid,boundaries=sample['boundaries'],question_positions=sample['question_positions']))
@@ -90,6 +92,8 @@ class Engine:
         self.row=row;self.sample=json.loads((Path(self.protocol['prepared'])/row['prepared']).read_text())
         validate(self.sample,self.protocol['dataset']);self.namespace=uuid.uuid4().hex;self.construction={}
         if file_hash(Path(self.protocol['prepared'])/row['prepared'])!=row['sha256']:raise ValueError('Input changed')
+        if self.sample['model_config_sha256']!=file_hash(Path(self.protocol['model'])/'config.json'):
+            raise ValueError('Prepared model mismatch')
         start=time.perf_counter()
         if self.cached:
             self.pc=PromptCache(self.cache,Path(self.protocol['model']),4,self.namespace,self.sample)
@@ -122,13 +126,20 @@ class Engine:
             timings=timings,construction=self.construction,alignment_audit=alignment)
 
     def probe(self,folder):
+        if answer_validation(self.protocol)==NATIVE_ANSWER_VALIDATION:
+            raise ValueError('Independent probes are disabled for native answer controls')
         import numpy as np
         from run import generate,verify_diagnostics
         from runner.worker import drain
         from runner.corpus_worker import export as export_attention
         folder=Path(folder);folder.mkdir(parents=True,exist_ok=True)
         started=time.perf_counter();rid=self.rid('read:probe-'+uuid.uuid4().hex)
-        arm_tree(self.llm,self.sample,rid,PROBE,True)
+        head_layers=()
+        if self.protocol.get('feature_profile'):
+            from runner.longbench_features import DEFINITIONS,HEAD_LAYERS
+            if self.protocol['feature_profile']!=DEFINITIONS:raise ValueError('Unknown feature profile')
+            head_layers=HEAD_LAYERS
+        arm_tree(self.llm,self.sample,rid,PROBE,True,head_layers)
         sync_seconds=time.perf_counter()-started
         generation_start=time.perf_counter()
         internal,ttft,_=generate(self.llm.llm_engine,self.sample['token_ids'],1,rid,False,sample=self.sample)
@@ -145,7 +156,7 @@ class Engine:
         retired=verify_retired(self.llm,4,rid,self.scheduler);self.pc.unchanged();clean_capture(self.llm)
         retirement_seconds=time.perf_counter()-retirement_start
         replay_start=time.perf_counter()
-        attention=load_attention(folder,dict(artifacts=artifacts),self.sample,self.protocol['actions'])
+        attention=load_attention(folder,dict(artifacts=artifacts),self.sample,self.protocol['actions'],head_layers or None)
         # Probe selection may be absent from the answer inventory.
         for worker in ds:
             event=next(e for e in worker['diagnostics'] if e['kind']=='prophetkv_selection')
@@ -154,8 +165,12 @@ class Engine:
                 raise ValueError('Probe diagnostics differ from archived native scores')
         replay_seconds=time.perf_counter()-replay_start
         features_start=time.perf_counter()
-        features=features_from_arrays(attention['layers'].astype(np.float64).mean(0),attention['scores'],
-            self.sample['boundaries'][1],self.sample['boundaries'][-2])
+        if head_layers:
+            from runner.longbench_features import features as longbench_features
+            features=longbench_features(attention,self.sample['boundaries'][1],self.sample['boundaries'][-2])
+        else:
+            features=features_from_arrays(attention['layers'].astype(np.float64).mean(0),attention['scores'],
+                self.sample['boundaries'][1],self.sample['boundaries'][-2])
         features_seconds=time.perf_counter()-features_start
         overhead=time.perf_counter()-started
         result=self.common('probe',dict(probe_ttft_seconds=ttft,routing_overhead_seconds=overhead,
@@ -171,6 +186,9 @@ class Engine:
         from run import generate,verify_diagnostics
         from runner.worker import drain,router_dense_receipt
         from runner.reporting import evaluation_metadata,score_answer
+        mode=answer_validation(self.protocol)
+        if mode==NATIVE_ANSWER_VALIDATION and (attention is not None or case=='router'):
+            raise ValueError('Native answer controls cannot consume independent probe data')
         rid=self.rid('read:'+case+('-'+uuid.uuid4().hex))
         dense=definition['method']=='baseline'
         if self.cached and dense:rid+='|router-dense'
@@ -185,7 +203,7 @@ class Engine:
         verify_diagnostics(ds,self.sample,definition['method'],definition['ratio'],4,range(64))
         if dense and output.num_cached_tokens!=0:raise ValueError('Dense request reused KV')
         audits=self.llm.collective_rpc(router_dense_receipt) if dense and self.cached else []
-        if not dense:
+        if not dense and mode==PROBE_ANSWER_VALIDATION:
             if attention is None:raise ValueError('Sparse answer requires independent probe replay')
             match_answer(ds,self.sample,definition['id'],attention,self.protocol['actions'])
         retired=verify_retired(self.llm,4,rid,self.scheduler if self.cached else None)
@@ -195,6 +213,7 @@ class Engine:
         record=self.common(case,dict(answer_engine_ttft_seconds=ttft,ttft_seconds=routing_time+ttft,
             generation_seconds=elapsed,routing_overhead_seconds=routing_time,tp_sync_seconds=sync_seconds),retired)
         record.update(executed_action=definition['id'],output_token_ids=tokens,prediction=output.outputs[0].text,num_cached_tokens=output.num_cached_tokens,
+            answer_validation=mode,
             output_cap_reached=len(tokens)>=self.sample['max_output_tokens'],max_output_tokens=self.sample['max_output_tokens'],
             dense_receipts=audits,decision_sync=sync,**metrics,**evaluation,accuracy=score_answer(scoring_text(output.outputs[0].text,metrics,evaluation),evaluation))
         return record,ds

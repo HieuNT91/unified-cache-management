@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Export small portable attention-feature/outcome datasets from committed data."""
+import argparse
+import json
+import math
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from runner.longbench_features import FEATURES, DEFINITIONS
+from runner.setups import atomic_json, file_hash, fingerprint
+from runner.tree_policy import actions
+from runner.corpus_records import accepted, protocol_identity
+from runner.layout import PROMPT_PROTOCOL
+
+SCHEMA = 'attention-router-dataset-v1'
+
+
+def validate(data):
+    if (data.get('schema') != SCHEMA or data.get('dataset') not in ('ruler', 'longbench-v2')
+            or data.get('feature_names') != list(FEATURES) or data.get('feature_definitions') != DEFINITIONS
+            or data.get('prompt_protocol') != PROMPT_PROTOCOL):
+        raise ValueError('Incompatible dataset/feature version; all eight fixed layers and every TP head are required')
+    if data.get('payload_sha256') != fingerprint({k: v for k, v in data.items() if k != 'payload_sha256'}):
+        raise ValueError('Dataset checksum mismatch')
+    inventory = actions(data['actions']); rows = data['rows']
+    if not rows or len({r['id'] for r in rows}) != len(rows):
+        raise ValueError('Empty/duplicate dataset membership')
+    if data['dataset'] == 'longbench-v2' and len(rows) != 503:
+        raise ValueError('LongBench data must contain all 503 prompts')
+    for row in rows:
+        if (row['dataset'] != data['dataset'] or set(row['features']) != set(FEATURES)
+                or set(row['outcomes']) != set(inventory)):
+            raise ValueError('Missing features/actions or inconsistent dataset identity')
+        for value in row['features'].values():
+            if value is not None and (type(value) not in (int, float) or not math.isfinite(value) or not -1e-6 <= value <= 1+1e-6):
+                raise ValueError('Feature must be null or finite attention coverage/agreement')
+        if not math.isfinite(row['probe_overhead_seconds']) or row['probe_overhead_seconds'] < 0:
+            raise ValueError('Invalid probe overhead')
+        if not row.get('source_pins') or not row.get('input_sha256') or not row.get('subtask'):
+            raise ValueError('Missing input/measurement provenance')
+        if row['dataset'] == 'longbench-v2' and row.get('length') not in ('short', 'medium', 'long'):
+            raise ValueError('Missing official LongBench length label')
+        for value in row['outcomes'].values():
+            if (not math.isfinite(value['accuracy']) or not 0 <= value['accuracy'] <= 1
+                    or not math.isfinite(value['ttft_seconds']) or value['ttft_seconds'] <= 0):
+                raise ValueError('Invalid measured outcome')
+    return data
+
+
+def load(path):
+    path = Path(path); sidecar = Path(str(path)+'.sha256')
+    if not sidecar.is_file() or sidecar.read_text().split()[0] != file_hash(path):
+        raise ValueError('Missing or changed portable dataset checksum')
+    return validate(json.loads(path.read_text()))
+
+
+def save(path, dataset, inventory, rows, provenance):
+    value = dict(schema=SCHEMA, dataset=dataset, prompt_protocol=PROMPT_PROTOCOL,
+                 feature_names=list(FEATURES), feature_definitions=DEFINITIONS,
+                 actions=inventory, rows=rows, provenance=provenance)
+    value['payload_sha256'] = fingerprint(value); validate(value)
+    path = Path(path)
+    if path.exists():
+        if load(path) != value:
+            raise FileExistsError('Portable dataset is immutable; choose another output path')
+        return value
+    atomic_json(path, value)
+    Path(str(path)+'.sha256').write_text(file_hash(path)+'  '+path.name+'\n')
+    return value
+
+
+def example(row, probe, outcomes, source_pins, dataset):
+    result = dict(id=row['id'], dataset=dataset, subtask=row['subtask'], input_sha256=row['sha256'],
+                  evaluation_protocol=row.get('evaluation_protocol'), features=probe['features'],
+                  probe_overhead_seconds=probe['timings']['routing_overhead_seconds'],
+                  source_pins=source_pins, outcomes={})
+    if dataset == 'longbench-v2':
+        result.update(length=row['length'], source_id=row['source_id'])
+    for case, record in outcomes.items():
+        if record is None:
+            raise ValueError(f"Missing measured {case} outcome for {row['id']}")
+        result['outcomes'][case] = dict(accuracy=record['accuracy'], ttft_seconds=record['timings']['ttft_seconds'],
+            gpu_uuids=record['gpu_uuids'], thinking_tokens=record['thinking_tokens'], answer_tokens=record['answer_tokens'],
+            output_tokens=record['output_tokens'], control_tokens=record['control_tokens'],
+            output_cap_reached=record['output_cap_reached'])
+    return result
+
+
+def export_longbench(base, output):
+    from scripts.longbench_a800_data import load as load_plan, stage, read, SCHEDULE, ACTIONS
+    base = Path(base); _, plan, rows = load_plan(base)
+    for path in (base/'primary/controls-complete.json', base/'extra/complete.json', base/'features/complete.json'):
+        if not path.is_file() or not read(path)['owned_engines_exited']:
+            raise ValueError('Finish both control groups and feature engines before export')
+    from scripts.longbench_a800_control import engines_idle
+    for role in ('primary', 'extra', 'features'):
+        engines_idle(base/role)
+    protocols = {role: stage(base, role)[0] for role in SCHEDULE}
+    values = []
+    for row in rows:
+        probe = accepted(base/'features', 'probe', row, protocols['features'])
+        if probe is None:
+            raise ValueError('Missing accepted feature capture')
+        outcomes = {}; pins = {}
+        for role, cases in SCHEDULE.items():
+            for case in cases:
+                path = base/role/'records'/case/row['id']/'validated.json'
+                pins[str(path.relative_to(base))] = file_hash(path)
+                if case != 'probe':
+                    outcomes[case] = accepted(base/role, case, row, protocols[role])
+        values.append(example(row, probe, outcomes, pins, 'longbench-v2'))
+    return save(output, 'longbench-v2', ACTIONS, values, dict(plan_sha256=file_hash(base/'plan.json'),
+                validation='committed-results-and-record-pins; per-request runtime validation, no offline attention replay',
+                timing='Actions measured on two separate A800 TP4 groups; probes collected afterward on primary group'))
+
+
+def export_ruler(root, output):
+    """Read a completed coverage-five corpus generated on any server."""
+    from scripts.corpus_inputs import prepared_rows
+    from scripts.corpus_control import idle
+    root = Path(root); protocol = json.loads((root/'protocol.json').read_text())
+    if protocol.get('dataset') != 'ruler' or protocol.get('kind') != 'collection' or protocol.get('feature_profile') != DEFINITIONS:
+        raise ValueError('RULER requires a new collection configured with --feature-profile coverage-five; old layer means cannot recover per-head coverage')
+    idle(root)
+    prepared = Path(protocol['prepared'])
+    limit = json.loads((root/'tranche.json').read_text())['limit_per_task']
+    rows = [r for r in prepared_rows(prepared) if r['ordinal'] < limit]
+    if len(rows) != 13*limit:
+        raise ValueError('RULER preparation does not cover the configured tranche')
+    from scripts.ruler import EVALUATION_PROTOCOL
+    values = []
+    for row in rows:
+        row = dict(row, evaluation_protocol=EVALUATION_PROTOCOL)
+        probe = accepted(root, 'probe', row, protocol)
+        if probe is None:
+            raise ValueError(f"Missing feature capture: {row['id']}")
+        outcomes = {case: accepted(root, case, row, protocol) for case in actions(protocol['actions'])}
+        pins = {str(Path('records')/case/row['id']/'validated.json'):
+                file_hash(root/'records'/case/row['id']/'validated.json') for case in ['probe', *outcomes]}
+        values.append(example(row, probe, outcomes, pins, 'ruler'))
+    return save(output, 'ruler', protocol['actions'], values, dict(protocol_sha256=protocol_identity(protocol),
+                validation='committed-results-and-record-pins; no offline attention replay',
+                timing='Measured on the original RULER corpus hardware'))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--dataset', choices=('ruler', 'longbench-v2'), required=True)
+    parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    value = (export_ruler if args.dataset == 'ruler' else export_longbench)(args.root.resolve(), args.output.resolve())
+    print(f"Exported {len(value['rows'])} {args.dataset} rows, {len(value['actions'])} measured actions: {args.output}")
+
+
+if __name__ == '__main__':
+    main()

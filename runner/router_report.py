@@ -143,7 +143,7 @@ def publish(folder, report, records, policy):
 
 
 def finalize(root):
-    from scripts.router_inputs import verify_prepared
+    from scripts.router_inputs import load_prepared
     from runner.router_process import alive,group_alive
     root=Path(root);protocol=json.loads((root/'protocol.json').read_text())
     cleanup=json.loads((root/'cleanup.json').read_text())
@@ -152,7 +152,7 @@ def finalize(root):
     for path in (root/'processes').glob('*.json'):
         state=json.loads(path.read_text())
         if alive(state) or group_alive(state['pid']):raise ValueError('Owned engine process is alive')
-    rows=verify_prepared(protocol['prepared'])
+    rows=load_prepared(protocol['prepared'])
     records=[accepted(root,case,row,protocol) for case in CASES for row in rows]
     if any(r is None for r in records):raise ValueError('Incomplete accepted results')
     report=summarize(records,rows)

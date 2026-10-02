@@ -22,7 +22,7 @@ def validate(sample,dataset):
     if sample['thinking']!=p['thinking'] or (p['output_tokens'] is not None and sample['max_output_tokens']!=p['output_tokens']):
         raise ValueError('Dataset execution profile mismatch')
     if dataset=='ruler':
-        from scripts.ruler_64000 import EVALUATION_PROTOCOL
+        from scripts.ruler import EVALUATION_PROTOCOL
         if sample.get('evaluation_protocol')!=EVALUATION_PROTOCOL:
             raise ValueError('RULER requires original task-batch protocol; rebuild from source')
     # References remain reporting metadata; generate submits only tokens/layout.

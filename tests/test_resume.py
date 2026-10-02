@@ -38,7 +38,8 @@ class ResumeTests(unittest.TestCase):
         self.manifest.write_text(''.join(json.dumps(r)+'\n' for r in rows))
         self.args = NS(model=self.model,manifest=self.manifest,output=self.output,cache_root=self.cache,
                        tp=2,shards=2,shard=0,memory=.9,percentages=[1,5],layers=[11,12,13,14,15],
-                       context_length=114688,exact_input_tokens=None,dry_run=False,resume=True,skip_selective=True)
+                       context_length=114688,exact_input_tokens=None,dry_run=False,resume=True,skip_selective=True,
+                       validation='full')
         self.configs = sweep.configurations([1,5]); self.entries = {}
         for shard in (0,1):
             self.args.shard = shard

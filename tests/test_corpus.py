@@ -190,7 +190,7 @@ class CorpusTests(unittest.TestCase):
             row=dict(index=0,input='[USER]Instructions\n'+'context '*700+'\n'+query+'[END]\n',answer_prefix=' Answer:',outputs=['SECRET'])
             tokenizer=Tokenizer();sample=format_corpus(tokenizer,row,task)
             self.assertEqual(sample['token_ids'],list(map(ord,row['input']+row['answer_prefix'])));self.assertFalse(tokenizer.thinking)
-            from scripts.ruler_64000 import CAPS
+            from scripts.ruler import CAPS
             self.assertEqual(sample['max_output_tokens'],CAPS[task]);self.assertNotIn('references',sample);self.assertNotIn('outputs',sample)
             self.assertEqual(sample,format_corpus(tokenizer,row,task))
             self.assertEqual(''.join(chr(sample['token_ids'][p]) for p in sample['question_positions']),query)
@@ -330,7 +330,7 @@ class CorpusTests(unittest.TestCase):
                 return dict(accuracy=1.,timings=dict(answer_engine_ttft_seconds=2.,routing_overhead_seconds=.2))
             with tempfile.TemporaryDirectory() as td:
                 root=Path(td);atomic_json(root/'cleanup.json',dict(owned_engines_exited=True))
-                with patch('scripts.corpus_control.verify',return_value=(protocol,rows)),patch('scripts.corpus_control.accepted',side_effect=record):
+                with patch('scripts.corpus_control.load_run',return_value=(protocol,rows)),patch('scripts.corpus_control.accepted',side_effect=record):
                     result=snapshot_report(root,True)
                 self.assertEqual(result['answers'],13*n*4);self.assertEqual(result['accepted_probes'],13*n)
                 self.assertEqual(result['complete'],n==200);self.assertEqual(result['status'],'complete' if n==200 else 'partial-complete')
@@ -394,7 +394,7 @@ class CorpusOperationalTests(unittest.TestCase):
             accepted_cases.remove(('b','prophetkv-40'))
             engine=Mock();engine.sample={};engine.answer.return_value=({'value':1},[]);engine.end.return_value={'deleted':True}
             def present(root,case,row,protocol):return {'existing':True} if (row['id'],case) in accepted_cases else None
-            with patch('scripts.corpus_control.verify',return_value=(protocol,rows)),patch('runner.corpus_collect.check_environment',return_value=protocol['groups'][0]),patch('runner.corpus_collect.accepted',side_effect=present),patch('runner.corpus_collect.Engine',return_value=engine) as constructor,patch('runner.corpus_collect.load_attention',return_value={'saved':True}) as attention,patch('runner.corpus_collect.publish') as publication:
+            with patch('scripts.corpus_control.load_run',return_value=(protocol,rows)),patch('runner.corpus_collect.check_environment',return_value=protocol['groups'][0]),patch('runner.corpus_collect.accepted',side_effect=present),patch('runner.corpus_collect.Engine',return_value=engine) as constructor,patch('runner.corpus_collect.load_attention',return_value={'saved':True}) as attention,patch('runner.corpus_collect.publish') as publication:
                 run_group(root,0,'cached','resume')
                 self.assertEqual(constructor.call_args.args[-1],[rows[1]])
                 engine.probe.assert_not_called();engine.begin.assert_called_once_with(rows[1])
@@ -409,7 +409,7 @@ class CorpusOperationalTests(unittest.TestCase):
             uuids=','.join(f'GPU-{i:08x}-1111-2222-3333-444444444444' for i in range(4))
             settings.write_text(f'PYTHON_BIN={sys.executable}\nEXPERIMENT_DIR={root}/ignored\nPREPARED_DIR={root}/prepared\nMODEL_PATH={root}/model\nCACHE_ROOT={root}/cache\nGPU_A={uuids}\nGPU_B=\n')
             env=dict(os.environ,UCM_ENV_FILE=str(settings),EXPERIMENT_DIR=str(root/'actual'),CUDA_VISIBLE_DEVICES='')
-            script=Path(__file__).resolve().parents[1]/'scripts/ruler_corpus.sh'
+            script=Path(__file__).resolve().parents[1]/'scripts/launcher/ruler_corpus.sh'
             subprocess.run([str(script),'configure','--limit-per-task','50'],env=env,check=True,capture_output=True)
             saved=json.loads((root/'actual/settings.json').read_text())
             self.assertEqual(saved['prepared'],str(root/'prepared'));self.assertFalse((root/'ignored').exists())
@@ -428,7 +428,7 @@ class CorpusOperationalTests(unittest.TestCase):
             row=dict(id='p',ordinal=0,subtask=TASKS[0])
             result=dict(accuracy=1.,timings=dict(answer_engine_ttft_seconds=1.,routing_overhead_seconds=.1))
             atomic_json(root/'cleanup.json',dict(owned_engines_exited=False))
-            with patch('scripts.corpus_control.verify',return_value=(protocol,[row])),patch('scripts.corpus_control.accepted',return_value=result):
+            with patch('scripts.corpus_control.load_run',return_value=(protocol,[row])),patch('scripts.corpus_control.accepted',return_value=result):
                 with self.assertRaisesRegex(ValueError,'exit'):snapshot_report(root,True)
             self.assertFalse((root/'report.json').exists())
 

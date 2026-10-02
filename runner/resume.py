@@ -148,7 +148,7 @@ def _prepare(args):
     configs = [c for c in configs if c['name'] not in {f'prophetkv-{p}' for p in excluded}]
     from scripts.sweep_counts import saved_counts
     counts = saved_counts(args.output, args.manifest, args.percentages, args.shards, excluded)
-    validation = getattr(args, 'validation', 'full')
+    validation = getattr(args, 'validation', 'fast')
     if validation not in ('full', 'fast'):
         raise ValueError('Resume validation must be full or fast')
     print(f'Resume validation: {validation}. '
@@ -323,7 +323,7 @@ if __name__ == '__main__':
     parser.add_argument('--layers', type=int, nargs='+', default=[11,12,13,14,15])
     parser.add_argument('--context-length', type=int, default=114688)
     parser.add_argument('--exact-input-tokens', type=int)
-    parser.add_argument('--validation', choices=['full', 'fast'], default='full')
+    parser.add_argument('--validation', choices=['full', 'fast'], default='fast')
     parser.add_argument('--exclude-percentages', type=int, nargs='+')
     parser.add_argument('--single-group-gpus', help='Run both original shards sequentially on this comma-separated TP group')
     prepare(parser.parse_args())

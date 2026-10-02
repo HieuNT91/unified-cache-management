@@ -10,7 +10,7 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 
 from runner.setups import atomic_json, file_hash, fingerprint, setup_lock
-from scripts.ruler_64000 import format_sample, definitions, query_span
+from scripts.ruler import format_sample, definitions, query_span
 
 SOURCES = Path(__file__).with_name('corpus_sources.json')
 TASKS = tuple(json.loads(SOURCES.read_text())['definitions'])
@@ -53,17 +53,6 @@ def inventory(qa):
                  seeds=[int(fingerprint([SEED_DOMAIN,task,i,a])[:8],16) for a in range(8)],
                  **(qa[task][i] if task.startswith('qa_') else {}))
             for i in range(SAMPLES) for task in TASKS]
-
-
-def verify_sources(ruler,model):
-    from importlib.metadata import version
-    data=spec()
-    for base,key in ((ruler,'source_files'),(model,'model_fingerprints')):
-        for name,digest in data[key].items():
-            if file_hash(Path(base)/name)!=digest:raise ValueError('Pinned source/model mismatch: '+name)
-    for name,wanted in data['versions'].items():
-        if version(name)!=wanted:raise ValueError(f'Preparation requires {name}=={wanted}')
-    return data
 
 
 def format_corpus(tokenizer,row,task):
@@ -126,50 +115,30 @@ def prepared_rows(output):
     return rows
 
 
-def verify_prepared(output,rebuild=False,model=None,limit=500):
-    output=Path(output)
-    if not (output/'preparation.json').exists():
-        raise ValueError('Legacy RULER preparation is incompatible; rebuild original task batches')
-    rows=original_rows(output)
-    if any(sum(r['subtask']==t and r['ordinal']<limit for r in rows)!=limit for t in TASKS):
-        raise ValueError('Requested tranche is not fully prepared')
-    if rebuild:
-        from transformers import AutoTokenizer
-        tokenizer=AutoTokenizer.from_pretrained(model,local_files_only=True)
-        spec=json.loads((output/'spec.json').read_text())
-        batches={t:[json.loads(line) for line in (output/'raw'/t/'validation.jsonl').read_text().splitlines()] for t in TASKS}
-        for row in rows:
-            sample=json.loads((output/row['prepared']).read_text())
-            rebuilt=format_sample(tokenizer,batches[row['subtask']][row['ordinal']],row['subtask'],template=spec['templates'][row['subtask']])
-            rebuilt.update(source_row=row['ordinal'],model_config_sha256=spec['tokenizer_hashes']['config.json'],generator_config_sha256=fingerprint(spec))
-            if rebuilt!=sample:raise ValueError('Original token/span rebuild mismatch')
-    return rows
-
-
 def prepare(ruler,model,output,workers=4,limit=500):
     from types import SimpleNamespace
-    from scripts.ruler_64000 import prepare as prepare_original
+    from scripts.ruler import prepare as prepare_original
     # Always generate the original 500-row task batch before selecting a tranche.
     prepare_original(SimpleNamespace(ruler=Path(ruler),model=Path(model),output=Path(output),samples=500,seed=42))
     return original_rows(Path(output))
 
 
 def original_rows(output):
-    from scripts.ruler_64000 import EVALUATION_PROTOCOL
+    from scripts.ruler import EVALUATION_PROTOCOL
     output=Path(output);receipt=json.loads((output/'preparation.json').read_text())
     if receipt['spec']['protocol'] != EVALUATION_PROTOCOL:
         raise ValueError('Incompatible RULER protocol')
-    for name,digest in receipt['files'].items():
-        if file_hash(output/name)!=digest:raise ValueError('Prepared original batch changed')
-    rows=[]
+    if file_hash(output/'manifest.jsonl')!=receipt['files']['manifest.jsonl']:
+        raise ValueError('Prepared manifest changed')
+    rows=[];counts=Counter()
     for row in map(json.loads,(output/'manifest.jsonl').read_text().splitlines()):
-        sample=json.loads((output/row['prepared']).read_text())
-        from runner.config import validate_sample
-        validate_sample(sample)
-        raw=f"raw/{row['subtask']}/validation.jsonl"
-        rows.append(dict(row,ordinal=sample['source_row'],sha256=file_hash(output/row['prepared']),
-            prompt_sha256=fingerprint(sample['token_ids']),raw=raw,raw_sha256=file_hash(output/raw),
-            raw_row=sample['source_row'],identity=dict(task=row['subtask'],ordinal=sample['source_row'],seed=42)))
+        task=row['subtask'];ordinal=counts[task];counts[task]+=1
+        if row.get('ordinal',ordinal)!=ordinal:raise ValueError('Task batch order changed')
+        raw=f"raw/{task}/validation.jsonl"
+        rows.append(dict(row,ordinal=ordinal,sha256=receipt['files'][row['prepared']],
+            raw=raw,raw_sha256=receipt['files'][raw],
+            raw_row=ordinal,identity=dict(task=task,ordinal=ordinal,seed=42)))
+    if len({r['id'] for r in rows})!=len(rows):raise ValueError('Duplicate prepared IDs')
     plan=dict(schema='rpkv-original-ruler-plan-v1',protocol=EVALUATION_PROTOCOL,
         sources_sha256=file_hash(output/'spec.json'),entries=[r['identity'] for r in rows])
     if (output/'plan.json').exists() and json.loads((output/'plan.json').read_text())!=plan:

@@ -353,7 +353,7 @@ def summarize(root, same_count=False, final=False):
                           message='Extension preparation is pending; see extensions/add5-10/supervisor.log')
             print(json.dumps(result, indent=2))
             return result
-        raise ValueError('No prepared extension; run detach or verify first')
+        raise ValueError('No prepared extension; run detach first')
     corpus = Extension(root)
     expected = [dict(prompt_id=r['id'], subtask=r['subtask']) for r in corpus.rows]
     old = [a['id'] for a in corpus.base_protocol['actions']]
@@ -589,7 +589,7 @@ print(p.pid,flush=True)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('verify', 'detach', 'resume', 'status', 'status_same_count', 'report', 'supervise', 'worker'))
+    parser.add_argument('command', choices=('detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'supervise', 'worker'))
     parser.add_argument('--root', required=True, type=Path)
     parser.add_argument('--group', type=int, help=argparse.SUPPRESS)
     parser.add_argument('--attempt', help=argparse.SUPPRESS)
@@ -599,14 +599,11 @@ def main():
         raise ValueError('Missing existing collection protocol: '+str(root))
     if args.command != 'worker' and os.environ.get('CUDA_VISIBLE_DEVICES', ''):
         raise ValueError('Control commands require CUDA_VISIBLE_DEVICES empty')
-    if args.command == 'verify':
-        from scripts.corpus_control import idle
-        with base_exclusive(root):
-            idle(root/STATE)
-            corpus = prepare(root)
-        print(f'Verified {len(corpus.rows)} original prompts; {len(corpus.rows)*2} new answers. No GPU work launched.')
-    elif args.command in ('detach', 'resume'):
+    if args.command in ('detach', 'resume'):
         detach(root, args.command == 'resume')
+    elif args.command == 'stop':
+        from scripts.launcher_stop import stop
+        stop(root, Path(__file__).name, root/STATE)
     elif args.command == 'supervise':
         supervise(root)
     elif args.command == 'worker':

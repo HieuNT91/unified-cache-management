@@ -87,7 +87,7 @@ def validate_sample(sample, kv_chunk_size=4096, context_length=WINDOW):
     if type(budget) is not int or not 1 <= budget <= 16384 or len(ids) + budget > WINDOW:
         raise ValueError('Prompt plus output exceeds the 131072-token window')
     if sample.get('evaluation_protocol'):
-        from scripts.ruler_64000 import CAPS, EVALUATION_PROTOCOL
+        from scripts.ruler import CAPS, EVALUATION_PROTOCOL
         if sample['evaluation_protocol'] != EVALUATION_PROTOCOL or sample['max_output_tokens'] != CAPS.get(sample.get('task')) or len(ids) + budget > 65536 or sample['thinking']:
             raise ValueError('Invalid original RULER budget/decoding protocol')
     if type(sample['thinking']) is not bool:

@@ -204,7 +204,7 @@ class AddRatiosTests(unittest.TestCase):
             self.assertEqual(attention['selections']['prophetkv-10'].tolist(), list(range(64, 70)))
             archive = corpus.root/'records'/'probe'/rows[0]['id']/'attention.rank0.npz'
             archive.write_bytes(b'corrupt')
-            with self.assertRaisesRegex(ValueError, 'artifact'):
+            with self.assertRaisesRegex(ValueError, 'Corrupt attention archive'):
                 corpus.attention(rows[0], replay=True)
 
     def test_changed_input_and_original_protocol_are_rejected(self):
@@ -407,7 +407,7 @@ class AddRatiosTests(unittest.TestCase):
                 self.assertEqual(extension.read(corpus.state/'supervisor.json')['state'], 'complete' if success else 'failed')
 
     def test_shell_uses_env_and_explicit_root_precedence(self):
-        script = Path(__file__).resolve().parents[1]/'scripts/ruler_corpus_add_ratios.sh'
+        script = Path(__file__).resolve().parents[1]/'scripts/launcher/ruler_corpus_add_ratios.sh'
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             python = root/'fake-python'
@@ -417,7 +417,7 @@ class AddRatiosTests(unittest.TestCase):
             envfile.write_text(f'PYTHON_BIN="{python}"\nEXPERIMENT_DIR="{root}/env root"\n')
             env = {k:v for k,v in os.environ.items() if k not in ('PYTHON_BIN', 'EXPERIMENT_DIR')}
             env.update(UCM_ENV_FILE=str(envfile), CUDA_VISIBLE_DEVICES='must-be-cleared')
-            run = subprocess.run(['bash', str(script), 'verify', '--root', str(root/'explicit root')],
+            run = subprocess.run(['bash', str(script), 'status', '--root', str(root/'explicit root')],
                                  env=env, capture_output=True, text=True, check=True)
             output = json.loads(run.stdout)
             self.assertEqual(output['cuda'], '')

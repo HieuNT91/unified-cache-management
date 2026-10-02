@@ -19,7 +19,7 @@ from runner.tree_policy import actions,DEFAULT_ACTIONS,load
 from runner.corpus_records import accepted,record_dir,protocol_identity
 from runner.router_process import identity,alive,group_alive
 from scripts.router_control import code_hashes,environment,idle as legacy_idle,terminate_owned,cleanup_caches
-from scripts.corpus_inputs import TASKS,prepare,verify_prepared,prepared_rows
+from scripts.corpus_inputs import TASKS,prepare,prepared_rows
 
 
 def idle(root):
@@ -48,8 +48,8 @@ def read_rows(settings):
     if settings['dataset']=='ruler':return prepared_rows(prepared)
     receipt=json.loads((prepared/'preparation.json').read_text())
     from runner.corpus import relative
-    for name,digest in receipt['files'].items():
-        if file_hash(relative(prepared,name))!=digest:raise ValueError('LongBench preparation changed')
+    if file_hash(prepared/'manifest.jsonl')!=receipt['files']['manifest.jsonl']:
+        raise ValueError('LongBench manifest changed')
     rows=[json.loads(line) for line in (prepared/'manifest.jsonl').read_text().splitlines()]
     if len(rows)!=503 or len({r['id'] for r in rows})!=503:raise ValueError('Expected all 503 LongBench v2 rows')
     for i,row in enumerate(rows):
@@ -100,6 +100,9 @@ def configure(a):
     if a.hardware_profile!='server':settings['hardware_profile']=a.hardware_profile
     if a.tree:
         tree=load(a.tree);settings.update(actions=tree['actions'],tree_sha256=file_hash(a.tree),tree=str(a.tree))
+        from runner.longbench_features import SCHEMA as LB_SCHEMA
+        if tree['schema']==LB_SCHEMA:
+            settings['feature_profile']=tree['feature_definitions']
         if a.dataset=='ruler':
             if not a.corpus:raise ValueError('RULER tree inference requires --corpus for frozen held-out inputs')
             from runner.corpus_training_data import open_corpus
@@ -111,6 +114,9 @@ def configure(a):
     else:
         if a.dataset!='ruler':raise ValueError('LongBench is evaluation-only; collection/training forbidden')
         settings['actions']=json.loads(a.actions.read_text()) if a.actions else DEFAULT_ACTIONS
+        if getattr(a,'feature_profile','legacy')=='coverage-five':
+            from runner.longbench_features import DEFINITIONS
+            settings['feature_profile']=DEFINITIONS
     actions(settings['actions']);a.root.mkdir(parents=True,exist_ok=True)
     with (a.root/'launch.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);idle(a.root)
@@ -130,7 +136,7 @@ def configure(a):
     return settings
 
 
-def verify(root,hardware=True,publish=True):
+def load_run(root,hardware=True,publish=True):
     root=Path(root);s=json.loads((root/'settings.json').read_text())
     if s['code']!=code_hashes():raise ValueError('Configured implementation changed; use a new version')
     rows=read_rows(s)
@@ -140,38 +146,14 @@ def verify(root,hardware=True,publish=True):
         rows=[r for r in rows if r['id'] in wanted] if wanted else [r for r in rows if r['ordinal']<limit]
         if wanted:
             if {r['id'] for r in rows}!=set(wanted) or any(r['sha256']!=s['heldout_inputs'][r['id']] for r in rows):raise ValueError('Frozen held-out inputs changed/missing')
-        elif len(rows)!=13*limit:raise ValueError('Prepare the requested tranche before verification')
+        elif len(rows)!=13*limit:raise ValueError('Prepare the requested tranche before launch')
         plan_sha=file_hash(Path(s['prepared'])/'plan.json')
     else:plan_sha=file_hash(Path(s['prepared'])/'preparation.json')
-    from runner.corpus import relative
-    from runner.tree_profiles import validate
-    from run import check_model
-    check_model(Path(s['model']))
-    model_hash=file_hash(Path(s['model'])/'config.json')
-    model_index=json.loads((Path(s['model'])/'model.safetensors.index.json').read_text())
-    if not all(model_artifact(s['model'],name).is_file() for name in set(model_index['weight_map'].values())):
-        raise ValueError('Missing local model weight shards')
-    if s['dataset']=='longbench-v2':
-        preparation=json.loads((Path(s['prepared'])/'preparation.json').read_text())
-        for name,digest in preparation['spec']['tokenizer_files'].items():
-            if file_hash(model_artifact(s['model'],name))!=digest:raise ValueError('LongBench tokenizer/model metadata changed')
-    from importlib.metadata import version
-    from runner.config import VERSIONS
-    if any(version(name).split('+')[0]!=expected for name,expected in VERSIONS.items()):raise ValueError('Install the clean README pinned runtime versions')
-    if s['dataset']=='ruler':
-        spec=json.loads((Path(s['prepared'])/'spec.json').read_text())
-        for name,digest in spec['tokenizer_hashes'].items():
-            if file_hash(Path(s['model'])/name)!=digest:raise ValueError('Pinned model/tokenizer mismatch')
-    for row in rows:
-        path=relative(s['prepared'],row['prepared'])
-        if file_hash(path)!=row['sha256']:raise ValueError('Prepared input changed')
-        sample=json.loads(path.read_text());validate(sample,s['dataset'])
-        if sample['model_config_sha256']!=model_hash:raise ValueError('Prepared model mismatch')
     protocol={k:v for k,v in s.items() if k not in ('ruler','data','tree')}
     protocol.update(plan_sha256=plan_sha)
     old=json.loads((root/'protocol.json').read_text()) if (root/'protocol.json').exists() else None
     hw=check_hardware(s) if hardware else old.get('hardware') if old else None
-    if hw is None:raise ValueError('Verify hardware before starting a worker')
+    if hw is None:raise ValueError('Initialize the launch protocol before starting a worker')
     protocol['hardware']=hw
     if old is not None and old!=protocol:raise ValueError('Frozen protocol changed')
     if s['kind']=='inference':
@@ -199,7 +181,7 @@ def snapshot_report(root,final=False,same_count=False):
             limit=json.loads((root/'tranche.json').read_text())['limit_per_task']
             rows=[r for r in rows if r['id'] in wanted] if wanted else [r for r in rows if r['ordinal']<limit]
     else:
-        protocol,rows=verify(root,hardware=False)
+        protocol,rows=load_run(root,hardware=False)
     cases=['nocache','router'] if protocol['kind']=='inference' else list(actions(protocol['actions']))
     matching=None
     if same_count:
@@ -298,7 +280,7 @@ def detach(root,resume=False):
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);idle(root)
         if (root/'final-validation.json').exists():raise ValueError('Completed inventory cannot be restarted')
         if not resume and (root/'supervisor.json').exists():raise ValueError('Use resume to collect missing records')
-        verify(root)
+        load_run(root)
         command=['nohup',sys.executable,'-u',str(Path(__file__).resolve()),'supervise','--root',str(root)]
         helper="""import json,subprocess,sys
 c=json.load(sys.stdin)
@@ -337,7 +319,7 @@ def supervise(root):
             atomic_json(root/'processes'/f'{phase}-group{group}-{attempt}.json',receipt)
             running[group]=(child,receipt,time.monotonic())
         try:
-            protocol,rows=verify(root);cleanup_caches(root,protocol)
+            protocol,rows=load_run(root);cleanup_caches(root,protocol)
             for phase in ('baseline','cached'):
                 state.update(phase=phase);atomic_json(root/'supervisor.json',state)
                 cases=['nocache'] if phase=='baseline' else ['router'] if protocol['kind']=='inference' else ['probe']+[a for a in actions(protocol['actions']) if a!='nocache']
@@ -367,7 +349,7 @@ def supervise(root):
 
 def parser():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('command',choices=('configure','prepare','verify','detach','resume','status','status_same_count','report','supervise','train','replay','test','snapshot','relocate'))
+    p.add_argument('command',choices=('configure','prepare','detach','resume','stop','status','status_same_count','report','supervise','train','replay','test','snapshot','relocate'))
     p.add_argument('--root',type=Path,required=True)
     for name in ('model','prepared','cache-root','ruler','data','tree','corpus','actions','output','decisions','evaluation-snapshot'):
         p.add_argument('--'+name,type=Path)
@@ -380,6 +362,8 @@ def parser():
     p.add_argument('--evaluation',choices=('heldout','training'),default='heldout',help='Train/test: held-out split, or fit and evaluate on exactly the same complete samples')
     p.add_argument('--mode',choices=('offline',),default='offline')
     p.add_argument('--inference',action='store_true',help=argparse.SUPPRESS)
+    p.add_argument('--feature-profile',choices=('legacy','coverage-five'),default='legacy',
+                   help='Configure new RULER collection with per-head coverage features for train_router.py')
     return p
 
 
@@ -437,8 +421,11 @@ def main():
             from types import SimpleNamespace
             lb_prepare(SimpleNamespace(model=Path(s['model']),data=Path(s['data']),output=Path(s['prepared'])))
         result=dict(prepared=True)
-    elif a.command=='verify':result=dict(protocol=verify(a.root)[0],gpu_inference_launched=False)
     elif a.command in ('detach','resume'):detach(a.root,a.command=='resume');return
+    elif a.command=='stop':
+        from scripts.launcher_stop import stop
+        stop(a.root, Path(__file__).name)
+        return
     elif a.command=='supervise':supervise(a.root);return
     elif a.command=='report':idle(a.root);result=snapshot_report(a.root,final=True)
     elif a.command=='relocate':
@@ -449,7 +436,7 @@ def main():
                 if getattr(a,key) is not None:s[key]=str(getattr(a,key))
             if protocol_identity(s)!=before:raise ValueError('Relocation changed identity')
             atomic_json(path,s)
-        result=dict(relocated=True,verify_required=True)
+        result=dict(relocated=True,launch_checks_pending=True)
     else:
         from scripts.corpus_status import write_summary
         if a.command=='status_same_count':snapshot_report(a.root,same_count=True)

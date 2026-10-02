@@ -103,6 +103,8 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     scoring_layers = sparse.scoring_layers
     capture = getattr(sparse, 'router_capture', False)
     captured = []
+    head_layers = getattr(sparse, 'router_head_layers', ()) if capture else ()
+    captured_heads = []
     for i,layer in enumerate(sparse.model.layers):
         name=f'model.layers.{i}.self_attn.attn'
         sparse.connector.wait_for_layer_load(name)
@@ -116,6 +118,13 @@ def probe(sparse,positions,embeddings,query_budget=16384):
             for a in range(0, suffix_tokens, query_budget)]
         q,k,v,residual = (torch.cat([part[j] for part in projected]) for j in range(4))
         del projected
+        if i in head_layers:
+            from .selection import context_head_importance
+            head_scores = torch.zeros((q.shape[1], len(ck)), device=device, dtype=torch.float32)
+            for a in range(0, len(qp), query_budget):
+                indices = qp[a:a+query_budget]
+                head_scores.add_(context_head_importance(q[indices], ck), alpha=len(indices)/len(qp))
+            captured_heads.append(head_scores)
         if i in scoring_layers:
             # Tile means must be weighted by their question-query counts.
             layer_scores=torch.zeros_like(scores)
@@ -160,4 +169,5 @@ def probe(sparse,positions,embeddings,query_budget=16384):
         selection_stage='before_layer_0_qkv',alignment_count=len(sparse.connector.prophet_aligned)))
     if capture:
         sparse.router_arrays = (torch.stack(captured), eligible.detach().clone(), local_mean)
+        sparse.router_head_arrays = torch.stack(captured_heads) if head_layers else None
     return selected

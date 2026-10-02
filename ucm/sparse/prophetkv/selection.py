@@ -47,6 +47,29 @@ def context_importance(q,k,key_tile=2048,query_tile=16):
     return result/(len(q)*q.shape[1])
 
 
+def context_head_importance(q, k, key_tile=2048, query_tile=16):
+    """Diagnostic query mean for EVERY Q head, keeping GQA head identities.
+
+    This separate, bounded FP32 pass never changes native selector arithmetic.
+    It runs only for the eight explicitly requested feature-capture layers.
+    """
+    if q.ndim != 3 or k.ndim != 3 or not len(q) or not len(k) or q.shape[-1] != k.shape[-1] or q.shape[1] % k.shape[1]:
+        raise ValueError('Invalid grouped-query shapes')
+    groups = q.shape[1]//k.shape[1]
+    result = torch.zeros((q.shape[1], len(k)), device=q.device, dtype=torch.float32)
+    for h in range(k.shape[1]):
+        for a in range(0, len(q), query_tile):
+            query = q[a:a+query_tile, h*groups:(h+1)*groups].float().transpose(0, 1)
+            lse = torch.full(query.shape[:2], -float('inf'), device=q.device)
+            for b in range(0, len(k), key_tile):
+                logits = (query@k[b:b+key_tile, h].float().T)/math.sqrt(q.shape[-1])
+                lse = torch.logaddexp(lse, torch.logsumexp(logits, -1))
+            for b in range(0, len(k), key_tile):
+                logits = (query@k[b:b+key_tile, h].float().T)/math.sqrt(q.shape[-1])
+                result[h*groups:(h+1)*groups, b:b+key_tile] += (logits-lse[..., None]).exp().sum(1)
+    return result/len(q)
+
+
 def select(scores,prefix,ratio):
     if not 0<=ratio<=1 or scores.ndim!=1 or not torch.isfinite(scores).all():
         raise ValueError('Invalid selection')

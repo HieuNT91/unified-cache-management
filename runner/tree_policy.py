@@ -28,9 +28,17 @@ def actions(value=None):
     return {item['id']:dict(item) for item in value}
 
 
+def feature_spec(data):
+    from runner.longbench_features import SCHEMA as LB_SCHEMA, FEATURES as LB_FEATURES, DEFINITIONS as LB_DEFINITIONS
+    if data.get('schema')==SCHEMA:return FEATURES,FEATURE_DEFINITIONS
+    if data.get('schema')==LB_SCHEMA:return LB_FEATURES,LB_DEFINITIONS
+    raise ValueError('Unsupported tree schema')
+
+
 def validate(data):
-    if (data.get('schema')!=SCHEMA or data.get('feature_names')!=list(FEATURES) or
-            data.get('feature_definitions')!=FEATURE_DEFINITIONS):raise ValueError('Unsupported tree/feature version')
+    names,definitions=feature_spec(data)
+    if (data.get('feature_names')!=list(names) or
+            data.get('feature_definitions')!=definitions):raise ValueError('Unsupported tree/feature version')
     inventory=actions(data.get('actions',[]))
     if data.get('payload_sha256')!=digest({k:v for k,v in data.items() if k!='payload_sha256'}):
         raise ValueError('Tree checksum mismatch')
@@ -45,7 +53,7 @@ def validate(data):
         if 'action' in node:
             if (set(node)!={'action','training_samples'} or node['action'] not in inventory or
                     type(node['training_samples']) is not int or node['training_samples']<1):raise ValueError('Invalid tree leaf')
-        elif (set(node)!={'feature','threshold','le','gt'} or node['feature'] not in FEATURES or
+        elif (set(node)!={'feature','threshold','le','gt'} or node['feature'] not in names or
               not number(node['threshold'])):raise ValueError('Invalid tree split')
         else:visit(node['le'],depth+1);visit(node['gt'],depth+1)
     visit(data['tree'])
@@ -62,7 +70,8 @@ def load(path):
 
 def decide(data,features):
     validate(data)
-    missing=[f for f in FEATURES if not number(features.get(f))];node=data['tree']
+    names,_=feature_spec(data)
+    missing=[f for f in names if not number(features.get(f))];node=data['tree']
     if missing:action='nocache'
     else:
         while 'feature' in node:node=node['le'] if features[node['feature']]<=node['threshold'] else node['gt']

@@ -164,6 +164,8 @@ def _compiled_leaves(tree):
 
 def train(corpus,n,output,seed=42,trainer='ruler13-v1',policy_count=3,
           action_scope='all',evaluation='heldout'):
+    if corpus.protocol.get('feature_profile'):
+        raise ValueError('Coverage-five data requires the separate portable-dataset trainer')
     from runner.corpus_training_data import training_view
     corpus=training_view(corpus,action_scope)
     if corpus.protocol.get('dataset')!='ruler' or corpus.protocol.get('kind')!='collection':raise ValueError('Only RULER corpus collections may train routers')

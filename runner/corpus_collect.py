@@ -14,8 +14,8 @@ from runner.tree_policy import actions,load
 
 
 def run_group(root,group,phase,attempt):
-    from scripts.corpus_control import verify
-    root=Path(root);protocol,rows=verify(root,hardware=False)
+    from scripts.corpus_control import load_run
+    root=Path(root);protocol,rows=load_run(root,hardware=False)
     selected=[r for r in rows if r['ordinal']%len(protocol['groups'])==group]
     cases=['nocache'] if phase=='baseline' else ['router'] if protocol['kind']=='inference' else ['probe']+[a for a in actions(protocol['actions']) if a!='nocache']
     pending=[r for r in selected if any(accepted(root,c,r,protocol) is None for c in cases)]

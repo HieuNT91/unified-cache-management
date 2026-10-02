@@ -1,0 +1,47 @@
+[
+  {
+    "id": "nocache",
+    "method": "baseline",
+    "ratio": null
+  },
+  {
+    "id": "prophetkv-1",
+    "method": "prophetkv",
+    "ratio": 0.01
+  },
+  {
+    "id": "prophetkv-5",
+    "method": "prophetkv",
+    "ratio": 0.05
+  },
+  {
+    "id": "prophetkv-10",
+    "method": "prophetkv",
+    "ratio": 0.1
+  },
+  {
+    "id": "prophetkv-20",
+    "method": "prophetkv",
+    "ratio": 0.2
+  },
+  {
+    "id": "prophetkv-30",
+    "method": "prophetkv",
+    "ratio": 0.3
+  },
+  {
+    "id": "prophetkv-40",
+    "method": "prophetkv",
+    "ratio": 0.4
+  },
+  {
+    "id": "prophetkv-50",
+    "method": "prophetkv",
+    "ratio": 0.5
+  },
+  {
+    "id": "prophetkv-60",
+    "method": "prophetkv",
+    "ratio": 0.6
+  }
+]

@@ -40,12 +40,12 @@ def reduction_matches(means,scores,prefix):
     return False
 
 
-def load_attention(folder,receipt,sample,inventory=None):
+def load_attention(folder,receipt,sample,inventory=None,head_layers=None):
     inventory=action_inventory(inventory)
     folder=Path(folder);artifacts=receipt['artifacts']
     if sorted(a['rank'] for a in artifacts)!=list(range(4)):raise ValueError('Missing/duplicate attention rank')
     prefix,end=sample['boundaries'][1],sample['boundaries'][-2]
-    layers=[];means=[];native=None
+    layers=[];means=[];native=None;heads=[]
     for item in sorted(artifacts,key=lambda a:a['rank']):
         path=relative(folder,item['path'])
         if file_hash(path)!=item['sha256']:raise ValueError('Corrupt attention archive')
@@ -68,9 +68,18 @@ def load_attention(folder,receipt,sample,inventory=None):
                 if not np.array_equal(data[action],selection(scores,prefix,definition['ratio'])):
                     raise ValueError('Selection floor/tie replay mismatch')
             layers.append(local.copy());means.append(mean.copy());native=scores.copy()
+            if head_layers is not None:
+                head=data['heads']
+                if (not np.array_equal(data['head_layers'],head_layers) or head.dtype!=np.float32
+                        or head.ndim!=3 or head.shape[0]!=len(head_layers) or head.shape[1]!=16
+                        or head.shape[2]!=end or not np.isfinite(head).all() or (head<0).any()):
+                    raise ValueError('Invalid all-head capture (Qwen3-32B TP4 requires 16 Q heads/rank)')
+                heads.append(head.copy())
     if not reduction_matches(means,native,prefix):raise ValueError('Native TP reduction cannot be replayed')
-    return dict(layers=np.stack(layers),scores=native,local_means=np.stack(means),
+    result=dict(layers=np.stack(layers),scores=native,local_means=np.stack(means),
                 selections={a:selection(native,prefix,d['ratio']) for a,d in inventory.items() if a!='nocache'})
+    if head_layers is not None:result.update(heads=np.stack(heads),head_layers=list(head_layers))
+    return result
 
 
 def match_answer(diagnostics,sample,action,attention,inventory=None):

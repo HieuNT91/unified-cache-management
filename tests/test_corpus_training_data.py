@@ -160,7 +160,7 @@ class ExtensionTrainingTests(unittest.TestCase):
             env.update(CUDA_VISIBLE_DEVICES='', PYTHON_BIN=sys.executable,
                        EXPERIMENT_DIR=str(collection.root), UCM_ENV_FILE=str(root/'empty.env'))
             (root/'empty.env').write_text('')
-            script = Path(__file__).resolve().parents[1]/'scripts/ruler_corpus.sh'
+            script = Path(__file__).resolve().parents[1]/'scripts/launcher/ruler_corpus.sh'
             run = subprocess.run(['bash', str(script), 'train', '--train-samples', '13', '--policy-count', '1',
                                   '--output', str(root/'cli-training')], cwd='/tmp', env=env, capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stderr)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Remote A800 configure/verify/detach/resume/status; no benchmark runtime dependency."""
+"""Remote A800 configure/detach/resume/stop/status; no benchmark dependency."""
 import argparse
 import csv
 import fcntl
@@ -18,7 +18,7 @@ from runner.setups import atomic_json,file_hash,fingerprint
 from runner.router_policy import load_policy
 from runner.router_process import identity,alive,group_alive
 from runner.router_sweep import CASES,accepted
-from scripts.router_inputs import COHORT,load_spec,verify_prepared,prepare
+from scripts.router_inputs import load_prepared,prepare
 
 
 def groups(a,b):
@@ -55,24 +55,14 @@ def configure(args):
     print('Configured native router workflow; no inference launched.',flush=True)
 
 
-def verify(root, publish=True):
+def load_run(root, publish=True):
     root=Path(root);settings=json.loads((root/'settings.json').read_text())
     if settings['code']!=code_hashes() or settings['cohort_sha256']!=fingerprint('rpkv-original-ruler-13x500-seed42'):
         raise ValueError('Configured code/cohort changed; review before using a new experiment directory')
-    rows=verify_prepared(settings['prepared'])
-    spec=json.loads((Path(settings['prepared'])/'spec.json').read_text())
-    for name,expected in spec['tokenizer_hashes'].items():
-        if file_hash(Path(settings['model'])/name)!=expected:raise ValueError('Model/tokenizer fingerprint mismatch')
-    index=json.loads((Path(settings['model'])/'model.safetensors.index.json').read_text())
-    if not all((Path(settings['model'])/name).is_file() for name in set(index['weight_map'].values())):
-        raise ValueError('Missing local model shards')
-    from importlib.metadata import version
-    from runner.config import VERSIONS
-    if any(version(name).split('+')[0]!=expected for name,expected in VERSIONS.items()):
-        raise ValueError('Install the clean README pinned runtime versions')
+    rows=load_prepared(settings['prepared'])
     policy=load_policy(settings['policy'])
     from runner.layout import PROMPT_PROTOCOL
-    from scripts.ruler_64000 import EVALUATION_PROTOCOL
+    from scripts.ruler import EVALUATION_PROTOCOL
     if policy.get('prompt_protocol') != PROMPT_PROTOCOL or policy.get('evaluation_protocol') != EVALUATION_PROTOCOL:
         raise ValueError('Policy protocol is incompatible; no automatic refit or historical policy reuse')
     protocol={k:v for k,v in settings.items() if k not in ('policy','ruler')}
@@ -86,8 +76,6 @@ def verify(root, publish=True):
         (root/'trees.json').write_bytes(Path(settings['policy']).read_bytes())
         (root/'trees.json.sha256').write_text(protocol['policy_sha256']+'  trees.json\n')
         atomic_json(root/'protocol.json',protocol)
-    for case in CASES:
-        for row in rows:accepted(root,case,row,protocol)
     return protocol,rows
 
 
@@ -123,7 +111,7 @@ def detach(root, resume=False):
         idle(root)
         if (root/'final-validation.json').exists():raise ValueError('Completed scope cannot be restarted')
         if not resume and (root/'supervisor.json').exists():raise ValueError('Existing attempt; use resume for missing records')
-        protocol,_=verify(root);check_hardware(protocol)
+        protocol,_=load_run(root);check_hardware(protocol)
         command=['nohup',sys.executable,'-u',str(Path(__file__).resolve()),'supervise','--root',str(root)]
         # A short-lived CPU launcher exits before verification, so the supervisor
         # is genuinely reparented rather than depending on this CLI process.
@@ -224,7 +212,7 @@ def supervise(root):
             atomic_json(root/'processes'/f'{case}-group{group}-{attempt}.json',receipt)
             running[group]=(child,receipt,time.monotonic())
         try:
-            protocol,rows=verify(root)
+            protocol,rows=load_run(root)
             cleanup_caches(root,protocol)
             for case in CASES:
                 state.update(case=case);atomic_json(root/'supervisor.json',state)
@@ -291,7 +279,7 @@ def status(root,same_count=False):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('command',choices=('configure','prepare','verify','detach','resume','status','status_same_count','supervise','report'))
+    p.add_argument('command',choices=('configure','prepare','detach','resume','stop','status','status_same_count','supervise','report'))
     p.add_argument('--root',type=Path,required=True)
     for name in ('model','prepared','policy','cache-root','ruler'):p.add_argument('--'+name,type=Path)
     p.add_argument('--gpu-a');p.add_argument('--gpu-b');p.add_argument('--workers',type=int,default=8)
@@ -302,8 +290,10 @@ def main():
     if a.command=='configure':configure(a)
     elif a.command=='prepare':
         s=json.loads((a.root/'settings.json').read_text());prepare(Path(s['ruler']),Path(s['model']),Path(s['prepared']),a.workers)
-    elif a.command=='verify':verify(a.root);print('Verified frozen original inputs, three policies and native code; no inference launched.')
     elif a.command in ('detach','resume'):detach(a.root,a.command=='resume')
+    elif a.command=='stop':
+        from scripts.launcher_stop import stop
+        stop(a.root, Path(__file__).name)
     elif a.command=='supervise':supervise(a.root)
     elif a.command in ('status','status_same_count'):status(a.root,a.command=='status_same_count')
     else:

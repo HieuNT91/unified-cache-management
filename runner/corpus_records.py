@@ -7,6 +7,16 @@ from runner.corpus import relative
 from runner.setups import atomic_json,file_hash,fingerprint
 from runner.tree_policy import actions
 
+NATIVE_ANSWER_VALIDATION = 'native-answer-diagnostics-v1'
+PROBE_ANSWER_VALIDATION = 'independent-probe-replay-v1'
+
+
+def answer_validation(protocol):
+    mode=protocol.get('answer_validation',PROBE_ANSWER_VALIDATION)
+    if mode not in (NATIVE_ANSWER_VALIDATION,PROBE_ANSWER_VALIDATION):
+        raise ValueError('Unknown answer validation protocol')
+    return mode
+
 
 def record_dir(root,case,prompt_id):
     if any(not isinstance(s,str) or not re.fullmatch('[a-zA-Z0-9_-]+',s) for s in (case,prompt_id)):
@@ -20,6 +30,9 @@ def protocol_identity(protocol):
 
 
 def accepted(root,case,row,protocol,prepared=None,full=False):
+    mode=answer_validation(protocol)
+    if mode==NATIVE_ANSWER_VALIDATION and case in ('probe','router'):
+        raise ValueError('Native answer controls do not use independent probes or routers')
     folder=record_dir(root,case,row['id']);path=folder/'validated.json'
     if not path.exists():return None
     saved=json.loads(path.read_text())
@@ -28,8 +41,10 @@ def accepted(root,case,row,protocol,prepared=None,full=False):
     if not {'result.json','diagnostics.json'}<=set(saved['files']):raise ValueError('Incomplete receipt')
     for name,expected in saved['files'].items():
         artifact=relative(folder,name)
-        if not artifact.is_file() or file_hash(artifact)!=expected:raise ValueError('Corrupt accepted artifact: '+name)
+        if not artifact.is_file() or ((full or name=='result.json') and file_hash(artifact)!=expected):raise ValueError('Corrupt accepted artifact: '+name)
     result=json.loads((folder/'result.json').read_text())
+    if result.get('answer_validation',PROBE_ANSWER_VALIDATION)!=mode:
+        raise ValueError('Accepted answer validation mode changed')
     group=row['ordinal']%len(protocol['groups'])
     if (result['prompt_id']!=row['id'] or result['method']!=case or result['input_sha256']!=row['sha256'] or
             result['group']!=group or result['gpu_uuids']!=protocol['groups'][group] or not result['cache_immutable']):
@@ -51,7 +66,7 @@ def accepted(root,case,row,protocol,prepared=None,full=False):
             raise ValueError('Baseline is not connector-free')
     if any(not isinstance(t,(int,float)) or not math.isfinite(t) or t<0 for t in result['timings'].values()):
         raise ValueError('Invalid timing')
-    if case=='router':validate_routed(root,folder,row,protocol,result)
+    if full and case=='router':validate_routed(root,folder,row,protocol,result)
     if full and case!='router':
         from run import verify_diagnostics
         from runner.corpus import load_attention,match_answer
@@ -59,8 +74,10 @@ def accepted(root,case,row,protocol,prepared=None,full=False):
         ds=json.loads((folder/'diagnostics.json').read_text())
         definition=dict(method='prophetkv',ratio=.01) if case=='probe' else actions(protocol['actions'])[case]
         verify_diagnostics(ds,sample,definition['method'],definition['ratio'],4,range(64))
-        if case=='probe':load_attention(folder,result,sample,protocol['actions'])
-        elif case!='nocache':
+        if case=='probe':
+            heads=protocol.get('feature_profile',{}).get('head_layers')
+            load_attention(folder,result,sample,protocol['actions'],heads)
+        elif case!='nocache' and mode==PROBE_ANSWER_VALIDATION:
             probe=accepted(root,'probe',row,protocol,prepared)
             if probe is None:raise ValueError('Missing independent probe')
             attention=load_attention(record_dir(root,'probe',row['id']),probe,sample,protocol['actions'])

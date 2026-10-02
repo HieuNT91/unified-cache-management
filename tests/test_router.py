@@ -104,7 +104,7 @@ class PolicyTests(unittest.TestCase):
     def test_export_refuses_unfinished_training(self):
         from runner.router_export import export
         with tempfile.TemporaryDirectory() as td:
-            with self.assertRaises(FileNotFoundError):export(td,Path(td)/'never.json',ROOT/'scripts/router_cohort.json')
+            with self.assertRaises(FileNotFoundError):export(td,Path(td)/'never.json',Path(td)/'cohort.json')
             self.assertFalse((Path(td)/'never.json').exists())
 
 
@@ -216,8 +216,8 @@ class WorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);fake=root/'python';fake.write_text('#!/bin/bash\nprintf "%s\\n" "$@"\n');fake.chmod(0o755)
             envfile=root/'.env';envfile.write_text(f'PYTHON_BIN="{fake}"\nEXPERIMENT_DIR="{root}/old"\nPREPARED_DIR="$EXPERIMENT_DIR/prepared"\n')
-            for command in ('configure','prepare','verify','detach','resume','status'):
-                proc=subprocess.run(['bash',str(ROOT/'scripts/a800_router.sh'),command],cwd='/tmp',
+            for command in ('configure','prepare','detach','resume','status'):
+                proc=subprocess.run(['bash',str(ROOT/'scripts/launcher/a800_router.sh'),command],cwd='/tmp',
                     env=dict(os.environ,UCM_ENV_FILE=str(envfile),EXPERIMENT_DIR=str(root/'new')),capture_output=True,text=True,check=True)
                 self.assertIn(str(root/'new/prepared'),proc.stdout)
                 self.assertIn(command,proc.stdout)
@@ -323,7 +323,7 @@ class NativeExecutionTests(unittest.TestCase):
                 return NS(num_cached_tokens=0 if not engine.current['cached'] or rid.endswith('|router-dense') else 64,
                           outputs=[NS(token_ids=[7],text='answer',finish_reason='stop')]),.02,.04
             with patch.dict(sys.modules,{'runner.worker':worker}),patch.object(sweep,'start_engine',side_effect=start), \
-                 patch.object(sweep,'check_environment',return_value=['GPU-a']*4),patch('scripts.router_inputs.verify_prepared',return_value=[row]), \
+                 patch.object(sweep,'check_environment',return_value=['GPU-a']*4),patch('scripts.router_inputs.load_prepared',return_value=[row]), \
                  patch.object(sweep,'PromptCache',Cache),patch('runner.cache.wait_for_cache',return_value={'verified_shards':8}), \
                  patch('run.generate',side_effect=generate),patch('run.verify_diagnostics'):
                 for case in CASES:sweep.run_group(root,0,case,'fixture')
@@ -351,7 +351,7 @@ class NativeExecutionTests(unittest.TestCase):
                     return Child(failure if len(starts)==1 else 0)
                 protocol=dict(groups=[['GPU-a']*4,['GPU-b']*4],cache_root=str(root/'cache'))
                 rows=[dict(id='a',ordinal=0),dict(id='b',ordinal=1)]
-                with patch.object(control,'verify',return_value=(protocol,rows)),patch.object(control,'accepted',return_value=None), \
+                with patch.object(control,'load_run',return_value=(protocol,rows)),patch.object(control,'accepted',return_value=None), \
                      patch.object(control.subprocess,'Popen',side_effect=launch),patch.object(control,'identity',return_value={'start':'1','cmd':'00'}), \
                      patch.object(control,'group_alive',return_value=False),patch.object(control,'terminate_owned'), \
                      patch.object(control.signal,'signal'),patch.object(control.time,'sleep'),patch('runner.router_report.finalize') as final:
@@ -431,7 +431,7 @@ class ExportAndWatchdogTests(unittest.TestCase):
                 def wait(self,**kwargs):return 75
             def launch(*args,**kwargs):starts.append(args);return Child()
             ticks=iter(range(0,100000,1000))
-            with patch.object(control,'verify',return_value=({'groups':[['GPU-a']*4,['GPU-b']*4],'cache_root':str(Path(td)/'cache')},[dict(id='a',ordinal=0)])), \
+            with patch.object(control,'load_run',return_value=({'groups':[['GPU-a']*4,['GPU-b']*4],'cache_root':str(Path(td)/'cache')},[dict(id='a',ordinal=0)])), \
                  patch.object(control,'accepted',return_value=None),patch.object(control.subprocess,'Popen',side_effect=launch), \
                  patch.object(control,'identity',return_value={'start':'1','cmd':'00'}),patch.object(control,'group_alive',return_value=False), \
                  patch.object(control,'terminate_owned') as stop,patch.object(control.signal,'signal'), \

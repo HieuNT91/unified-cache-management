@@ -118,6 +118,8 @@ def retire(worker):
         sparse.active = False
         sparse.router_capture = False
         sparse.router_arrays = None
+        sparse.router_head_layers = ()
+        sparse.router_head_arrays = None
         sparse.router_native_layers = set()
         connector.router_dense_id = None
         connector.store.router_dense = False

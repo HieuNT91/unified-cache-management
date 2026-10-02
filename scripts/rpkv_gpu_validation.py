@@ -14,10 +14,11 @@ import uuid
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from runner.setups import atomic_json,file_hash,runtime_identity
-from runner.corpus_records import accepted,publish,record_dir
+from runner.corpus_records import accepted,publish,answer_validation,NATIVE_ANSWER_VALIDATION
 from runner.router_process import identity,group_alive
 from scripts.router_control import environment,terminate_owned,cleanup_caches
 from scripts.corpus_control import check_hardware
+from runner.result_comparison import load_reference,compare_result,summarize as comparison_summary
 
 
 def read(path):return json.loads(Path(path).read_text())
@@ -28,27 +29,33 @@ def progress(root,message):
     print(message,flush=True)
 
 
-def verify(root):
+def load_run(root):
     protocol=read(root/'protocol.json');rows=read(root/'rows.json')
+    if answer_validation(protocol)!=NATIVE_ANSWER_VALIDATION:
+        raise ValueError('New fixed controls require answer_validation=native-answer-diagnostics-v1; retain old runs with their frozen code')
     current=runtime_identity()
     if current!=protocol['runtime']:raise ValueError('Runtime changed; retain this attempt before an explicit migration')
-    for row in rows:
-        if file_hash(Path(protocol['prepared'])/row['prepared'])!=row['sha256']:raise ValueError('Input changed')
+    if 'experiment_sha256' in protocol:
+        from scripts.rpkv_gpu_results import expected_scope,validate_rows
+        base=root.parent.parent
+        if file_hash(base/'experiment.json')!=protocol['experiment_sha256']:raise ValueError('Experiment scope changed')
+        if file_hash(root/'rows.json')!=protocol['rows_sha256']:raise ValueError('Cohort inventory changed')
+        if file_hash(Path(__file__))!=protocol['driver_sha256']:raise ValueError('Control driver changed')
+        validate_rows(protocol['dataset'],rows,expected_scope(base))
     return protocol,rows
 
 
 def report(root,final=False):
     from runner.reporting import metrics
-    protocol,rows=verify(root);result={};tasks=sorted({r['subtask'] for r in rows})
+    protocol,rows=load_run(root);result={};tasks=sorted({r['subtask'] for r in rows})
     for action in protocol['actions']:
         records=[accepted(root,action['id'],row,protocol) for row in rows]
         records=[r for r in records if r is not None]
-        result[action['id']]=dict(overall=metrics(records,len(rows)),tasks={t:metrics([r for r in records if r['subtask']==t],sum(r['subtask']==t for r in rows)) for t in tasks})
+        result[action['id']]=dict(overall=metrics(records,len(rows)),comparison=comparison_summary(records),tasks={t:metrics([r for r in records if r['subtask']==t],sum(r['subtask']==t for r in rows)) for t in tasks})
         if final and len(records)!=len(rows):raise ValueError('Cannot finalize incomplete answers')
-    probes=sum(accepted(root,'probe',row,protocol) is not None for row in rows)
-    if final and probes!=len(rows):raise ValueError('Cannot finalize incomplete probes')
-    value=dict(dataset=protocol['dataset'],final=final,actions=result,probes=probes,
-        definition='TTFT includes request metadata and TP action synchronization, excludes separate cache construction/readiness/priming and independent diagnostic probe; lengths are generated content tokens, controls separate.')
+    if any((root/'records/probe').glob('*/validated.json')):raise ValueError('Unexpected independent probe in native answer controls')
+    value=dict(dataset=protocol['dataset'],final=final,actions=result,probes=0,answer_validation=NATIVE_ANSWER_VALIDATION,
+        definition='TTFT includes request metadata, TP action synchronization and native ProphetKV selection, excludes separate cache construction/readiness/priming. No independent diagnostic probes; lengths are generated content tokens, controls separate.')
     atomic_json(root/'report.json',value)
     lines=['# rpkv GPU controls', '',value['definition'],'','| Task | Method | N | Accuracy % | TTFT s | Thinking tokens | Answer tokens | Capped |','|---|---|---:|---:|---:|---:|---:|---:|']
     csvrows=[]
@@ -58,6 +65,11 @@ def report(root,final=False):
             m=data['overall'] if task=='overall' else data['tasks'][task]
             lines.append(f"| {task} | {action} | {m['completed']}/{m['expected']} | {fmt(m['accuracy_percent'])} | {fmt(m['mean_ttft_seconds'])} | {fmt(m['mean_thinking_tokens'])} | {fmt(m['mean_answer_tokens'])} | {m['output_cap_reached']} |")
             csvrows.append(dict(task=task,method=action,**m))
+    if protocol.get('comparison_reference'):
+        lines+=['','Historical comparison on identical input tokens (timing excluded):','',
+            '| Method | Compared | Exact matches | Differences | Incompatible | New inputs |','|---|---:|---:|---:|---:|---:|']
+        for action,data in result.items():
+            c=data['comparison'];lines.append(f"| {action} | {c['compared']} | {c['matched']} | {c['different']} | {c['incompatible']} | {c['new_inputs']} |")
     (root/'report.md').write_text('\n'.join(lines)+'\n')
     with (root/'report.csv').open('w') as stream:
         writer=csv.DictWriter(stream,fieldnames=list(csvrows[0]));writer.writeheader();writer.writerows(csvrows)
@@ -66,25 +78,21 @@ def report(root,final=False):
 
 def worker(root,phase,attempt):
     from runner.corpus_runtime import Engine
-    from runner.corpus import load_attention
     from runner.setups import check_environment
-    protocol,rows=verify(root);check_environment(4)
+    protocol,rows=load_run(root);check_environment(4)
+    reference=load_reference(protocol)
     inventory=protocol['actions'][:1] if phase=='baseline' else protocol['actions'][1:]
     remaining=[r for r in rows if any(accepted(root,a['id'],r,protocol) is None for a in inventory)]
     if not remaining:return
     engine=Engine(root,protocol,0,phase,attempt,remaining)
     try:
         for row in remaining:
-            progress(root,f"{phase} starting {row['id']}");engine.begin(row);attention=None
-            if phase=='cached':
-                folder=record_dir(root,'probe',row['id']);probe=accepted(root,'probe',row,protocol)
-                if probe is None:
-                    probe,ds,attention=engine.probe(folder);publish(root,'probe',row,protocol,probe,ds)
-                else:attention=load_attention(folder,probe,engine.sample,protocol['actions'])
+            progress(root,f"{phase} starting {row['id']}");engine.begin(row)
             for action in inventory:
                 if accepted(root,action['id'],row,protocol) is not None:continue
-                result,ds=engine.answer(action,action['id'],attention)
+                result,ds=engine.answer(action,action['id'])
                 if protocol['dataset']=='ruler' and result['thinking_tokens']!=0:raise ValueError('RULER unexpectedly generated thinking')
+                if reference is not None:result['historical_comparison']=compare_result(result,reference)
                 publish(root,action['id'],row,protocol,result,ds)
                 progress(root,f"{action['id']} accepted {row['id']}")
             deletion=engine.end();atomic_json(root/'deletions'/f'{phase}-{row["id"]}.json',deletion)
@@ -96,7 +104,7 @@ def supervise(root):
     signal.signal(signal.SIGHUP,signal.SIG_IGN)
     with (root/'run.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        protocol,rows=verify(root)
+        protocol,rows=load_run(root)
         state=dict(pid=os.getpid(),identity=identity(os.getpid()),state='running',started_at=time.time())
         atomic_json(root/'supervisor.json',state)
         try:
@@ -123,7 +131,7 @@ def supervise(root):
                 cleanup_caches(root,protocol)
                 if child.returncode:raise RuntimeError(f'{phase} failed ({child.returncode}); inspect preserved log')
             report(root,True);state.update(state='complete',finished_at=time.time())
-            atomic_json(root/'complete.json',dict(answers=3*len(rows),probes=len(rows),owned_engines_exited=True))
+            atomic_json(root/'complete.json',dict(answers=3*len(rows),probes=0,answer_validation=NATIVE_ANSWER_VALIDATION,owned_engines_exited=True))
         except BaseException as error:
             state.update(state='failed',error=str(error),finished_at=time.time());raise
         finally:atomic_json(root/'supervisor.json',state)
