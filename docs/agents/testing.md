@@ -83,3 +83,14 @@ new GPU validation at that update. The earlier five-sample GPU controls complete
 its original 540 probes. Neither establishes every opt-in edge case or validates
 later source changes. Read [study receipts](../studies/rpkv-controls.md) and current
 package validation files before making a stronger claim.
+
+## TP2 collection and portable trainer (2026-10-02)
+
+The complete CPU regression suite passed258 tests after TP2/training integration.
+After final checksum recovery, input-overlap accounting and boundary/report edits,
+all8 focused portable-training tests passed (including full synthetic1300/503/1803
+cohorts with a reduced hyperparameter grid). The TP2-focused9 tests cover warmup,
+exact reduction/head coverage, resource checks, sharding, late extra configuration
+and failure cleanup. Shell syntax, Python compilation, CLI help and diff checks
+passed. No GPU experiment, real-data fit, push, SSH or remote deployment ran.
+See [the workflow guide](../deployment/A800_LONGBENCH_DATA.md).

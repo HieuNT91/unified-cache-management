@@ -55,7 +55,7 @@ def fit_tree(x,y,setting,cost_labels=None):
         if cost_labels is not None:node['action']=int(np.argmin(cost_labels[indices].mean(0)))
         if depth==setting['depth'] or len(indices)<2*minimum:return node
         best=None;best_order=None
-        for feature in range(len(FEATURES)):
+        for feature in range(x.shape[1]):
             order=indices[np.argsort(x[indices,feature],kind='stable')];v=x[order,feature]
             z=y[order] if cost_labels is None else cost_labels[order]
             sums=z.cumsum(0);squares=(z*z).cumsum(0)
@@ -119,16 +119,25 @@ def rank(table,count=3):
     raise ValueError('Requested more policies than settings')
 
 
-def search(samples,features,scores,times,overhead,inventory,seed=42,count=3):
+def search(samples,features,scores,times,overhead,inventory,seed=42,count=3,*,
+           feature_names=FEATURES,folds=None,score_weighting='task'):
     definitions=actions(inventory);names=list(definitions);dense=names.index('nocache');sparse=[i for i in range(len(names)) if i!=dense]
     scores=np.asarray(scores,float);times=np.asarray(times,float);overhead=np.asarray(overhead,float);n=len(samples)
     if (scores.shape!=times.shape or scores.shape!=(n,len(names)) or overhead.shape!=(n,) or len(features)!=n or
             not np.isfinite(scores).all() or (scores<0).any() or (scores>1).any() or not np.isfinite(times).all() or
             (times<=0).any() or not np.isfinite(overhead).all() or (overhead<0).any()):raise ValueError('Invalid training outcome matrix')
-    missing=np.array([any(not number(row.get(f)) for f in FEATURES) for row in features])
-    x=np.array([[row[f] if number(row.get(f)) else 0. for f in FEATURES] for row in features])
-    y=np.maximum(0,scores[:,[dense]]-scores[:,sparse]);folds=fold_ids(samples,seed)
-    baseline=macro(scores[:,dense],samples);table=[];cache={}
+    missing=np.array([any(not number(row.get(f)) for f in feature_names) for row in features])
+    x=np.array([[row[f] if number(row.get(f)) else 0. for f in feature_names] for row in features])
+    if score_weighting not in ('task','prompt'):
+        raise ValueError('Unknown training score weighting')
+    metric = (lambda values: float(np.mean(values))) if score_weighting=='prompt' else (lambda values: macro(values,samples))
+    y=np.maximum(0,scores[:,[dense]]-scores[:,sparse])
+    folds=fold_ids(samples,seed) if folds is None else np.asarray(folds)
+    if folds.shape!=(n,) or not np.issubdtype(folds.dtype,np.integer) or set(folds)!=set(range(5)):
+        raise ValueError('Five nonempty integer prompt folds required')
+    if len({r['id'] for r in samples})!=n:
+        raise ValueError('Duplicate training prompt')
+    baseline=metric(scores[:,dense]);table=[];cache={}
     for index,h in enumerate(GRID):
         decisions=np.empty(n,int);statistics=[];leaves=0
         for fold in range(5):
@@ -139,10 +148,10 @@ def search(samples,features,scores,times,overhead,inventory,seed=42,count=3):
             statistics.append(dict(fold=fold,train_ids=[samples[i]['id'] for i in tr],validation_ids=[samples[i]['id'] for i in va],
                                    costs=costs.tolist(),dense_median=norm,shrinkage_prior=y[tr].mean(0).tolist()))
             for i in va:decisions[i]=dense if missing[i] else choose(leaf(tree,x[i]),costs,h,dense,sparse)
-        score=macro(scores[np.arange(n),decisions],samples)
+        score=metric(scores[np.arange(n),decisions])
         elapsed=times[np.arange(n),decisions]+overhead
         speed=float(times[:,dense].mean()/elapsed.mean())
-        table.append(dict(h,index=index,macro_score=score,macro_loss=baseline-score,mean_total_ttft=float(elapsed.mean()),
+        table.append(dict(h,index=index,score_weighting=score_weighting,macro_score=score,macro_loss=baseline-score,mean_total_ttft=float(elapsed.mean()),
             speedup=speed,leaf_count=leaves,feasible=bool(baseline-score<=.02+1e-12 and speed>=4.-1e-12),
             oof_actions=decisions.tolist(),fold_statistics=statistics))
     selected=rank(table,count);policies=[]
@@ -150,7 +159,7 @@ def search(samples,features,scores,times,overhead,inventory,seed=42,count=3):
         h=GRID[winner['index']];raw,costs,norm=fit(x,y,times,overhead,h,dense,sparse)
         def compile_node(node):
             if 'feature' not in node:return dict(action=names[choose(node,costs,h,dense,sparse)],training_samples=node['n'])
-            return dict(feature=FEATURES[node['feature']],threshold=node['threshold'],le=compile_node(node['left']),gt=compile_node(node['right']))
+            return dict(feature=feature_names[node['feature']],threshold=node['threshold'],le=compile_node(node['left']),gt=compile_node(node['right']))
         policies.append(dict(id=f'router{index+1}',primary=index==0,tree=compile_node(raw),training_costs=costs.tolist(),
             trainer='ruler13-v1',setting=h,dense_median=norm,oof={k:v for k,v in winner.items() if k!='fold_statistics'},
             duplicate_of=[f'router{j+1}' for j,r in enumerate(selected[:index]) if r['oof_actions']==winner['oof_actions']],

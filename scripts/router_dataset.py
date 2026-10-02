@@ -3,6 +3,8 @@
 import argparse
 import json
 import math
+import re
+import fcntl
 from pathlib import Path
 import sys
 
@@ -27,6 +29,8 @@ def validate(data):
     from scripts.longbench_a800_data import ACTIONS
     if data.get('actions') != ACTIONS:
         raise ValueError('Portable training requires all 12 canonical measured actions')
+    if data.get('provenance', {}).get('tp') != 2 or data['provenance'].get('seed') != 42:
+        raise ValueError('Portable collection must declare TP2 and seed42')
     inventory = actions(data['actions']); rows = data['rows']
     if not rows or len({r['id'] for r in rows}) != len(rows):
         raise ValueError('Empty/duplicate dataset membership')
@@ -37,6 +41,8 @@ def validate(data):
         from collections import Counter
         if len(rows) != 1300 or Counter(r['subtask'] for r in rows) != Counter({t: 100 for t in TASKS}):
             raise ValueError('RULER data must contain all 13x100 prompts')
+    if data['dataset'] == 'longbench-v2' and len({r.get('source_id') for r in rows}) != 503:
+        raise ValueError('LongBench source identities must be unique')
     for row in rows:
         if (row['dataset'] != data['dataset'] or set(row['features']) != set(FEATURES)
                 or set(row['outcomes']) != set(inventory)):
@@ -46,20 +52,39 @@ def validate(data):
                 raise ValueError('Feature must be null or finite attention coverage/agreement')
         if not math.isfinite(row['probe_overhead_seconds']) or row['probe_overhead_seconds'] < 0:
             raise ValueError('Invalid probe overhead')
-        if not row.get('source_pins') or not row.get('input_sha256') or not row.get('subtask'):
+        if (not row.get('source_pins') or not re.fullmatch('[0-9a-f]{64}', row.get('input_sha256', ''))
+                or not row.get('subtask') or any(not re.fullmatch('[0-9a-f]{64}', v) for v in row['source_pins'].values())):
             raise ValueError('Missing input/measurement provenance')
         if row['dataset'] == 'longbench-v2' and row.get('length') not in ('short', 'medium', 'long'):
             raise ValueError('Missing official LongBench length label')
+        devices = []
         for value in row['outcomes'].values():
+            gpu = value.get('gpu_uuids', [])
+            if len(gpu) != 2 or len(set(gpu)) != 2 or any(not re.fullmatch(r'GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', g) for g in gpu):
+                raise ValueError('Each outcome must preserve its TP2 GPU identities')
+            devices.append(tuple(gpu))
             if (not math.isfinite(value['accuracy']) or not 0 <= value['accuracy'] <= 1
                     or not math.isfinite(value['ttft_seconds']) or value['ttft_seconds'] <= 0):
                 raise ValueError('Invalid measured outcome')
+        if data['dataset'] == 'ruler' and len(set(devices)) != 1:
+            raise ValueError('RULER actions of one prompt must share a TP2 pair')
+        if data['dataset'] == 'longbench-v2':
+            from scripts.longbench_a800_data import SCHEDULE
+            pairs = []
+            for role in ('primary', 'extra'):
+                current = {tuple(row['outcomes'][a]['gpu_uuids']) for a in SCHEDULE[role]}
+                if len(current) != 1:
+                    raise ValueError('A800 role actions of one prompt must share a TP2 pair')
+                pairs.append(next(iter(current)))
+            if set(pairs[0]) & set(pairs[1]):
+                raise ValueError('A800 primary and extra pairs must be disjoint')
     return data
 
 
 def load(path):
     path = Path(path); sidecar = Path(str(path)+'.sha256')
-    if not sidecar.is_file() or sidecar.read_text().split()[0] != file_hash(path):
+    words = sidecar.read_text().split() if sidecar.is_file() else []
+    if not words or words[0] != file_hash(path):
         raise ValueError('Missing or changed portable dataset checksum')
     return validate(json.loads(path.read_text()))
 
@@ -69,13 +94,21 @@ def save(path, dataset, inventory, rows, provenance):
                  feature_names=list(FEATURES), feature_definitions=DEFINITIONS,
                  actions=inventory, rows=rows, provenance=provenance)
     value['payload_sha256'] = fingerprint(value); validate(value)
-    path = Path(path)
-    if path.exists():
-        if load(path) != value:
-            raise FileExistsError('Portable dataset is immutable; choose another output path')
-        return value
-    atomic_json(path, value)
-    Path(str(path)+'.sha256').write_text(file_hash(path)+'  '+path.name+'\n')
+    path = Path(path); path.parent.mkdir(parents=True, exist_ok=True)
+    with Path(str(path)+'.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        sidecar = Path(str(path)+'.sha256')
+        if path.exists():
+            # Recover only a missing checksum after an interrupted atomic export.
+            prior = load(path) if sidecar.exists() else validate(json.loads(path.read_text()))
+            if prior != value:
+                raise FileExistsError('Portable dataset is immutable; choose another output path')
+            if sidecar.exists():
+                return value
+        else:
+            atomic_json(path, value)
+        temporary = Path(str(sidecar)+'.tmp')
+        temporary.write_text(file_hash(path)+'  '+path.name+'\n'); temporary.replace(sidecar)
     return value
 
 

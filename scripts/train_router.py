@@ -11,7 +11,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.router_dataset import load as load_dataset
-from scripts.longbench_a800_data import assign_folds, LENGTHS
+from scripts.longbench_a800_data import assign_folds, LENGTHS, ACTIONS
 from runner.longbench_features import FEATURES, DEFINITIONS, SCHEMA
 from runner.layout import PROMPT_PROTOCOL
 from runner.setups import atomic_json, file_hash, fingerprint
@@ -33,8 +33,8 @@ def select_data(mode, ruler=None, longbench=None, requested=('common',)):
     inventories = {name: actions(b['actions']) for name, b in bundles.items()}
     common = set.intersection(*(set(a) for a in inventories.values()))
     selected = common if list(requested) == ['common'] else set(requested)
-    if not selected <= common or 'nocache' not in selected or len(selected) < 2:
-        raise ValueError(f'Need nocache and at least one sparse action measured in every selected dataset; common actions: {sorted(common)}')
+    if selected != set(a['id'] for a in ACTIONS) or selected != common:
+        raise ValueError('Training requires the complete canonical 12-action inventory; no subset or silent intersection')
     first = next(iter(inventories.values()))
     inventory = sorted((first[name] for name in selected), key=lambda a: (-1 if a['ratio'] is None else a['ratio']))
     for name in selected:
@@ -45,7 +45,8 @@ def select_data(mode, ruler=None, longbench=None, requested=('common',)):
         raise ValueError('Duplicate training identity')
     metadata = dict(mode=mode, dataset_hashes={n: b['payload_sha256'] for n, b in bundles.items()},
                     actions=inventory, excluded_actions={n: sorted(set(a)-selected) for n, a in inventories.items()},
-                    evaluation='training', training_overlap=True,
+                    evaluation='training', training_overlap=True, weighting='equal-prompt',
+                    cost_normalization='(answer TTFT + probe overhead) / same-prompt nocache TTFT',
                     interpretation='All selected samples are used for fitting and resubstitution evaluation; no held-out performance claim',
                     timing='Offline fixed-action TTFT plus measured feature-probe overhead, not fresh router inference. Source hardware and sessions can differ.')
     return rows, inventory, metadata
@@ -54,17 +55,22 @@ def select_data(mode, ruler=None, longbench=None, requested=('common',)):
 def evaluate(tree, rows):
     decisions = []
     trained = set(tree['training_ids'])
+    if tree.get('prompt_protocol') != PROMPT_PROTOCOL:
+        raise ValueError('Tree prompt protocol is incompatible')
     for row in rows:
         decision = decide(tree, row['features']); case = decision['action']
         if case not in row['outcomes']:
             raise ValueError(f'Missing measured outcome for selected action: {case}')
         outcome, baseline = row['outcomes'][case], row['outcomes']['nocache']
         decisions.append(dict(sample_id=row['sample_id'], dataset=row['dataset'], task=row['subtask'],
-            length=row.get('length'), training_overlap=row['sample_id'] in trained,
+            length=row.get('length'), training_overlap=(row['sample_id'] in trained and
+                tree.get('training_input_hashes', {}).get(row['sample_id'], row['input_sha256']) == row['input_sha256']),
             action=case, fallback_reason=decision['fallback_reason'], accuracy=outcome['accuracy'],
             baseline_accuracy=baseline['accuracy'], answer_ttft_seconds=outcome['ttft_seconds'],
             estimated_router_ttft_seconds=outcome['ttft_seconds']+row['probe_overhead_seconds'],
-            baseline_ttft_seconds=baseline['ttft_seconds'], thinking_tokens=outcome['thinking_tokens'],
+            baseline_ttft_seconds=baseline['ttft_seconds'], probe_overhead_seconds=row['probe_overhead_seconds'],
+            normalized_router_cost=(outcome['ttft_seconds']+row['probe_overhead_seconds'])/baseline['ttft_seconds'],
+            thinking_tokens=outcome['thinking_tokens'],
             answer_tokens=outcome['answer_tokens'], output_cap_reached=outcome['output_cap_reached']))
     def metric(selected):
         if not selected:
@@ -76,7 +82,10 @@ def evaluate(tree, rows):
             mean_answer_ttft_seconds=mean('answer_ttft_seconds'),
             mean_estimated_router_ttft_seconds=mean('estimated_router_ttft_seconds'),
             mean_baseline_ttft_seconds=mean('baseline_ttft_seconds'),
+            mean_probe_overhead_seconds=mean('probe_overhead_seconds'),
             estimated_speedup=mean('baseline_ttft_seconds')/mean('estimated_router_ttft_seconds'),
+            mean_normalized_router_cost=mean('normalized_router_cost'),
+            normalized_estimated_speedup=1/mean('normalized_router_cost'),
             mean_thinking_tokens=mean('thinking_tokens'), mean_answer_tokens=mean('answer_tokens'),
             output_caps=sum(r['output_cap_reached'] for r in selected),
             training_overlap=sum(r['training_overlap'] for r in selected),
@@ -102,25 +111,31 @@ def train(rows, inventory, metadata, output, seed=42, policy_count=3):
     fold_values = [folds[r['sample_id']] for r in rows]
     features = [r['features'] for r in rows]; names = [a['id'] for a in inventory]
     scores = [[r['outcomes'][a]['accuracy'] for a in names] for r in rows]
-    times = [[r['outcomes'][a]['ttft_seconds'] for a in names] for r in rows]
-    overhead = [r['probe_overhead_seconds'] for r in rows]
+    # Ratios are per prompt, before any fold-local fitting. Scaling one server's
+    # entire timing trace cannot change its weight or the selected policies.
+    times = [[r['outcomes'][a]['ttft_seconds']/r['outcomes']['nocache']['ttft_seconds'] for a in names] for r in rows]
+    overhead = [r['probe_overhead_seconds']/r['outcomes']['nocache']['ttft_seconds'] for r in rows]
     atomic_json(output/'folds.json', dict(seed=seed, folds=folds, training_ids=[r['sample_id'] for r in rows], heldout_ids=[]))
     settings = dict(metadata, seed=seed, feature_names=list(FEATURES), feature_definitions=DEFINITIONS,
                     policy_count=policy_count, grid=GRID, targets=dict(macro_loss=.02, speedup=4),
-                    selection_objective='Equal task/domain macro accuracy; measured pooled mean seconds for cost and speedup')
+                    selection_objective='Equal prompt accuracy and mean per-prompt normalized total cost; OOF only',
+                    cost_units='dimensionless multiples of each prompt baseline; search mean_total_ttft is normalized cost, not seconds',
+                    score_weighting='prompt', sample_weight=1/len(rows))
     atomic_json(output/'settings.json', settings)
     policies, table, _ = search(samples, features, scores, times, overhead, inventory, seed, policy_count,
-                                 feature_names=FEATURES, folds=fold_values)
+                                 feature_names=FEATURES, folds=fold_values, score_weighting='prompt')
     atomic_json(output/'search.json', table)
     reports = {}
     for policy in policies:
         raw = policy.pop('raw_tree'); name = policy['id']
         atomic_json(output/f'{name}-fit.json', raw)
-        policy['trainer'] = 'coverage-five-v1'
+        policy['trainer'] = 'coverage-five-prompt-normalized-v2'
+        policy['training_cost_units'] = 'mean per-prompt baseline multiples including measured probe overhead'
         tree = dict(policy, schema=SCHEMA, feature_names=list(FEATURES), feature_definitions=DEFINITIONS,
                     prompt_protocol=PROMPT_PROTOCOL,
                     compatible_evaluation_protocols=list(dict.fromkeys(r.get('evaluation_protocol') for r in rows)),
-                    actions=inventory, training_ids=[r['sample_id'] for r in rows], heldout_ids=[],
+                    actions=inventory, training_ids=[r['sample_id'] for r in rows],
+                    training_input_hashes={r['sample_id']: r['input_sha256'] for r in rows}, heldout_ids=[],
                     evaluation='training', training_overlap=True,
                     provenance=dict(snapshot_sha256=file_hash(output/'data-snapshot.json'),
                         training_run_sha256=file_hash(output/'settings.json'),
@@ -129,14 +144,15 @@ def train(rows, inventory, metadata, output, seed=42, policy_count=3):
         tree = export(output/f'{name}.json', tree)
         # Verify native fit versus exported predicates at every exact boundary.
         vectors = [dict.fromkeys(FEATURES, .5), {}]
-        def boundaries(node):
+        def boundaries(node, values):
             if 'feature' not in node:
                 return
             feature = FEATURES[node['feature']]; threshold = node['threshold']
             for value in (np.nextafter(threshold, -np.inf), threshold, np.nextafter(threshold, np.inf)):
-                vectors.append(dict.fromkeys(FEATURES, .5) | {feature: float(value)})
-            boundaries(node['left']); boundaries(node['right'])
-        boundaries(raw)
+                vectors.append(dict(values) | {feature: float(value)})
+            boundaries(node['left'], dict(values) | {feature: threshold})
+            boundaries(node['right'], dict(values) | {feature: float(np.nextafter(threshold, np.inf))})
+        boundaries(raw, dict.fromkeys(FEATURES, .5))
         dense = names.index('nocache'); sparse = [i for i in range(len(names)) if i != dense]
         for vector in [*features, *vectors]:
             missing = any(vector.get(f) is None for f in FEATURES)
@@ -162,7 +178,7 @@ def main():
     parser.add_argument('--dataset', choices=('ruler', 'longbench-v2', 'both'), required=True)
     parser.add_argument('--ruler-data', type=Path); parser.add_argument('--longbench-data', type=Path)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--actions', nargs='+', default=['common'], help='common (default), or explicit measured action IDs including nocache')
+    parser.add_argument('--actions', nargs='+', default=['common'], help='All 12 measured actions are required')
     parser.add_argument('--seed', type=int, default=42); parser.add_argument('--policies', type=int, default=3)
     parser.add_argument('--tree', type=Path, help='Evaluate an existing tree only; no refit')
     args = parser.parse_args()
@@ -178,9 +194,12 @@ def main():
                         interpretation='Existing-tree evaluation without refit; overlap with original training IDs is reported per dataset')
         atomic_json(args.output/'evaluation.json', dict(result, metadata=metadata, refit=False, tree_sha256=file_hash(args.tree)))
         atomic_json(args.output/'decisions.json', decisions)
+        with (args.output/'decisions.csv').open('w') as stream:
+            writer = csv.DictWriter(stream, fieldnames=list(decisions[0])); writer.writeheader(); writer.writerows(decisions)
+        (args.output/'evaluation.txt').write_text(json.dumps(dict(result, metadata=metadata), indent=2)+'\n')
     else:
-        if not 1 <= args.policies <= len(GRID):
-            parser.error('--policies must be between 1 and the number of searched settings')
+        if args.policies != 3:
+            parser.error('This workflow exports exactly three policies')
         result = train(rows, inventory, metadata, args.output, args.seed, args.policies)
     print(json.dumps(result, indent=2))
 

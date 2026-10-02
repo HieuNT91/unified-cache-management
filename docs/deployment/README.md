@@ -4,6 +4,14 @@ Run shell commands from the worktree root. Read [AGENTS.md](../../AGENTS.md) and
 [experiment protection](../agents/experiment-rules.md) before process operations.
 This documentation move does not authorize a launch, update, stop or resume.
 
+## TP2 collection and portable training
+
+Use [TP2 A800/L20 collection and training](A800_LONGBENCH_DATA.md) for the new
+503 LongBench / 1300 RULER twelve-action scope. Launchers are
+`a800_longbench_primary.sh`, `a800_longbench_extra.sh`, `l20_ruler_data.sh` and
+`router_training.sh`; they read `.env.a800` or `.env.l20` automatically. The older
+TP4 workflow commands below remain separate and compatible.
+
 ## Current rpkv setup
 
 All shell launchers live in `scripts/launcher/`. Invoke them from the worktree

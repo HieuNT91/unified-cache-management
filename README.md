@@ -10,6 +10,12 @@ Baseline, ProphetKV, selective ProphetKV and router answers use the same prepare
 upstream generator/scorer with a native Qwen3 non-thinking adapter; LongBench v2
 keeps its own thinking, output budget and scoring protocol.
 
+For the new twelve-action **TP2 A800/L20 data collection and CPU router training**,
+follow [the deployment guide](docs/deployment/A800_LONGBENCH_DATA.md). A800 primary
+can start independently; configure extra later. The workflow automatically reads
+`.env.a800` / `.env.l20` and exports portable checksummed datasets. GPU execution
+and real-data training have not been performed for this implementation.
+
 ## Code and documentation
 
 | Path | Purpose |
