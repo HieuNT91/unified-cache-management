@@ -116,16 +116,22 @@ class TP2Tests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'cannot fit'):check_hardware(settings)
 
     def test_ruler_prepares_100_seed42_and_schedules_five_complete_shards(self):
+        self.check_ruler_preparation(100)
+
+    def test_ruler_prepares_200_seed42_and_schedules_five_complete_shards(self):
+        self.check_ruler_preparation(200)
+
+    def check_ruler_preparation(self, count):
         from scripts.ruler import TASKS
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp); prepared=base/'inputs'; prepared.mkdir()
             settings=dict(dataset='ruler',tp=2,model='/m',data='/ruler',prepared=str(prepared),
-                          cache_root=str(base/'cache'),samples_per_task=100,seed=42,code={})
+                          cache_root=str(base/'cache'),samples_per_task=count,seed=42,code={})
             atomic_json(base/'settings.json',settings)
             atomic_json(base/'ruler/devices.json',dict(groups=[[str(i),str(i+1)] for i in range(0,10,2)]))
             rows=[]; files={}
             for task in TASKS:
-                for ordinal in range(100):
+                for ordinal in range(count):
                     path=f'samples/{task}-{ordinal:03d}.json'
                     atomic_json(prepared/path,dict(token_ids=[ordinal],evaluation_protocol='test'))
                     files[path]=file_hash(prepared/path)
@@ -134,15 +140,31 @@ class TP2Tests(unittest.TestCase):
             files['manifest.jsonl']=file_hash(manifest);atomic_json(prepared/'preparation.json',dict(files=files))
             with patch('scripts.ruler.prepare') as prepare:
                 plan=data.prepare(base)
-            self.assertEqual((prepare.call_args.args[0].samples,prepare.call_args.args[0].seed),(100,42))
-            self.assertEqual((plan['answers'],plan['probes']),(15600,1300))
+            self.assertEqual((prepare.call_args.args[0].samples,prepare.call_args.args[0].seed),(count,42))
+            self.assertEqual((plan['answers'],plan['probes']),(13*count*12,13*count))
             protocol,rows=data.stage(base,'ruler')
             self.assertEqual(len(protocol['groups']),5)
             self.assertEqual(protocol['scheduled_actions'],[a['id'] for a in data.ACTIONS])
             for group in range(5):
                 subset=[r for r in rows if r['ordinal']%5==group]
-                self.assertEqual(len(subset),260)
-                self.assertTrue(all(sum(r['subtask']==t for r in subset)==20 for t in TASKS))
+                self.assertEqual(len(subset),13*count//5)
+                self.assertTrue(all(sum(r['subtask']==t for r in subset)==count//5 for t in TASKS))
+
+    def test_ruler_configure_pins_sample_count_and_rejects_scope_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            args=NS(root=root,role='ruler',model=Path('/m'),data=Path('/ruler'),prepared=root/'inputs',
+                    cache_root=root/'cache',tp=2,samples_per_task=200,seed=42,devices='0,1,2,3,4,5,6,7,8,9')
+            groups=[[str(i),str(i+1)] for i in range(0,10,2)]
+            with patch.object(control,'resolve_groups',return_value=groups),patch.object(control,'code_hashes',return_value={}):
+                control.configure(args)
+                self.assertEqual(data.read(root/'settings.json')['samples_per_task'],200)
+                pin=file_hash(root/'settings.json')
+                args.samples_per_task=100
+                with self.assertRaisesRegex(ValueError,'Frozen metadata changed'):control.configure(args)
+                self.assertEqual(file_hash(root/'settings.json'),pin)
+                args.samples_per_task=150
+                with self.assertRaisesRegex(ValueError,'100 or 200'):control.configure(args)
 
     def test_engine_tp2_warmup_requires_four_shards_and_retirement_two_ranks(self):
         from runner.corpus_runtime import Engine

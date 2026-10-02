@@ -22,9 +22,9 @@ Primary contributes 3,521 answers and extra 2,515. Thinking, 16,384 output token
 114,688 input limit and official middle truncation remain as documented in the
 [LongBench protocol](../protocols/longbench-v2.md).
 
-RULER uses all 13 tasks, **100 samples/task, seed42**, generated once as a batch
-per task before sharding. Each L20 pair gets 20/task, 260 prompts and all twelve
-actions per prompt: **15,600 answers + 1,300 feature probes**. The 65,536-token
+RULER uses all 13 tasks, **200 samples/task, seed42**, generated once as a batch
+per task before sharding. Each L20 pair gets 40/task, 520 prompts and all twelve
+actions per prompt: **31,200 answers + 2,600 feature probes**. The 65,536-token
 budget includes the output reserve; input is not padded/truncated to 64,000.
 Non-thinking caps remain NIAH128 / VT30 / CWE120 / FWE50 / QA32. See the
 [RULER protocol](../protocols/ruler.md). No source text, precision or answer cap
@@ -36,6 +36,29 @@ cache, lock and progress watchdog. Later feature engines start only after every
 control for that dataset is committed and all control engines have exited.
 A800 feature capture uses both primary pairs; RULER uses all five L20 pairs.
 No training is triggered by collection completion.
+
+## Changing RULER from100 to200 samples/task
+
+The L20 environment template now recommends `SAMPLES_PER_TASK=200`. Both100
+and200 are supported explicitly; launchers retain100 as the absent-variable
+fallback for compatibility. Dataset counts, per-task ordinals, sharding, export
+provenance and import validation follow the frozen configured value. The new
+scope is one upstream batch of200/task, not an append to the old100-row run.
+
+If a100-row run has been configured, use fresh result/prepared/cache paths for200:
+
+```bash
+SAMPLES_PER_TASK=200
+EXPERIMENT_DIR=$PROJECT_DIR/.results/ruler-l20-tp2-200-v2
+PREPARED_DIR=$PROJECT_DIR/.data/prepared/ruler-l20-tp2-200-v2
+CACHE_ROOT=$PROJECT_DIR/.cache/ruler-l20-tp2-200-v2
+```
+
+Do not update a running/configured A800 collection checkout to add200-row import
+support: its source hashes are frozen. Use a separate updated checkout for CPU
+training and point `LONGBENCH_DATA_FILE` at the completed existing export. No new
+LongBench measurements are required. Likewise preserve any already-configured
+L20 checkout and its existing run; configure the200-row cohort in a new checkout.
 
 ## Two configuration files
 
@@ -70,12 +93,12 @@ L20 settings:
 PYTHON_BIN=/data/jh/envs/ucm/bin/python
 MODEL_PATH=/data/jh/ckpts/Qwen3-32B
 RULER_PATH=/path/to/pinned/RULER
-EXPERIMENT_DIR=/path/to/new/ruler-tp2-results
-PREPARED_DIR=/path/to/new/ruler-tp2-inputs
-CACHE_ROOT=/path/to/new/ruler-tp2-cache
+EXPERIMENT_DIR=/path/to/new/ruler-tp2-200-results
+PREPARED_DIR=/path/to/new/ruler-tp2-200-inputs
+CACHE_ROOT=/path/to/new/ruler-tp2-200-cache
 TP=2
 GPU_DEVICES=0,1,2,3,4,5,6,7,8,9
-SAMPLES_PER_TASK=100
+SAMPLES_PER_TASK=200
 SEED=42
 ```
 
@@ -177,8 +200,8 @@ NumPy linear quantiles. No task, question, reference or prediction is a feature.
 Undefined/zero-mass features are null and select no-cache; malformed data halts.
 
 Only the portable JSON and checksum need transfer from L20 to `DATA_IMPORT_DIR`
-on A800. Raw attention remains local. Imports require complete503/1300-row
-cohorts, all twelve actions, the exact feature definition, TP2 provenance and
+on A800. Raw attention remains local. Imports require complete503-row LongBench
+cohorts or all13 RULER tasks with the declared100 or200 samples/task, all twelve actions, the exact feature definition, TP2 provenance and
 valid payload/file checksums. Old nine-action or layer-mean datasets are rejected.
 Exports are immutable and idempotent, including recovery after a missing-checksum
 interruption. Allow sufficient local disk for temporary KV and attention archives.
@@ -193,7 +216,9 @@ bash scripts/launcher/router_training.sh train longbench-v2
 bash scripts/launcher/router_training.sh train both
 ```
 
-Each command fits and evaluates on **all**1300/503/1803 prompts respectively.
+With200 RULER samples/task, each command fits and evaluates on **all**2600/503/3103
+prompts respectively. Existing complete100/task exports remain supported
+(1300 RULER prompts,1803 combined); one RULER bundle is selected per training run.
 Every prompt has equal weight, including the combined mode; datasets and tasks
 are not reweighted to equal totals. Five deterministic folds, stratified by RULER
 task or LongBench length, select settings inside the training data. The216-setting

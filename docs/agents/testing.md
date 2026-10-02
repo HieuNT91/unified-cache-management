@@ -94,3 +94,9 @@ exact reduction/head coverage, resource checks, sharding, late extra configurati
 and failure cleanup. Shell syntax, Python compilation, CLI help and diff checks
 passed. No GPU experiment, real-data fit, push, SSH or remote deployment ran.
 See [the workflow guide](../deployment/A800_LONGBENCH_DATA.md).
+
+The subsequent200-samples/task RULER update passed all262 CPU tests. New coverage
+checks the2600-row preparation,520 prompts per TP2 pair, immutable configured
+sample count, declared-count export/import rejection and synthetic3103-row
+combined fitting/evaluation. The original100-row and LongBench paths remain
+covered. No source dataset generation, real-data fitting or GPU launch ran.

@@ -26,13 +26,14 @@ SMALL_GRID=[dict(family='cost',depth=d,min_leaf=2,lam=w,penalty=0.) for d,w in (
 def synthetic_rows(dataset, count=None):
     from scripts.ruler import TASKS,EVALUATION_PROTOCOL
     count=count or (1300 if dataset=='ruler' else 503)
+    samples=count//13 if dataset=='ruler' else None
     rows=[]
     uuids=[f'GPU-00000000-0000-0000-0000-{i:012d}' for i in range(10)]
     for i in range(count):
-        task=TASKS[i//100] if dataset=='ruler' else 'domain'+str(i%7)
+        task=TASKS[i//samples] if dataset=='ruler' else 'domain'+str(i%7)
         baseline=10. if dataset=='ruler' else 100.
         fraction=(i%10)/10
-        group=(i%100)%5 if dataset=='ruler' else i%2
+        group=(i%samples)%5 if dataset=='ruler' else i%2
         row=dict(id=f'{task}-{i:04d}',dataset=dataset,subtask=task,input_sha256=fingerprint([dataset,i]),
                  source_pins={'record':fingerprint(i)},features=dict.fromkeys(FEATURES,fraction),
                  evaluation_protocol=EVALUATION_PROTOCOL if dataset=='ruler' else None,
@@ -69,6 +70,31 @@ class PortableTests(unittest.TestCase):
                 self.assertEqual(len(folds),count)
             with self.assertRaisesRegex(ValueError,'12-action'):
                 training.select_data('both',ruler,lb,['nocache','prophetkv-1'])
+
+    def test_ruler200_export_import_and_combined_training(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); ruler=root/'ruler200.json'; lb=bundle(root,'longbench-v2')
+            value=save(ruler,'ruler',ACTIONS,synthetic_rows('ruler',2600),dict(tp=2,seed=42,samples_per_task=200))
+            self.assertEqual(len(load(ruler)['rows']),2600)
+            for mutate in (lambda d:d['provenance'].update(samples_per_task=100),
+                           lambda d:d['rows'].pop(),lambda d:d['rows'][0].update(subtask='invalid')):
+                bad=copy.deepcopy(value);mutate(bad)
+                bad['payload_sha256']=fingerprint({k:v for k,v in bad.items() if k!='payload_sha256'})
+                with self.assertRaises(ValueError):validate(bad)
+            for mode,count in (('ruler',2600),('both',3103)):
+                rows,inventory,meta=training.select_data(mode,ruler,lb)
+                self.assertEqual(len(rows),count)
+                self.assertEqual(meta['weighting'],'equal-prompt')
+                self.assertEqual(len(assign_folds(rows)),count)
+                if mode=='both':
+                    with patch('runner.corpus_train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
+                        report=training.train(rows,inventory,meta,root/'fit200')
+                    self.assertEqual(report['samples'],3103)
+                    self.assertEqual(len(report['policies']),3)
+                    for item in report['policies'].values():
+                        self.assertEqual(item['overall']['training_overlap'],3103)
+                        self.assertEqual(item['datasets']['ruler']['overall']['samples'],2600)
+                        self.assertEqual(item['datasets']['longbench-v2']['overall']['samples'],503)
 
     def test_checksum_incomplete_action_features_and_gpu_cohorts_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

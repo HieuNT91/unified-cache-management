@@ -111,8 +111,16 @@ def prepare(base):
     return plan
 
 
+def ruler_samples(settings):
+    count = settings.get('samples_per_task', 100)
+    if type(count) is not int or count not in (100, 200):
+        raise ValueError('RULER collection requires 100 or 200 samples/task')
+    return count
+
+
 def validate_rows(settings, rows):
-    expected = 503 if settings['dataset'] == 'longbench-v2' else 1300
+    count = ruler_samples(settings) if settings['dataset'] == 'ruler' else None
+    expected = 503 if count is None else 13*count
     if len(rows) != expected or len({r['id'] for r in rows}) != expected:
         raise ValueError('Incomplete/duplicate dataset membership')
     if settings['dataset'] == 'longbench-v2':
@@ -121,8 +129,8 @@ def validate_rows(settings, rows):
     else:
         from scripts.ruler import TASKS
         if (set(r['subtask'] for r in rows) != set(TASKS) or
-                any(sorted(r['ordinal'] for r in rows if r['subtask'] == t) != list(range(100)) for t in TASKS)):
-            raise ValueError('Expected 13 tasks x100 source ordinals')
+                any(sorted(r['ordinal'] for r in rows if r['subtask'] == t) != list(range(count)) for t in TASKS)):
+            raise ValueError(f'Expected 13 tasks x{count} source ordinals')
 
 
 def load(base, check_code=False):

@@ -39,8 +39,10 @@ def validate(data):
     if data['dataset'] == 'ruler':
         from scripts.ruler import TASKS
         from collections import Counter
-        if len(rows) != 1300 or Counter(r['subtask'] for r in rows) != Counter({t: 100 for t in TASKS}):
-            raise ValueError('RULER data must contain all 13x100 prompts')
+        from scripts.longbench_a800_data import ruler_samples
+        count = ruler_samples(data['provenance'])
+        if len(rows) != 13*count or Counter(r['subtask'] for r in rows) != Counter({t: count for t in TASKS}):
+            raise ValueError(f'RULER data must contain all 13x{count} prompts')
     if data['dataset'] == 'longbench-v2' and len({r.get('source_id') for r in rows}) != 503:
         raise ValueError('LongBench source identities must be unique')
     for row in rows:
@@ -156,7 +158,7 @@ def export_collection(base, output):
                     outcomes[case] = accepted(base/role, case, row, protocols[role])
         values.append(example(row, probe, outcomes, pins, settings['dataset']))
     return save(output, settings['dataset'], ACTIONS, values, dict(plan_sha256=file_hash(base/'plan.json'), tp=2,
-                seed=42, samples_per_task=100 if settings['dataset'] == 'ruler' else None,
+                seed=42, samples_per_task=settings['samples_per_task'] if settings['dataset'] == 'ruler' else None,
                 validation='committed-results-and-record-pins; per-request runtime validation, no offline attention replay',
                 timing='TP2 controls; independent feature probes collected after all control engines exited'))
 

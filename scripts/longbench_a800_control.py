@@ -20,7 +20,7 @@ from runner.router_process import identity, alive, group_alive
 from runner.corpus_records import accepted, publish, record_dir
 from scripts.router_control import code_hashes, environment, terminate_owned, cleanup_caches
 from scripts.corpus_control import idle, check_hardware
-from scripts.longbench_a800_data import read, freeze, load, stage, SCHEDULE, ACTIONS, publish_protocols, scheduled
+from scripts.longbench_a800_data import read, freeze, load, stage, SCHEDULE, ACTIONS, publish_protocols, scheduled, ruler_samples
 
 
 def resolve_groups(devices, expected):
@@ -38,13 +38,14 @@ def resolve_groups(devices, expected):
 
 
 def configure(args):
-    if args.tp != 2 or args.samples_per_task != 100 or args.seed != 42:
-        raise ValueError('This collection requires TP2, 100 samples/task, seed42')
+    if args.tp != 2 or args.seed != 42:
+        raise ValueError('This collection requires TP2 and seed42')
+    count = ruler_samples(dict(samples_per_task=args.samples_per_task))
     dataset = 'ruler' if args.role == 'ruler' else 'longbench-v2'
     selected = resolve_groups(args.devices, 10 if dataset == 'ruler' else 4)
     settings = dict(schema='tp2-data-config-v2', dataset=dataset, tp=2, model=str(args.model), data=str(args.data),
                     prepared=str(args.prepared), cache_root=str(args.cache_root),
-                    samples_per_task=100, seed=42, hardware_profile='l20-tp2' if dataset == 'ruler' else 'server', code=code_hashes(), watchdog_seconds=7200, automatic_training=False)
+                    samples_per_task=count if dataset == 'ruler' else 100, seed=42, hardware_profile='l20-tp2' if dataset == 'ruler' else 'server', code=code_hashes(), watchdog_seconds=7200, automatic_training=False)
     args.root.mkdir(parents=True, exist_ok=True)
     with (args.root/'configure.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

@@ -6,11 +6,16 @@ These rules govern the current worktree. Historical notes under
 - TP2 A800/L20 collection and portable training live on
   `prophetkv/tp2-router-data`, based on `d0483b1`. Guide:
   `docs/deployment/A800_LONGBENCH_DATA.md`. This scope authorizes source edits,
-  CPU tests and two local commits only: no experiment, real-data training, push,
+  CPU tests and local commits only: no experiment, real-data training, push,
   SSH or remote launch. Preserve the separate rpkv/clean worktrees and jobs.
+- The subsequent200-samples/task request changes only the declared RULER
+  cohort:2600 prompts,31200 answers,2600 probes,520 prompts/TP2 pair; combined
+  training has3103 prompts. Use fresh200-row preparation/result/cache paths.
+  Do not mutate or upgrade configured/running100-row or A800 checkouts. Portable
+  importer retains100-row support and reads the declared sample count.
 - New collection uses twelve actions; A800 primary and extra have separate
   immutable GPU assignments. Extra may be configured after primary starts.
-  RULER is13x100, seed42, five TP2 pairs, original per-task caps/non-thinking.
+  RULER now supports13x200 (current preference) or the original13x100, seed42, five TP2 pairs, original per-task caps/non-thinking.
   LongBench is503, thinking/cap16384, two TP2 pairs per launcher. Features follow
   all controls and engine exit; no automatic fitting. Portable training uses
   equal prompt weights, per-prompt baseline-normalized costs, five folds and
