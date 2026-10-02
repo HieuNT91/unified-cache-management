@@ -14,7 +14,7 @@ from runner.tree_policy import actions
 from runner.corpus_records import accepted, protocol_identity
 from runner.layout import PROMPT_PROTOCOL
 
-SCHEMA = 'attention-router-dataset-v1'
+SCHEMA = 'attention-router-dataset-v2'
 
 
 def validate(data):
@@ -24,11 +24,19 @@ def validate(data):
         raise ValueError('Incompatible dataset/feature version; all eight fixed layers and every TP head are required')
     if data.get('payload_sha256') != fingerprint({k: v for k, v in data.items() if k != 'payload_sha256'}):
         raise ValueError('Dataset checksum mismatch')
+    from scripts.longbench_a800_data import ACTIONS
+    if data.get('actions') != ACTIONS:
+        raise ValueError('Portable training requires all 12 canonical measured actions')
     inventory = actions(data['actions']); rows = data['rows']
     if not rows or len({r['id'] for r in rows}) != len(rows):
         raise ValueError('Empty/duplicate dataset membership')
     if data['dataset'] == 'longbench-v2' and len(rows) != 503:
         raise ValueError('LongBench data must contain all 503 prompts')
+    if data['dataset'] == 'ruler':
+        from scripts.ruler import TASKS
+        from collections import Counter
+        if len(rows) != 1300 or Counter(r['subtask'] for r in rows) != Counter({t: 100 for t in TASKS}):
+            raise ValueError('RULER data must contain all 13x100 prompts')
     for row in rows:
         if (row['dataset'] != data['dataset'] or set(row['features']) != set(FEATURES)
                 or set(row['outcomes']) != set(inventory)):
@@ -88,39 +96,50 @@ def example(row, probe, outcomes, source_pins, dataset):
     return result
 
 
-def export_longbench(base, output):
-    from scripts.longbench_a800_data import load as load_plan, stage, read, SCHEDULE, ACTIONS
-    base = Path(base); _, plan, rows = load_plan(base)
-    for path in (base/'primary/controls-complete.json', base/'extra/complete.json', base/'features/complete.json'):
+def export_collection(base, output):
+    from scripts.longbench_a800_data import load as load_plan, stage, read, roles, scheduled, ACTIONS
+    base = Path(base); settings, plan, rows = load_plan(base)
+    stages = roles(settings)
+    for role in stages:
+        filename = 'complete.json' if role == 'features' else 'controls-complete.json'
+        path = base/role/filename
         if not path.is_file() or not read(path)['owned_engines_exited']:
-            raise ValueError('Finish both control groups and feature engines before export')
+            raise ValueError('Finish all controls and feature engines before export')
     from scripts.longbench_a800_control import engines_idle
-    for role in ('primary', 'extra', 'features'):
+    for role in stages:
         engines_idle(base/role)
-    protocols = {role: stage(base, role)[0] for role in SCHEDULE}
+    protocols = {role: stage(base, role)[0] for role in stages}
     values = []
     for row in rows:
         probe = accepted(base/'features', 'probe', row, protocols['features'])
         if probe is None:
             raise ValueError('Missing accepted feature capture')
         outcomes = {}; pins = {}
-        for role, cases in SCHEDULE.items():
-            for case in cases:
+        for role in stages:
+            for case in scheduled(settings, role):
                 path = base/role/'records'/case/row['id']/'validated.json'
                 pins[str(path.relative_to(base))] = file_hash(path)
                 if case != 'probe':
                     outcomes[case] = accepted(base/role, case, row, protocols[role])
-        values.append(example(row, probe, outcomes, pins, 'longbench-v2'))
-    return save(output, 'longbench-v2', ACTIONS, values, dict(plan_sha256=file_hash(base/'plan.json'),
+        values.append(example(row, probe, outcomes, pins, settings['dataset']))
+    return save(output, settings['dataset'], ACTIONS, values, dict(plan_sha256=file_hash(base/'plan.json'), tp=2,
+                seed=42, samples_per_task=100 if settings['dataset'] == 'ruler' else None,
                 validation='committed-results-and-record-pins; per-request runtime validation, no offline attention replay',
-                timing='Actions measured on two separate A800 TP4 groups; probes collected afterward on primary group'))
+                timing='TP2 controls; independent feature probes collected after all control engines exited'))
+
+
+def export_longbench(base, output):
+    return export_collection(base, output)
 
 
 def export_ruler(root, output):
     """Read a completed coverage-five corpus generated on any server."""
     from scripts.corpus_inputs import prepared_rows
     from scripts.corpus_control import idle
-    root = Path(root); protocol = json.loads((root/'protocol.json').read_text())
+    root = Path(root)
+    if (root/'settings.json').exists() and json.loads((root/'settings.json').read_text()).get('schema') == 'tp2-data-config-v2':
+        return export_collection(root, output)
+    protocol = json.loads((root/'protocol.json').read_text())
     if protocol.get('dataset') != 'ruler' or protocol.get('kind') != 'collection' or protocol.get('feature_profile') != DEFINITIONS:
         raise ValueError('RULER requires a new collection configured with --feature-profile coverage-five; old layer means cannot recover per-head coverage')
     idle(root)

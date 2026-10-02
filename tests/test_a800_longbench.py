@@ -33,8 +33,10 @@ def fixture(root):
     atomic_json(prepared/'preparation.json', dict(files=files))
     groups = [[f'GPU-00000000-0000-0000-0000-{i:012d}' for i in range(j, j+4)] for j in (0, 4)]
     settings = dict(model='/missing-model', data='/missing-data', prepared=str(prepared), cache_root=str(root/'cache'),
-                    groups=groups, code={}, watchdog_seconds=7200)
+                    groups=groups, dataset='longbench-v2', tp=2, code={}, watchdog_seconds=7200)
     atomic_json(root/'settings.json', settings)
+    for role, devices in zip(('primary', 'extra'), groups):
+        atomic_json(root/role/'devices.json', dict(tp=2, groups=[devices[:2], devices[2:]]))
     with patch('scripts.longbench_v2.prepare'):
         data.prepare(root)
     return settings
@@ -54,13 +56,13 @@ class A800Tests(unittest.TestCase):
     def test_frozen_all503_scope_group_b_has_no_baseline_and_no_fixed_probe(self):
         settings = fixture(self.root)
         _, plan, rows = data.load(self.root)
-        self.assertEqual((plan['answers'], plan['probes'], len(rows)), (4527, 503, 503))
+        self.assertEqual((plan['answers'], plan['probes'], len(rows)), (6036, 503, 503))
         for role in ('primary', 'extra'):
             protocol, _ = data.stage(self.root, role)
             self.assertEqual(protocol['answer_validation'], NATIVE_ANSWER_VALIDATION)
             self.assertNotIn('probe', protocol['scheduled_actions'])
-            self.assertEqual(protocol['groups'], [settings['groups'][role == 'extra']])
-        self.assertEqual(data.SCHEDULE['extra'], [f'prophetkv-{p}' for p in (10, 30, 40, 50, 60)])
+            self.assertEqual(protocol['groups'], [settings['groups'][role == 'extra'][:2], settings['groups'][role == 'extra'][2:]])
+        self.assertEqual(data.SCHEDULE['extra'], [f'prophetkv-{p}' for p in (10, 30, 50, 60, 80)])
         protocol, _ = data.stage(self.root, 'features')
         self.assertEqual(protocol['feature_profile']['head_layers'], [7, 15, 23, 31, 39, 47, 55, 63])
         protocol['model'] = '/other-model'; atomic_json(self.root/'features/protocol.json', protocol)
@@ -79,8 +81,8 @@ class A800Tests(unittest.TestCase):
             for label in ('OVERALL', 'SHORT', 'MEDIUM', 'LONG'):
                 self.assertIn(label, result.stdout)
             saved = json.loads((self.root/f'{command}.json').read_text())
-            self.assertEqual(saved['expected_answers'], 4527)
-            self.assertEqual(len(saved['methods']), 9)
+            self.assertEqual(saved['expected_answers'], 6036)
+            self.assertEqual(len(saved['methods']), 12)
 
     def test_same_count_intersects_prompt_ids_and_retains_length_denominators(self):
         rows = [dict(id=f'p{i}', subtask='domain', length=data.LENGTHS[i % 3]) for i in range(6)]
@@ -99,19 +101,19 @@ class A800Tests(unittest.TestCase):
     def test_workers_only_execute_their_own_missing_cases(self):
         row = dict(id='p', ordinal=0)
         for role, phase, expected in [('primary', 'baseline', ['nocache']),
-                ('primary', 'cached', ['prophetkv-5', 'prophetkv-20']),
+                ('primary', 'cached', ['prophetkv-5', 'prophetkv-20', 'prophetkv-40', 'prophetkv-70', 'prophetkv-90']),
                 ('extra', 'cached', data.SCHEDULE['extra']), ('primary', 'features', ['probe'])]:
             with self.subTest(role=role, phase=phase):
                 target = 'features' if phase == 'features' else role
                 (self.root/target).mkdir(exist_ok=True)
-                protocol = dict(groups=[['test-gpu']*4], scheduled_actions=data.SCHEDULE[target])
+                protocol = dict(tp=2, groups=[['test-gpu']*2], scheduled_actions=data.SCHEDULE[target])
                 engine = Mock(); engine.answer.return_value = ({}, []); engine.probe.return_value = ({}, [], {})
                 engine.end.return_value = {}
                 def accepted(root, case, *args):
                     return {} if case == 'prophetkv-1' else None
                 with patch.object(control, 'stage', return_value=(protocol, [row])), \
                         patch.object(control, 'accepted', side_effect=accepted), patch.object(control, 'publish') as publish, \
-                        patch('runner.setups.check_environment', return_value=['test-gpu']*4), \
+                        patch('runner.setups.check_environment', return_value=['test-gpu']*2), \
                         patch('runner.corpus_runtime.Engine', return_value=engine):
                     control.worker(self.root, role, phase, 'attempt')
                 self.assertEqual([c.args[1] for c in publish.call_args_list], expected)
@@ -128,7 +130,7 @@ class A800Tests(unittest.TestCase):
         with (patch.object(control, 'execute_phase', side_effect=execute),
                 patch.object(control, 'wait_extra', side_effect=lambda _: events.append('wait-extra')),
                 patch('scripts.longbench_a800_report.report', side_effect=lambda *a, **k: events.append('final-controls')),
-                patch('scripts.router_dataset.export_longbench', side_effect=lambda *a: events.append('export'))):
+                patch('scripts.router_dataset.export_collection', side_effect=lambda *a: events.append('export'))):
             control.supervise(self.root, 'primary')
         self.assertEqual(events, ['baseline', 'cached', 'wait-extra', 'final-controls', 'features', 'export'])
         self.assertFalse((self.root/'training').exists())

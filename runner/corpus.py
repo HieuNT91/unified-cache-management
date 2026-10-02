@@ -24,7 +24,7 @@ def selection(scores,prefix,ratio):
 
 def reduction_matches(means,scores,prefix):
     # NCCL is free to select a reduction tree. Accept only exact FP32 results of
-    # a four-rank binary reduction, never a numerical tolerance. NCCL can use
+    # a TP-rank binary reduction, never a numerical tolerance. NCCL can use
     # different rank orders for different tensor slices.
     def trees(values):
         if len(values)==1:
@@ -35,15 +35,17 @@ def reduction_matches(means,scores,prefix):
     matched=np.zeros(scores.shape,dtype=bool)
     for order in itertools.permutations(means):
         for total in trees(order):
-            matched |= (total/np.float32(4))[prefix:]==scores
+            matched |= (total/np.float32(len(means)))[prefix:]==scores
             if matched.all():return True
     return False
 
 
-def load_attention(folder,receipt,sample,inventory=None,head_layers=None):
+def load_attention(folder,receipt,sample,inventory=None,head_layers=None,tp=4):
+    from runner.tensor_parallel import validate_tp
+    validate_tp(tp)
     inventory=action_inventory(inventory)
     folder=Path(folder);artifacts=receipt['artifacts']
-    if sorted(a['rank'] for a in artifacts)!=list(range(4)):raise ValueError('Missing/duplicate attention rank')
+    if sorted(a['rank'] for a in artifacts)!=list(range(tp)):raise ValueError('Missing/duplicate attention rank')
     prefix,end=sample['boundaries'][1],sample['boundaries'][-2]
     layers=[];means=[];native=None;heads=[]
     for item in sorted(artifacts,key=lambda a:a['rank']):
@@ -71,9 +73,9 @@ def load_attention(folder,receipt,sample,inventory=None,head_layers=None):
             if head_layers is not None:
                 head=data['heads']
                 if (not np.array_equal(data['head_layers'],head_layers) or head.dtype!=np.float32
-                        or head.ndim!=3 or head.shape[0]!=len(head_layers) or head.shape[1]!=16
+                        or head.ndim!=3 or head.shape[0]!=len(head_layers) or head.shape[1]!=64//tp
                         or head.shape[2]!=end or not np.isfinite(head).all() or (head<0).any()):
-                    raise ValueError('Invalid all-head capture (Qwen3-32B TP4 requires 16 Q heads/rank)')
+                    raise ValueError('Invalid all-head capture (Qwen3-32B requires 64/TP Q heads/rank)')
                 heads.append(head.copy())
     if not reduction_matches(means,native,prefix):raise ValueError('Native TP reduction cannot be replayed')
     result=dict(layers=np.stack(layers),scores=native,local_means=np.stack(means),
@@ -82,11 +84,11 @@ def load_attention(folder,receipt,sample,inventory=None,head_layers=None):
     return result
 
 
-def match_answer(diagnostics,sample,action,attention,inventory=None):
+def match_answer(diagnostics,sample,action,attention,inventory=None,tp=4):
     inventory=action_inventory(inventory)
     if action not in inventory or action=='nocache':raise ValueError('Unknown sparse action')
     from run import verify_diagnostics
-    verify_diagnostics(diagnostics,sample,'prophetkv',inventory[action]['ratio'],4,range(64))
+    verify_diagnostics(diagnostics,sample,'prophetkv',inventory[action]['ratio'],tp,range(64))
     for worker in diagnostics:
         event=next(e for e in worker['diagnostics'] if e['kind']=='prophetkv_selection')
         if (not np.array_equal(np.asarray(event['scores'],dtype=np.float32),attention['scores']) or

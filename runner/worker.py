@@ -42,8 +42,9 @@ class Worker(BaseWorker):
 
 
 def setup(worker):
+    from vllm.distributed import get_tensor_model_parallel_rank
     from ucm.sparse.prophetkv.runtime import setup as install
-    return dict(sparse=install(worker), rope=worker.rope_audits,
+    return dict(rank=get_tensor_model_parallel_rank(), sparse=install(worker), rope=worker.rope_audits,
                 kv_tokens=worker.vllm_config.model_config.max_model_len,
                 kv_blocks=worker.vllm_config.cache_config.num_gpu_blocks,
                 block_size=worker.vllm_config.cache_config.block_size)

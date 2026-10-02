@@ -104,16 +104,16 @@ class ReportTests(unittest.TestCase):
 
 class WorkflowTests(unittest.TestCase):
     def test_disjoint_action_scopes_and_same_prepared_inputs(self):
-        settings = dict(model='/model', prepared='/inputs', cache_root='/cache', groups=[['A']*4, ['B']*4])
-        primary = protocol_for(settings, 'primary', 'f'*64)
-        extra = protocol_for(settings, 'extra', 'f'*64)
-        probe = protocol_for(settings, 'features', 'f'*64)
-        self.assertEqual(primary['scheduled_actions'], ['nocache', 'prophetkv-1', 'prophetkv-5', 'prophetkv-20'])
-        self.assertEqual(extra['scheduled_actions'], [f'prophetkv-{p}' for p in (10, 30, 40, 50, 60)])
+        settings = dict(model='/model', prepared='/inputs', cache_root='/cache', dataset='longbench-v2', tp=2)
+        primary = protocol_for(settings, 'primary', 'f'*64, [['A']*2, ['B']*2])
+        extra = protocol_for(settings, 'extra', 'f'*64, [['C']*2, ['D']*2])
+        probe = protocol_for(settings, 'features', 'f'*64, [['A']*2, ['B']*2])
+        self.assertEqual(primary['scheduled_actions'], SCHEDULE['primary'])
+        self.assertEqual(extra['scheduled_actions'], [f'prophetkv-{p}' for p in (10, 30, 50, 60, 80)])
         self.assertEqual(primary['prepared'], extra['prepared'])
         self.assertEqual(probe['feature_profile'], DEFINITIONS)
         self.assertEqual(probe['groups'], primary['groups'])
-        self.assertEqual(len(set(primary['scheduled_actions']+extra['scheduled_actions'])), 9)
+        self.assertEqual(len(set(primary['scheduled_actions']+extra['scheduled_actions'])), 12)
         self.assertNotIn('feature_profile', primary)
 
     def test_primary_handoff_only_after_both_groups_complete(self):
@@ -123,10 +123,10 @@ class WorkflowTests(unittest.TestCase):
                 atomic_json(base/path, {})
             events = []
             with patch.object(control, 'execute_phase', side_effect=lambda b, r, p, s: events.append(p)), \
-                 patch.object(control, 'stage', return_value=({}, [row(0)])), \
+                 patch.object(control, 'stage', return_value=({'scheduled_actions': SCHEDULE['primary']}, [row(0)])), \
                  patch.object(control, 'wait_extra', side_effect=lambda b: events.append('wait-extra')), \
                  patch('scripts.longbench_a800_report.report', side_effect=lambda *a, **k: events.append('complete-controls')), \
-                 patch('scripts.router_dataset.export_longbench', side_effect=lambda *a: events.append('export')), \
+                 patch('scripts.router_dataset.export_collection', side_effect=lambda *a: events.append('export')), \
                  patch.object(control.signal, 'signal'):
                 control.supervise(base, 'primary')
             self.assertEqual(events, ['baseline', 'cached', 'wait-extra', 'complete-controls', 'features', 'export'])
@@ -137,7 +137,7 @@ class WorkflowTests(unittest.TestCase):
             base = Path(tmp); (base/'primary').mkdir()
             atomic_json(base/'primary/protocol.json', {})
             with patch.object(control, 'execute_phase') as execute, \
-                 patch.object(control, 'stage', return_value=({}, [row(0)])), \
+                 patch.object(control, 'stage', return_value=({'scheduled_actions': SCHEDULE['primary']}, [row(0)])), \
                  patch.object(control, 'wait_extra', side_effect=RuntimeError('failed')), \
                  patch.object(control.signal, 'signal'):
                 with self.assertRaisesRegex(RuntimeError, 'failed'): control.supervise(base, 'primary')
@@ -145,19 +145,19 @@ class WorkflowTests(unittest.TestCase):
             self.assertFalse((base/'primary/complete.json').exists())
 
     def test_worker_resumes_only_missing_actions_and_does_not_probe_controls(self):
-        protocol = dict(groups=[['A']*4], scheduled_actions=SCHEDULE['primary'])
+        protocol = dict(tp=2, groups=[['A']*2], scheduled_actions=SCHEDULE['primary'])
         engine = Mock(); engine.answer.return_value = ({}, []); engine.end.return_value = {}
         def prior(root, case, row, protocol): return {} if case == 'prophetkv-1' else None
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(control, 'stage', return_value=(protocol, [row(0)])), \
              patch.object(control, 'accepted', side_effect=prior), patch.object(control, 'publish') as pub, \
              patch('runner.corpus_runtime.Engine', return_value=engine), \
-             patch('runner.setups.check_environment', return_value=['A']*4):
+             patch('runner.setups.check_environment', return_value=['A']*2):
             base = Path(tmp); (base/'primary').mkdir()
             control.worker(base, 'primary', 'cached', 'attempt')
         engine.probe.assert_not_called()
-        self.assertEqual([c.args[1] for c in engine.answer.call_args_list], ['prophetkv-5', 'prophetkv-20'])
-        self.assertEqual(pub.call_count, 2)
+        self.assertEqual([c.args[1] for c in engine.answer.call_args_list], ['prophetkv-5', 'prophetkv-20', 'prophetkv-40', 'prophetkv-70', 'prophetkv-90'])
+        self.assertEqual(pub.call_count, 5)
 
     def test_launchers_resolve_config_and_distinct_roles_outside_checkout(self):
         with tempfile.TemporaryDirectory() as tmp:

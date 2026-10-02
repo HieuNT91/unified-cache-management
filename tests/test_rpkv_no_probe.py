@@ -40,7 +40,7 @@ class NoProbeTests(unittest.TestCase):
 
     def test_engine_answer_keeps_diagnostics_retirement_and_cache_checks(self):
         from runner.corpus_runtime import Engine
-        engine=Engine.__new__(Engine);engine.protocol=dict(actions=ACTIONS,answer_validation=NATIVE_ANSWER_VALIDATION)
+        engine=Engine.__new__(Engine);engine.tp=4;engine.protocol=dict(actions=ACTIONS,answer_validation=NATIVE_ANSWER_VALIDATION)
         engine.sample=dict(token_ids=[1]*384,boundaries=[0,64,128,384],thinking=False,max_output_tokens=128)
         engine.cached=True;engine.pc=Mock();engine.rid=lambda _: 'r';engine.scheduler='scheduler';engine.llm=Mock()
         ds=diagnostics();engine.llm.collective_rpc.return_value=ds;engine.common=Mock(return_value={})

@@ -271,7 +271,7 @@ class CorpusTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);session=root/'session';session.mkdir()
             atomic_json(session/'initialization.json',dict(validated=True))
-            engine=Engine.__new__(Engine);engine.sample={}
+            engine=Engine.__new__(Engine);engine.sample={};engine.tp=4
             engine.root=root;engine.session=session;engine.cached=True;engine.group=0
             engine.row=dict(id='sample',sha256='input');engine.construction={}
             engine.protocol=dict(groups=[['a','b','c','d']]);engine.llm=Mock()

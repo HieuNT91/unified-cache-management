@@ -73,8 +73,12 @@ def check_hardware(settings):
     inventory={r[0].strip():dict(name=r[1].strip(),total_mib=float(r[2]),free_mib=float(r[3])) for r in csv.reader(raw.splitlines())}
     requested=sum(settings['groups'],[])
     index=json.loads((Path(settings['model'])/'model.safetensors.index.json').read_text())
-    weights=index['metadata']['total_size']/4
-    kv=allocation(settings['dataset'],settings.get('hardware_profile','server'))['kv_tokens']*262144/4
+    from runner.tensor_parallel import protocol_tp
+    tp=protocol_tp(settings)
+    if settings.get('hardware_profile')=='l20-tp2' and tp!=2:
+        raise ValueError('L20 TP2 allocation requires exactly two ranks')
+    weights=index['metadata']['total_size']/tp
+    kv=allocation(settings['dataset'],settings.get('hardware_profile','server'))['kv_tokens']*262144/tp
     # Per-rank BF16 weights + full position KV + explicit activation/runtime reserve.
     required=(weights+kv+profile['workspace_gib']*2**30)/profile['memory']/2**20
     for gpu in requested:
@@ -85,7 +89,8 @@ def check_hardware(settings):
     busy=subprocess.check_output(['nvidia-smi','--query-compute-apps=gpu_uuid','--format=csv,noheader'],text=True).splitlines()
     if set(requested)&{r.strip() for r in busy}:raise ValueError('Configured GPUs are occupied; existing processes left untouched')
     return dict(groups=[[dict(uuid=g,name=inventory[g]['name'],total_mib=inventory[g]['total_mib']) for g in group] for group in settings['groups']],
-                required_mib_per_rank=required)
+                required_mib_per_rank=required, tp=tp, weights_bytes_per_rank=weights, kv_bytes_per_rank=kv,
+                workspace_bytes_per_rank=profile['workspace_gib']*2**30, gpu_memory_utilization=profile['memory'])
 
 
 def configure(a):

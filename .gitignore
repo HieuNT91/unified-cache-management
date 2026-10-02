@@ -12,3 +12,5 @@ outputs/
 .env
 .env.*
 !.env.example
+!.env.a800.example
+!.env.l20.example

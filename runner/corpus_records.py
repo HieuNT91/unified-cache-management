@@ -30,6 +30,8 @@ def protocol_identity(protocol):
 
 
 def accepted(root,case,row,protocol,prepared=None,full=False):
+    from runner.tensor_parallel import protocol_tp
+    tp=protocol_tp(protocol)
     mode=answer_validation(protocol)
     if mode==NATIVE_ANSWER_VALIDATION and case in ('probe','router'):
         raise ValueError('Native answer controls do not use independent probes or routers')
@@ -50,14 +52,14 @@ def accepted(root,case,row,protocol,prepared=None,full=False):
             result['group']!=group or result['gpu_uuids']!=protocol['groups'][group] or not result['cache_immutable']):
         raise ValueError('Accepted identity mismatch')
     retired=result['retirement']
-    if sorted(r['rank'] for r in retired)!=list(range(4)) or any(not r['quiescent'] or r['transfers']['pending'] or r['request_bookkeeping'] for r in retired):
+    if sorted(r['rank'] for r in retired)!=list(range(tp)) or any(not r['quiescent'] or r['transfers']['pending'] or r['request_bookkeeping'] for r in retired):
         raise ValueError('Missing retirement evidence')
     if not relative(root,result['initialization']).is_file() or file_hash(relative(root,result['initialization']))!=result['initialization_sha256']:
         raise ValueError('Initialization evidence changed')
     initial=json.loads(relative(root,result['initialization']).read_text())
     if not initial.get('validated'):raise ValueError('Initialization was not validated')
     if case=='probe':
-        if result['internal_tokens']!=1 or len(result.get('artifacts',[]))!=4:raise ValueError('Incomplete independent probe')
+        if result['internal_tokens']!=1 or len(result.get('artifacts',[]))!=tp:raise ValueError('Incomplete independent probe')
         if any(saved['files'].get(a['path'])!=a['sha256'] for a in result['artifacts']):raise ValueError('Unpinned attention')
     else:
         if case!='router' and result['executed_action']!=case:raise ValueError('Accepted action differs from inventory')
@@ -73,15 +75,15 @@ def accepted(root,case,row,protocol,prepared=None,full=False):
         sample=json.loads(relative(prepared or protocol['prepared'],row['prepared']).read_text())
         ds=json.loads((folder/'diagnostics.json').read_text())
         definition=dict(method='prophetkv',ratio=.01) if case=='probe' else actions(protocol['actions'])[case]
-        verify_diagnostics(ds,sample,definition['method'],definition['ratio'],4,range(64))
+        verify_diagnostics(ds,sample,definition['method'],definition['ratio'],tp,range(64))
         if case=='probe':
             heads=protocol.get('feature_profile',{}).get('head_layers')
-            load_attention(folder,result,sample,protocol['actions'],heads)
+            load_attention(folder,result,sample,protocol['actions'],heads,tp=tp)
         elif case!='nocache' and mode==PROBE_ANSWER_VALIDATION:
             probe=accepted(root,'probe',row,protocol,prepared)
             if probe is None:raise ValueError('Missing independent probe')
-            attention=load_attention(record_dir(root,'probe',row['id']),probe,sample,protocol['actions'])
-            match_answer(ds,sample,case,attention,protocol['actions'])
+            attention=load_attention(record_dir(root,'probe',row['id']),probe,sample,protocol['actions'],tp=tp)
+            match_answer(ds,sample,case,attention,protocol['actions'],tp=tp)
     return result
 
 
@@ -117,5 +119,5 @@ def validate_routed(root,folder,row,protocol,result):
         baseline=accepted(root,'nocache',row,protocol)
         if baseline is None or baseline!=control:raise ValueError('Dense control is not the connector-free baseline')
         checks=result['dense_receipts'];names=sorted(f'model.layers.{i}.self_attn.attn' for i in range(64))
-        if sorted(c['rank'] for c in checks)!=list(range(4)) or any(c['native_layers']!=names or c['store_operations']!=dict(lookup=0,load=0,store=0) for c in checks):
+        if sorted(c['rank'] for c in checks)!=list(range(protocol.get('tp',4))) or any(c['native_layers']!=names or c['store_operations']!=dict(lookup=0,load=0,store=0) for c in checks):
             raise ValueError('Dense fallback native/zero-store audit failed')

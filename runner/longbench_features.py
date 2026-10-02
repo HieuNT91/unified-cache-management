@@ -13,7 +13,7 @@ DEFINITIONS = dict(
     attention='FP32 softmax over ALL context keys, mean over complete question queries',
     coverage='selected eligible mass / total eligible mass, per layer or per head; prefix excluded from both',
     layers='equal-head TP mean in float64, all 64 layers',
-    heads='all Q heads on all four TP ranks at the eight fixed zero-based layers; no head averaging before quantile',
+    heads='all Q heads on all TP ranks (64 total Q heads/layer) at the eight fixed zero-based layers; no head averaging before quantile',
     quantile='numpy linear quantile over all selected-layer/global-head coverage values, q=0.10',
     agreement='cosine of eligible attention means for layers 0-31 and 32-63',
     missing='nocache; zero mass/undefined feature is null; malformed or nonfinite arrays halt')
@@ -23,9 +23,10 @@ def features(attention, prefix, end):
     layers = np.asarray(attention['layers'])
     heads = np.asarray(attention['heads'])
     scores = np.asarray(attention['scores'])
-    if (layers.dtype != np.float32 or layers.shape != (4, 64, end)
+    tp = layers.shape[0] if layers.ndim == 3 else 0
+    if (tp not in (2, 4) or layers.dtype != np.float32 or layers.shape != (tp, 64, end)
             or heads.dtype != np.float32 or heads.ndim != 4
-            or heads.shape[:2] != (4, len(HEAD_LAYERS)) or heads.shape[2] < 1 or heads.shape[3] != end
+            or heads.shape[:2] != (tp, len(HEAD_LAYERS)) or heads.shape[2] != 64//tp or heads.shape[3] != end
             or tuple(attention['head_layers']) != HEAD_LAYERS
             or scores.dtype != np.float32 or scores.shape != (end-prefix,) or not 0 <= prefix < end):
         raise ValueError('Invalid LongBench feature capture shape/schema')

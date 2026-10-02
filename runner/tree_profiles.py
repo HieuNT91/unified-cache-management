@@ -9,6 +9,9 @@ PROFILES={
 def hardware_profile(name='server',dataset='ruler'):
     if name=='server':
         return dict(names=('A800','L20'),memory=.9,workspace_gib=8.)
+    if name=='l20-tp2' and dataset=='ruler':
+        # Explicit deployment allocation; startup still enforces free capacity.
+        return dict(names=('L20',),memory=.95,workspace_gib=3.)
     if name=='rtx4500ada' and dataset in PROFILES:
         # Local 24 GiB TP4 profile: validated clean YaRN4/16K-prefill runs,
         # with 4096-token activation tiles and full original-position KV.
@@ -35,18 +38,26 @@ def allocation(dataset,hardware='server'):
     return p
 
 
-def config(model,dataset,cached,cache,delimiter=None,hardware='server'):
+def config(model,dataset,cached,cache,delimiter=None,hardware='server',tp=4):
+    from runner.tensor_parallel import validate_tp
+    validate_tp(tp)
     p=allocation(dataset,hardware)
-    result=engine_config(model,'prophetkv' if cached else 'baseline',ratio=.01,tp=4,cache_dir=cache,
+    result=engine_config(model,'prophetkv' if cached else 'baseline',ratio=.01,tp=tp,cache_dir=cache,
                         memory=hardware_profile(hardware,dataset)['memory'])
     result.update(max_model_len=p['kv_tokens'],num_gpu_blocks_override=p['kv_blocks'],
                   hf_overrides=dict(max_position_embeddings=32768,ucm_activation_tile=4096))
     return result
 
 
-def validate_initialization(receipts,dataset,hardware='server'):
+def validate_initialization(receipts,dataset,hardware='server',tp=4):
+    from runner.tensor_parallel import validate_tp
+    validate_tp(tp)
     p=allocation(dataset,hardware)
-    if len(receipts)!=4:raise ValueError('Missing initialization rank')
+    ranks = [r.get('rank') for r in receipts]
+    # Legacy TP4 initialization receipts did not include rank IDs.
+    if len(receipts)!=tp or ((tp==2 or any(r is not None for r in ranks)) and
+                            sorted(-1 if r is None else r for r in ranks)!=list(range(tp))):
+        raise ValueError('Missing initialization rank')
     for r in receipts:
         if (r['kv_tokens']!=p['kv_tokens'] or r['kv_blocks']!=p['kv_blocks'] or r['block_size']!=64 or
                 len(r['rope'])!=64 or any(not a['formula_bitwise_equal'] or a['table_positions']!=131072 for a in r['rope'])):

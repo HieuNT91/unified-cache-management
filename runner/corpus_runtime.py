@@ -17,13 +17,13 @@ from runner.corpus_records import record_dir,accepted,publish,answer_validation,
 PROBE=dict(id='independent-probe',method='prophetkv',ratio=.01)
 
 
-def arm_tree(llm,sample,rid,definition,capture=False,head_layers=()):
+def arm_tree(llm,sample,rid,definition,capture=False,head_layers=(),tp=4):
     from runner.corpus_worker import tree_mode
     from runner.worker import arm
     kwargs=dict(request_id=rid,definition=definition,capture=capture)
     if head_layers:kwargs['head_layers']=list(head_layers)
     replies=llm.collective_rpc(tree_mode,kwargs=kwargs)
-    if sorted(r['rank'] for r in replies)!=list(range(4)) or any(
+    if sorted(r['rank'] for r in replies)!=list(range(tp)) or any(
             r!=dict(rank=r['rank'],**kwargs) for r in replies):
         raise ValueError('TP action synchronization failed')
     if definition['method']!='baseline':
@@ -31,10 +31,10 @@ def arm_tree(llm,sample,rid,definition,capture=False,head_layers=()):
     return replies
 
 
-def clean_capture(llm):
+def clean_capture(llm,tp=4):
     from runner.corpus_worker import capture_state
     replies=llm.collective_rpc(capture_state)
-    if sorted(r['rank'] for r in replies)!=list(range(4)) or any(r['capture'] or r['arrays'] for r in replies):
+    if sorted(r['rank'] for r in replies)!=list(range(tp)) or any(r['capture'] or r['arrays'] for r in replies):
         raise ValueError('Attention capture leaked into timed answer')
 
 
@@ -46,6 +46,8 @@ class Engine:
         from runner.router_process import identity
         from runner.cache import wait_for_cache
         from ucm.sparse.prophetkv.lifecycle import seed_value,delete_retired_files
+        from runner.tensor_parallel import protocol_tp
+        self.tp=protocol_tp(protocol)
         self.root=Path(root);self.protocol=protocol;self.group=group;self.cached=phase=='cached';self.pc=None
         self.session=self.root/'sessions'/f'{phase}-group{group}-{attempt}'
         self.session.mkdir(parents=True,exist_ok=False)
@@ -61,24 +63,24 @@ class Engine:
             if len(sample['token_ids'])+sample['max_output_tokens']>allocation(protocol['dataset'],protocol.get('hardware_profile','server'))['kv_tokens']:
                 raise ValueError('Complete input plus output reserve exceeds assigned hardware KV capacity')
         cfg=config(protocol['model'],protocol['dataset'],self.cached,self.cache,None,
-                   protocol.get('hardware_profile','server'))
+                   protocol.get('hardware_profile','server'),tp=self.tp)
         if self.cached:
             cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts']={
                 r['id']:json.loads((Path(protocol['prepared'])/r['prepared']).read_text())['boundaries'] for r in rows}
         start=time.perf_counter();self.llm=start_engine(cfg)
         try:
             init=dict(model_load_seconds=time.perf_counter()-start,engine_config=cfg)
-            init['setup']=self.llm.collective_rpc(setup);validate_initialization(init['setup'],protocol['dataset'],protocol.get('hardware_profile','server'))
+            init['setup']=self.llm.collective_rpc(setup);validate_initialization(init['setup'],protocol['dataset'],protocol.get('hardware_profile','server'),tp=self.tp)
             self.analyzer=OutputAnalyzer(self.llm.get_tokenizer())
             warmup_started=time.perf_counter()
             warm_namespace=uuid.uuid4().hex;warm=[100,200,300,400]*32
             generate(self.llm.llm_engine,warm,1,f"{warm_namespace}:{rows[0]['id']}:populate:warmup",phase='populate')
             if self.cached:
-                args=SimpleNamespace(model_path=Path(protocol['model']),tensor_parallel_size=4,cache_dir=self.cache,
+                args=SimpleNamespace(model_path=Path(protocol['model']),tensor_parallel_size=self.tp,cache_dir=self.cache,
                     cache_ready_timeout_seconds=600,hash_seed=seed_value(warm_namespace))
                 init['warmup_readiness']=wait_for_cache(args,[warm])
-                if init['warmup_readiness']['verified_shards']!=8:raise ValueError('Expected eight committed TP4 warmup shards')
-            retirement(self.llm,4)
+                if init['warmup_readiness']['verified_shards']!=2*self.tp:raise ValueError('Expected two committed warmup shards per TP rank')
+            retirement(self.llm,self.tp)
             if self.cached:delete_retired_files(self.cache,{str(p.relative_to(self.cache)) for p in (self.cache/'kv').rglob('*') if p.is_file()})
             init['warmup_seconds']=time.perf_counter()-warmup_started
             init['validated']=True;atomic_json(self.session/'initialization.json',init)
@@ -96,18 +98,18 @@ class Engine:
             raise ValueError('Prepared model mismatch')
         start=time.perf_counter()
         if self.cached:
-            self.pc=PromptCache(self.cache,Path(self.protocol['model']),4,self.namespace,self.sample)
+            self.pc=PromptCache(self.cache,Path(self.protocol['model']),self.tp,self.namespace,self.sample)
             for i,chunk in enumerate(self.pc.chunks):
                 generate(self.llm.llm_engine,list(chunk),1,self.rid(f'populate:{i}'),phase='populate')
-                retirement(self.llm,4)
+                retirement(self.llm,self.tp)
             self.construction['construction_seconds']=time.perf_counter()-start;start=time.perf_counter()
             self.construction['readiness']=self.pc.ready()
             self.construction['readiness_seconds']=time.perf_counter()-start
         rid=self.rid('read:prime');start=time.perf_counter()
-        if self.cached:arm_tree(self.llm,self.sample,rid,PROBE)
+        if self.cached:arm_tree(self.llm,self.sample,rid,PROBE,tp=self.tp)
         generate(self.llm.llm_engine,self.sample['token_ids'],1,rid,self.sample['thinking'],sample=self.sample)
-        self.llm.collective_rpc(drain);verify_retired(self.llm,4,rid,self.scheduler if self.cached else None)
-        if self.pc:self.pc.unchanged();clean_capture(self.llm)
+        self.llm.collective_rpc(drain);verify_retired(self.llm,self.tp,rid,self.scheduler if self.cached else None)
+        if self.pc:self.pc.unchanged();clean_capture(self.llm,self.tp)
         self.construction['priming_seconds']=time.perf_counter()-start
 
     def rid(self,suffix):return f"{self.namespace}:{self.row['id']}:{suffix}"
@@ -116,7 +118,7 @@ class Engine:
         from runner.corpus_worker import alignment_state
         path=self.session/'initialization.json'
         alignment=self.llm.collective_rpc(alignment_state) if self.cached else []
-        if self.cached and (sorted(a['rank'] for a in alignment)!=list(range(4)) or
+        if self.cached and (sorted(a['rank'] for a in alignment)!=list(range(self.tp)) or
                 any(not a['normalized'] or a['delta_amplitude']!=1. or a['aliases_native_table'] for a in alignment)):
             raise ValueError('YaRN delta normalization was lost during generation')
         from runner.layout import sample_provenance
@@ -139,7 +141,7 @@ class Engine:
             from runner.longbench_features import DEFINITIONS,HEAD_LAYERS
             if self.protocol['feature_profile']!=DEFINITIONS:raise ValueError('Unknown feature profile')
             head_layers=HEAD_LAYERS
-        arm_tree(self.llm,self.sample,rid,PROBE,True,head_layers)
+        arm_tree(self.llm,self.sample,rid,PROBE,True,head_layers,tp=self.tp)
         sync_seconds=time.perf_counter()-started
         generation_start=time.perf_counter()
         internal,ttft,_=generate(self.llm.llm_engine,self.sample['token_ids'],1,rid,False,sample=self.sample)
@@ -150,13 +152,13 @@ class Engine:
         artifacts=self.llm.collective_rpc(export_attention,kwargs=dict(output=str(folder),sample=self.sample,inventory=self.protocol['actions']))
         export_seconds=time.perf_counter()-export_start
         validation_start=time.perf_counter()
-        ds=self.llm.collective_rpc(drain);verify_diagnostics(ds,self.sample,'prophetkv',.01,4,range(64))
+        ds=self.llm.collective_rpc(drain);verify_diagnostics(ds,self.sample,'prophetkv',.01,self.tp,range(64))
         diagnostics_seconds=time.perf_counter()-validation_start
         retirement_start=time.perf_counter()
-        retired=verify_retired(self.llm,4,rid,self.scheduler);self.pc.unchanged();clean_capture(self.llm)
+        retired=verify_retired(self.llm,self.tp,rid,self.scheduler);self.pc.unchanged();clean_capture(self.llm,self.tp)
         retirement_seconds=time.perf_counter()-retirement_start
         replay_start=time.perf_counter()
-        attention=load_attention(folder,dict(artifacts=artifacts),self.sample,self.protocol['actions'],head_layers or None)
+        attention=load_attention(folder,dict(artifacts=artifacts),self.sample,self.protocol['actions'],head_layers or None,tp=self.tp)
         # Probe selection may be absent from the answer inventory.
         for worker in ds:
             event=next(e for e in worker['diagnostics'] if e['kind']=='prophetkv_selection')
@@ -194,20 +196,20 @@ class Engine:
         if self.cached and dense:rid+='|router-dense'
         start=time.perf_counter()
         if self.cached:
-            clean_capture(self.llm);sync=arm_tree(self.llm,self.sample,rid,definition)
+            clean_capture(self.llm,self.tp);sync=arm_tree(self.llm,self.sample,rid,definition,tp=self.tp)
         else:sync=[]
         sync_seconds=time.perf_counter()-start
         routing_time=time.perf_counter()-route_started if route_started is not None else overhead+sync_seconds
         output,ttft,elapsed=generate(self.llm.llm_engine,self.sample['token_ids'],self.sample['max_output_tokens'],rid,self.sample['thinking'],sample=self.sample)
         ds=self.llm.collective_rpc(drain)
-        verify_diagnostics(ds,self.sample,definition['method'],definition['ratio'],4,range(64))
+        verify_diagnostics(ds,self.sample,definition['method'],definition['ratio'],self.tp,range(64))
         if dense and output.num_cached_tokens!=0:raise ValueError('Dense request reused KV')
         audits=self.llm.collective_rpc(router_dense_receipt) if dense and self.cached else []
         if not dense and mode==PROBE_ANSWER_VALIDATION:
             if attention is None:raise ValueError('Sparse answer requires independent probe replay')
-            match_answer(ds,self.sample,definition['id'],attention,self.protocol['actions'])
-        retired=verify_retired(self.llm,4,rid,self.scheduler if self.cached else None)
-        if self.pc:self.pc.unchanged();clean_capture(self.llm)
+            match_answer(ds,self.sample,definition['id'],attention,self.protocol['actions'],tp=self.tp)
+        retired=verify_retired(self.llm,self.tp,rid,self.scheduler if self.cached else None)
+        if self.pc:self.pc.unchanged();clean_capture(self.llm,self.tp)
         tokens=list(output.outputs[0].token_ids);metrics=self.analyzer.analyze(tokens,self.sample['token_ids'],self.sample['thinking'])
         evaluation=evaluation_metadata({},self.row)
         record=self.common(case,dict(answer_engine_ttft_seconds=ttft,ttft_seconds=routing_time+ttft,

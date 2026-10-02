@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Two independent TP4 control launchers, followed by attention collection."""
+"""TP2 A800/L20 control launchers, followed by attention collection."""
 import argparse
+import csv
+import re
 import fcntl
 import json
 import os
@@ -17,28 +19,51 @@ from runner.setups import atomic_json, file_hash
 from runner.router_process import identity, alive, group_alive
 from runner.corpus_records import accepted, publish, record_dir
 from scripts.router_control import code_hashes, environment, terminate_owned, cleanup_caches
-from scripts.corpus_control import groups, idle, check_hardware
-from scripts.longbench_a800_data import read, freeze, load, stage, SCHEDULE, ACTIONS
+from scripts.corpus_control import idle, check_hardware
+from scripts.longbench_a800_data import read, freeze, load, stage, SCHEDULE, ACTIONS, publish_protocols, scheduled
+
+
+def resolve_groups(devices, expected):
+    tokens = [v.strip() for v in devices.split(',')]
+    if len(tokens) != expected or len(set(tokens)) != expected:
+        raise ValueError(f'Expected {expected} distinct devices')
+    # Configure resolves identities only; availability/memory gates run at launch.
+    raw = subprocess.check_output(['nvidia-smi', '--query-gpu=index,uuid', '--format=csv,noheader'], text=True)
+    inventory = {r[0].strip(): r[1].strip() for r in csv.reader(raw.splitlines())}
+    values = [inventory.get(v, v) for v in tokens]
+    if (len(set(values)) != expected or any(v not in inventory.values() or not re.fullmatch(
+            r'GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', v) for v in values)):
+        raise ValueError('Unknown or duplicate GPU identity')
+    return [values[i:i+2] for i in range(0, len(values), 2)]
 
 
 def configure(args):
-    selected = groups(args.gpu_a, args.gpu_b)
-    if len(selected) != 2:
-        raise ValueError('Both GPU_A (physical 0-3) and GPU_B (physical 4-7) UUID groups are required')
-    settings = dict(schema='longbench-a800-config-v1', model=str(args.model), data=str(args.data),
-                    prepared=str(args.prepared), cache_root=str(args.cache_root), groups=selected,
-                    code=code_hashes(), watchdog_seconds=7200, automatic_training=False)
+    if args.tp != 2 or args.samples_per_task != 100 or args.seed != 42:
+        raise ValueError('This collection requires TP2, 100 samples/task, seed42')
+    dataset = 'ruler' if args.role == 'ruler' else 'longbench-v2'
+    selected = resolve_groups(args.devices, 10 if dataset == 'ruler' else 4)
+    settings = dict(schema='tp2-data-config-v2', dataset=dataset, tp=2, model=str(args.model), data=str(args.data),
+                    prepared=str(args.prepared), cache_root=str(args.cache_root),
+                    samples_per_task=100, seed=42, hardware_profile='l20-tp2' if dataset == 'ruler' else 'server', code=code_hashes(), watchdog_seconds=7200, automatic_training=False)
     args.root.mkdir(parents=True, exist_ok=True)
     with (args.root/'configure.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if args.role == 'extra' and not (args.root/'settings.json').exists():
+            raise ValueError('Configure primary first')
         if not (args.root/'settings.json').exists() and any(p.name != 'configure.lock' for p in args.root.iterdir()):
             raise ValueError('Use a new empty experiment directory')
         freeze(args.root/'settings.json', settings)
-    print('Configured 503 prompts, 4527 fixed answers, then 503 attention probes; training is a separate command.')
+        for other in args.root.glob('*/devices.json'):
+            if other.parent.name != args.role and set(sum(read(other)['groups'], [])) & set(sum(selected, [])):
+                raise ValueError('Primary/extra GPU assignments overlap')
+        freeze(args.root/args.role/'devices.json', dict(tp=2, groups=selected))
+        if (args.root/'plan.json').exists():
+            publish_protocols(args.root)
+    print(f'Configured {args.role}: {len(selected)} TP2 pairs; training remains a separate command.')
 
 
-def progress(base, role, message):
-    atomic_json(Path(base)/role/'progress.json', dict(at=time.time(), message=message))
+def progress(base, role, message, group=0):
+    atomic_json(Path(base)/role/f'progress-group{group}.json', dict(at=time.time(), message=message))
     print(message, flush=True)
 
 
@@ -46,7 +71,7 @@ def pending(protocol, rows, root, cases):
     return [r for r in rows if any(accepted(root, c, r, protocol) is None for c in cases)]
 
 
-def worker(base, role, phase, attempt):
+def worker(base, role, phase, attempt, group=0):
     from runner.corpus_runtime import Engine
     from runner.setups import check_environment
     target = 'features' if phase == 'features' else role
@@ -54,18 +79,19 @@ def worker(base, role, phase, attempt):
     root = Path(base)/target
     cases = (['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline'
              else [c for c in protocol['scheduled_actions'] if c != 'nocache'])
+    rows = [r for r in rows if r['ordinal'] % len(protocol['groups']) == group]
     remaining = pending(protocol, rows, root, cases)
     if not remaining:
         return
-    if check_environment(4) != protocol['groups'][0]:
+    if check_environment(protocol['tp']) != protocol['groups'][group]:
         raise ValueError('Worker GPU UUIDs differ from the frozen group')
-    with (root/'group0.lock').open('a') as lock:
+    with (root/f'group{group}.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        engine = Engine(root, protocol, 0, 'baseline' if phase == 'baseline' else 'cached', attempt, remaining)
+        engine = Engine(root, protocol, group, 'baseline' if phase == 'baseline' else 'cached', attempt, remaining)
         definitions = {a['id']: a for a in ACTIONS}
         try:
             for row in remaining:
-                progress(base, role, f"{phase}: starting {row['id']}")
+                progress(base, role, f"{phase}: starting {row['id']}", group)
                 engine.begin(row)
                 for case in cases:
                     if accepted(root, case, row, protocol) is not None:
@@ -79,7 +105,7 @@ def worker(base, role, phase, attempt):
                     else:
                         result, diagnostics = engine.answer(definitions[case], case)
                     publish(root, case, row, protocol, result, diagnostics)
-                    progress(base, role, f"{case}: accepted {row['id']}")
+                    progress(base, role, f"{case}: accepted {row['id']}", group)
                 deletion = engine.end()
                 atomic_json(root/'deletions'/f'{phase}-{row["id"]}.json', deletion)
         finally:
@@ -88,8 +114,9 @@ def worker(base, role, phase, attempt):
 
 def hardware(protocol):
     receipt = check_hardware(protocol)
-    if any('A800' not in device['name'] for group in receipt['groups'] for device in group):
-        raise ValueError('This deployment requires A800 GPUs; no local GPU fallback')
+    name = 'L20' if protocol['dataset'] == 'ruler' else 'A800'
+    if any(name not in device['name'] for group in receipt['groups'] for device in group):
+        raise ValueError(f'This deployment requires {name} GPUs; no local GPU fallback')
     return receipt
 
 
@@ -107,42 +134,58 @@ def execute_phase(base, role, phase, state):
     settings, _, _ = load(base, check_code=True)
     target = 'features' if phase == 'features' else role
     protocol, rows = stage(base, target)
-    cases = ['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline' else [c for c in SCHEDULE[role] if c != 'nocache']
+    cases = ['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline' else [c for c in scheduled(settings, role) if c != 'nocache']
     if not pending(protocol, rows, base/target, cases):
+        engines_idle(base/target)
         return
-    engines_idle(base/target)
-    engines_idle(base/role)
+    engines_idle(base/target); engines_idle(base/role)
     atomic_json(base/target/'hardware.json', hardware(protocol))
     cleanup_caches(base/target, protocol)
-    attempt = uuid.uuid4().hex
-    command = [sys.executable, '-u', str(Path(__file__).resolve()), 'worker', '--root', str(base),
-               '--role', role, '--phase', phase, '--attempt', attempt]
-    with (base/role/f'{phase}-{attempt}.log').open('a') as log:
-        child = subprocess.Popen(command, cwd=ROOT, env=environment(','.join(protocol['groups'][0])),
-                                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    receipt = dict(pid=child.pid, identity=identity(child.pid), phase=phase, command=command)
-    atomic_json(base/role/'processes'/f'{attempt}.json', receipt)
-    state.update(phase=phase, worker=receipt); atomic_json(base/role/'supervisor.json', state)
-    last = time.monotonic(); changed = 0
+    children = []; attempt = uuid.uuid4().hex
     try:
-        while child.poll() is None:
-            path = base/role/'progress.json'
-            if path.exists() and path.stat().st_mtime > changed:
-                changed = path.stat().st_mtime; last = time.monotonic()
-            if time.monotonic()-last > settings['watchdog_seconds']:
-                raise RuntimeError('Progress watchdog expired; inspect logs before resume')
+        for group, devices in enumerate(protocol['groups']):
+            subset = [r for r in rows if r['ordinal'] % len(protocol['groups']) == group]
+            if not pending(protocol, subset, base/target, cases):
+                continue
+            command = [sys.executable, '-u', str(Path(__file__).resolve()), 'worker', '--root', str(base),
+                       '--role', role, '--phase', phase, '--attempt', attempt, '--group', str(group)]
+            with (base/role/f'{phase}-{attempt}-group{group}.log').open('a') as log:
+                child = subprocess.Popen(command, cwd=ROOT, env=environment(','.join(devices)),
+                                         stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            receipt = dict(pid=child.pid, identity=identity(child.pid), phase=phase, group=group, command=command)
+            children.append((child, receipt))
+            # Keep feature worker ownership in the launching role for stop/resume.
+            atomic_json(base/role/'processes'/f'{attempt}-group{group}.json', receipt)
+        state.update(phase=phase, workers=[r for _, r in children]); atomic_json(base/role/'supervisor.json', state)
+        last = {r['group']: time.monotonic() for _, r in children}; changed = dict.fromkeys(last, 0)
+        while True:
+            running = False
+            for child, receipt in children:
+                code = child.poll(); group = receipt['group']
+                if code is not None:
+                    if code:
+                        raise RuntimeError(f'{phase} group{group} failed ({code}); accepted results retained, use resume')
+                    continue
+                running = True
+                path = base/role/f'progress-group{group}.json'
+                if path.exists() and path.stat().st_mtime_ns > changed[group]:
+                    changed[group] = path.stat().st_mtime_ns; last[group] = time.monotonic()
+                if time.monotonic()-last[group] > settings['watchdog_seconds']:
+                    raise RuntimeError(f'Progress watchdog expired for group{group}')
+            if not running:
+                break
             time.sleep(2)
-    except BaseException:
-        terminate_owned(receipt); child.wait(timeout=10); raise
-    if group_alive(child.pid):
-        terminate_owned(receipt)
-    atomic_json(base/role/'exits'/f'{attempt}.json', dict(receipt, exit_code=child.returncode,
-                                                       owned_engines_exited=not group_alive(child.pid)))
-    if child.returncode:
-        raise RuntimeError(f'{phase} worker failed ({child.returncode}); accepted results retained, use resume')
+    finally:
+        for child, receipt in children:
+            if child.poll() is None or group_alive(child.pid):
+                terminate_owned(receipt)
+            child.wait(timeout=10)
+            atomic_json(base/role/'exits'/f'{attempt}-group{receipt["group"]}.json', dict(receipt,
+                        exit_code=child.returncode, owned_engines_exited=not group_alive(child.pid)))
+    engines_idle(base/role); engines_idle(base/target)
     cleanup_caches(base/target, protocol)
     if pending(protocol, rows, base/target, cases):
-        raise RuntimeError('Worker exited without all scheduled records')
+        raise RuntimeError('Workers exited without all scheduled records')
 
 
 def wait_extra(base):
@@ -169,24 +212,25 @@ def supervise(base, role):
         atomic_json(state_root/'supervisor.json', state)
         try:
             # Do not ask idle() to lock our own run.lock during execute_phase.
-            for phase in (('baseline', 'cached') if role == 'primary' else ('cached',)):
+            for phase in (('baseline', 'cached') if role != 'extra' else ('cached',)):
                 execute_phase(base, role, phase, state)
             protocol, rows = stage(base, role)
-            freeze(state_root/'controls-complete.json', dict(answers=len(rows)*len(SCHEDULE[role]),
+            freeze(state_root/'controls-complete.json', dict(answers=len(rows)*len(protocol['scheduled_actions']),
                    protocol_sha256=file_hash(state_root/'protocol.json'), owned_engines_exited=True))
-            if role == 'primary':
+            if role != 'extra':
                 state.update(state='waiting-for-extra', phase='waiting'); atomic_json(state_root/'supervisor.json', state)
-                wait_extra(base)
+                if role == 'primary':
+                    wait_extra(base)
                 from scripts.longbench_a800_report import report
                 report(base, final=True, emit=False)
                 state.update(state='collecting-features'); atomic_json(state_root/'supervisor.json', state)
                 execute_phase(base, role, 'features', state)
                 freeze(base/'features/complete.json', dict(probes=len(rows), owned_engines_exited=True,
                        protocol_sha256=file_hash(base/'features/protocol.json')))
-                from scripts.router_dataset import export_longbench
-                export_longbench(base, base/'router-data.json')
+                from scripts.router_dataset import export_collection
+                export_collection(base, base/('ruler-data.json' if role == 'ruler' else 'longbench-data.json'))
             freeze(state_root/'complete.json', dict(complete=True, owned_engines_exited=True,
-                   plan_sha256=file_hash(base/'plan.json'), feature_collection=role == 'primary'))
+                   plan_sha256=file_hash(base/'plan.json'), feature_collection=role != 'extra'))
             state.update(state='complete', finished_at=time.time())
         except BaseException as error:
             state.update(state='failed', error=str(error), finished_at=time.time()); raise
@@ -195,12 +239,12 @@ def supervise(base, role):
 
 
 def detach(base, role, resume=False):
-    load(base, check_code=True)
+    stage(base, role, check_code=True)
     target = base/role
     with (target/'launch.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         idle(target)
-        if role == 'primary':
+        if role != 'extra':
             idle(base/'features')
         if (target/'complete.json').exists():
             raise ValueError('Completed launcher scope cannot be restarted')
@@ -242,10 +286,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('configure', 'prepare', 'detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'supervise', 'worker'))
     parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--role', choices=('primary', 'extra'), required=True)
+    parser.add_argument('--role', choices=('primary', 'extra', 'ruler'), required=True)
     for name in ('model', 'data', 'prepared', 'cache-root'):
         parser.add_argument('--'+name, type=Path)
-    parser.add_argument('--gpu-a'); parser.add_argument('--gpu-b')
+    parser.add_argument('--devices', default='')
+    parser.add_argument('--tp', type=int, default=2)
+    parser.add_argument('--samples-per-task', type=int, default=100)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--group', type=int, default=0)
     parser.add_argument('--phase', choices=('baseline', 'cached', 'features'))
     parser.add_argument('--attempt')
     args = parser.parse_args()
@@ -274,7 +322,7 @@ def main():
     elif args.command == 'supervise':
         supervise(args.root, args.role)
     elif args.command == 'worker':
-        worker(args.root, args.role, args.phase, args.attempt)
+        worker(args.root, args.role, args.phase, args.attempt, args.group)
     else:
         from scripts.longbench_a800_report import report
         report(args.root, args.command == 'status_same_count')
