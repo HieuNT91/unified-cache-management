@@ -28,9 +28,34 @@ def configurations(percentages=(1,5,10,15,20,30), layers=(11,12,13,14,15), skip_
         for pct in percentages if not (skip_selective and method == 'selective_prophetkv')]
 
 
+def sentence_units(tokenizer, ids, bounds):
+    """Starts of sentence units over the reusable context [b1, b-2): a unit ends after a token whose text contains
+    . ? ! or a newline, and at every chunk boundary."""
+    ends, units, start = set(bounds[2:-1]), [], bounds[1]
+    for p in range(bounds[1], bounds[-2]):
+        if p + 1 == bounds[-2] or any(c in tokenizer.decode([ids[p]]) for c in '.?!\n') or p + 1 in ends:
+            units.append(start); start = p + 1
+    return units
+
+
+def selection_inputs(args, tokenizer, sample):
+    """Probe readers and selection units of one prompt: the question tokens (default) or the last prompt token
+    (the reader of the first answer token), and token-level (default) or sentence-unit selection."""
+    bounds = sample['boundaries']
+    probe = [bounds[-1] - 1] if getattr(args, 'probe_query', 'question') == 'last' else list(sample['question_positions'])
+    units = sentence_units(tokenizer, sample['token_ids'], bounds) if getattr(args, 'units', 'none') == 'sent' else []
+    return probe, units
+
+
 def sweep_configs(args):
-    return configurations(getattr(args, 'percentages', (1,5,10,15,20,30)), getattr(args, 'layers', (11,12,13,14,15)),
-                          getattr(args, 'no_selective', False), getattr(args, 'num_layers', 64))
+    configs = configurations(getattr(args, 'percentages', (1,5,10,15,20,30)), getattr(args, 'layers', (11,12,13,14,15)),
+                             getattr(args, 'no_selective', False), getattr(args, 'num_layers', 64))
+    variant = '_'.join(x for x in ('last' if getattr(args, 'probe_query', 'question') == 'last' else '',
+                                   'sent' if getattr(args, 'units', 'none') == 'sent' else '') if x)
+    if variant:
+        for c in configs:
+            c['name'] = c['name'].replace('prophetkv-', f'prophetkv_{variant}-').replace('selective-', f'selective_{variant}-')
+    return configs
 
 
 class SharedReporter:
@@ -192,6 +217,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
     try:
         session['setup'] = llm.collective_rpc(setup)
         analyzer = OutputAnalyzer(llm.get_tokenizer())
+        tokenizer = llm.get_tokenizer()
         if not cached:
             started = time.perf_counter()
             generate(llm.llm_engine, [100,200,300,400]*32, 1, uuid.uuid4().hex+':warmup')
@@ -213,6 +239,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                     seconds=time.perf_counter()-started, readiness=readiness,
                     unique_chunks=len(prompt_cache.chunks), reused_by=[c['name'] for c in pending])
                 atomic_json(group/'construction'/f'{index:06d}.json', construction)
+            probe_positions, units = selection_inputs(args, tokenizer, sample)
             for config in pending:
                 method, ratio = config['method'], config['ratio']
                 scoring = resolve_layers(method,config['layers'],None,num_layers) if cached else ()
@@ -227,7 +254,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                     rid = f'{namespace}:{tag}:read:{config["name"]}-{purpose}'
                     if cached:
                         llm.collective_rpc(arm, kwargs=dict(request_id=rid, boundaries=bounds,
-                                                          question_positions=sample['question_positions']))
+                                                          question_positions=probe_positions, units=units))
                     return rid, generate(llm.llm_engine, ids, budget, rid, thinking)
 
                 timings = {}
@@ -388,6 +415,10 @@ def main():
     parser.add_argument('--dry-run',action='store_true')
     parser.add_argument('--resume',action='store_true')
     parser.add_argument('--skip-selective',action='store_true')
+    parser.add_argument('--probe-query',choices=['question','last'],default='question',
+                        help='probe readers: the question tokens (ProphetKV) or the last prompt token')
+    parser.add_argument('--units',choices=['none','sent'],default='none',
+                        help='select tokens one by one (ProphetKV) or whole sentence units')
     parser.add_argument('--no-selective',action='store_true',
                         help='Run baseline and all-layer ProphetKV only (no resume semantics)')
     run_sweep(parser.parse_args())

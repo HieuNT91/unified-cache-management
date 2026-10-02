@@ -138,7 +138,19 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, num_
             raise RuntimeError('TP ranks disagree on native attention scores')
         common_scores = scores
         count = math.floor(len(scores) * ratio)
-        reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
+        units = event.get('units') or []
+        if units:
+            # Unit replay: best unit (max token score; ties by unit index) first until the token budget is reached.
+            starts = [u - prefix for u in units]; ends = starts[1:] + [len(scores)]
+            best = [max(scores[a:z]) for a, z in zip(starts, ends)]
+            reference, used = [], 0
+            for u in sorted(range(len(starts)), key=lambda u: (-best[u], u)):
+                if used >= count:
+                    break
+                reference.extend(range(starts[u] + prefix, ends[u] + prefix)); used += ends[u] - starts[u]
+            reference.sort()
+        else:
+            reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
         if (event['selected_positions'] != reference or event['scoring_layers'] != list(expected_layers)
                 or event['fusion'] != 'mean_layers_fp32' or event['alignment_count'] != num_layers):
             raise RuntimeError('Selection replay, mean or cache alignment mismatch')

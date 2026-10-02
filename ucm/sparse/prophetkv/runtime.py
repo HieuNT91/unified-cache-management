@@ -1,7 +1,7 @@
 """All-layer probing using the loaded Qwen3 model and once-aligned paged KV."""
 import time
 import torch
-from .selection import context_importance, select, LayerAlignment
+from .selection import context_importance, select, select_units, LayerAlignment
 
 
 def delta_rotation_table(table):
@@ -15,12 +15,12 @@ def delta_rotation_table(table):
     return (table.float() / amplitude).to(table.dtype)
 
 
-def global_selection(scores, prefix, ratio):
+def global_selection(scores, prefix, ratio, units=()):
     from vllm.distributed import tensor_model_parallel_all_reduce, get_tp_group
     group = get_tp_group()
     scores = tensor_model_parallel_all_reduce(scores) / group.world_size
     eligible = scores[prefix:]
-    selected = select(eligible, prefix, ratio)
+    selected = select_units(eligible, prefix, ratio, units) if units else select(eligible, prefix, ratio)
     if group.world_size > 1 and selected.numel():
         selected = group.broadcast(selected, src=0)
     return eligible, selected
@@ -73,11 +73,11 @@ def setup(worker):
     return {'installed':True,'layers':len(model.layers)}
 
 
-def set_request(worker,request_id,boundaries,question_positions):
+def set_request(worker,request_id,boundaries,question_positions,units=()):
     from ucm.sparse.state import get_ucm_sparse
     from .selection import RequestMetadata
     sparse=get_ucm_sparse()
-    sparse.request_state.arm(RequestMetadata(request_id,tuple(boundaries),tuple(question_positions)))
+    sparse.request_state.arm(RequestMetadata(request_id,tuple(boundaries),tuple(question_positions),tuple(units)))
 
 
 @torch.inference_mode()
@@ -151,10 +151,10 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     # across the TP group before ranking, so every rank repairs the same tokens.
     scores.div_(len(scoring_layers))
     local_mean = scores.detach().clone() if capture else None
-    eligible, selected = global_selection(scores, b[1], sparse.ratio)
+    eligible, selected = global_selection(scores, b[1], sparse.ratio, *((meta.units,) if meta.units else ()))
     sparse.selection_diagnostics.append(dict(kind='prophetkv_selection',request_id=meta.request_id,
         scores=eligible,selected_positions=selected,eligible_count=len(eligible),selected_count=len(selected),
-        question_positions=list(meta.question_positions),prefix_tokens=b[1],suffix_tokens=suffix_tokens,
+        question_positions=list(meta.question_positions),units=list(meta.units),prefix_tokens=b[1],suffix_tokens=suffix_tokens,
         probe_layers=len(scoring_layers),scoring_layers=list(scoring_layers),sequential_project_layers=scoring_layers[-1]+1,
         suffix_forward_layers=scoring_layers[-1] if sparse.method == "selective_prophetkv" else len(sparse.model.layers),probe_tokens_per_layer=suffix_tokens,probe_query_budget=query_budget,probe_seconds=time.perf_counter()-started,
         normalization='all_context_keys',fusion='mean_layers_fp32',ratio=sparse.ratio,

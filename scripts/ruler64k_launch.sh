@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Launch one TP1 `run.sh sweep` shard per GPU over a prepared RULER manifest:
 # baseline, then all-layer ProphetKV at each ratio (KV built once per prompt).
-#   PYTHON_BIN MODEL MANIFEST OUT CACHE_ROOT GPUS="1 2 3" [PERCENTAGES="10 30 50 70 90"]
+#   PYTHON_BIN MODEL MANIFEST OUT CACHE_ROOT GPUS="1 2 3" [PERCENTAGES="10 30 50 70 90"] [EXTRA_ARGS="--probe-query last --units sent"]
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${PYTHON_BIN:?}" "${MODEL:?}" "${MANIFEST:?}" "${OUT:?}" "${CACHE_ROOT:?}" "${GPUS:?}"
 PERCENTAGES="${PERCENTAGES:-10 30 50 70 90}"
+EXTRA_ARGS="${EXTRA_ARGS:-}"
 export CUDA_DEVICE_ORDER=PCI_BUS_ID HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 read -r -a gpus <<< "$GPUS"
 [[ ${#gpus[@]} -gt 0 ]] || { echo "GPUS is empty" >&2; exit 1; }
@@ -27,6 +28,6 @@ for i in "${!gpus[@]}"; do
   CUDA_VISIBLE_DEVICES="$uuid" PYTHON_BIN="$PYTHON_BIN" setsid nohup bash "$ROOT/run.sh" sweep \
     --model "$MODEL" --manifest "$MANIFEST" --output "$OUT" --cache-root "$CACHE_ROOT" \
     --tp 1 --shard "$i" --shards "$shards" --percentages $PERCENTAGES --no-selective \
-    --context-length 73728 > "$log" 2>&1 < /dev/null &
+    --context-length 73728 $EXTRA_ARGS > "$log" 2>&1 < /dev/null &
   echo "shard $i -> GPU ${gpus[$i]} ($uuid) pid $! log $log"
 done

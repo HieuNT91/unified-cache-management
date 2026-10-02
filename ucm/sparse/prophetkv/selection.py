@@ -8,6 +8,7 @@ class RequestMetadata:
     request_id: str
     boundaries: tuple
     question_positions: tuple
+    units: tuple = ()
 
     def __post_init__(self):
         b=self.boundaries
@@ -18,6 +19,9 @@ class RequestMetadata:
         q=self.question_positions
         if not q or list(q)!=sorted(set(q)) or q[0]<b[-2] or q[-1]>=b[-1]:
             raise ValueError('Question must lie entirely in fresh suffix')
+        u=self.units
+        if u and (u[0]!=b[1] or list(u)!=sorted(set(u)) or u[-1]>=b[-2]):
+            raise ValueError('Units must be sorted starts partitioning the reusable context')
 
 
 def context_importance(q,k,key_tile=2048,query_tile=16):
@@ -52,6 +56,28 @@ def select(scores,prefix,ratio):
         raise ValueError('Invalid selection')
     count=math.floor(len(scores)*ratio)
     return (torch.argsort(scores,descending=True,stable=True)[:count]+prefix).sort().values
+
+
+def select_units(scores,prefix,ratio,units):
+    """Recompute whole units (e.g. sentences): best unit first by its maximum token score, until the token
+    budget floor(len*ratio) is reached (the last unit may overflow it). A unit is then either fully fresh or fully
+    reused, so a reader never sees a partially recomputed span."""
+    if not 0<=ratio<=1 or scores.ndim!=1 or not torch.isfinite(scores).all():
+        raise ValueError('Invalid selection')
+    count=math.floor(len(scores)*ratio)
+    if count==0:
+        return torch.zeros(0,dtype=torch.long,device=scores.device)
+    starts=torch.as_tensor(units,device=scores.device,dtype=torch.long)-prefix
+    ends=torch.cat((starts[1:],torch.tensor([len(scores)],device=scores.device)))
+    lengths=ends-starts
+    segment=torch.repeat_interleave(torch.arange(len(starts),device=scores.device),lengths)
+    best=torch.full((len(starts),),-float('inf'),device=scores.device,dtype=scores.dtype).scatter_reduce(
+        0,segment,scores,reduce='amax')
+    order=torch.argsort(best,descending=True,stable=True)
+    taken=int((torch.cumsum(lengths[order],0)<count).sum())+1
+    chosen=torch.zeros(len(starts),dtype=torch.bool,device=scores.device)
+    chosen[order[:taken]]=True
+    return (torch.nonzero(chosen[segment])[:,0]+prefix).sort().values
 
 
 def request_mask(positions,selected,prefix,end,hits,block_size=64):
