@@ -9,6 +9,7 @@ class RequestMetadata:
     boundaries: tuple
     question_positions: tuple
     units: tuple = ()
+    drafts: int = 0
 
     def __post_init__(self):
         b=self.boundaries
@@ -22,6 +23,8 @@ class RequestMetadata:
         u=self.units
         if u and (u[0]!=b[1] or list(u)!=sorted(set(u)) or u[-1]>=b[-2]):
             raise ValueError('Units must be sorted starts partitioning the reusable context')
+        if self.drafts < 0 or (self.drafts and (self.units or list(q) != [b[-1] - 1])):
+            raise ValueError('Draft readers require the last-token probe and token-level selection')
 
 
 def context_importance(q,k,key_tile=2048,query_tile=16):

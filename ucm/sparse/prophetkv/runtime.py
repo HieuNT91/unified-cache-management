@@ -73,11 +73,65 @@ def setup(worker):
     return {'installed':True,'layers':len(model.layers)}
 
 
-def set_request(worker,request_id,boundaries,question_positions,units=()):
+def set_request(worker,request_id,boundaries,question_positions,units=(),drafts=0):
     from ucm.sparse.state import get_ucm_sparse
     from .selection import RequestMetadata
     sparse=get_ucm_sparse()
-    sparse.request_state.arm(RequestMetadata(request_id,tuple(boundaries),tuple(question_positions),tuple(units)))
+    if drafts and not hasattr(sparse,'lm'):
+        sparse.lm=worker.model_runner.model   # Qwen3ForCausalLM: compute_logits for the greedy drafts
+    sparse.request_state.arm(RequestMetadata(request_id,tuple(boundaries),tuple(question_positions),tuple(units),int(drafts)))
+
+
+@torch.inference_mode()
+def draft_readers(sparse, context, slots, hidden, residual, suffix_kv, b, drafts):
+    """D greedy draft tokens decoded over the stale cache (nothing is written to the paged cache). Returns their
+    attention rows over the context [D, b[-2]] (mean over layers and heads, softmax over context keys) and ids.
+
+    Context attention runs on the paged cache (FlashAttention with the request's block table, no gather) and is
+    merged by log-sum-exp with exact attention over the few fresh suffix/draft keys; the rows are computed after
+    decoding with one key gather per layer."""
+    from vllm.vllm_flash_attn import flash_attn_with_kvcache
+    model = sparse.model
+    h, _ = model.norm(hidden[-1:], residual[-1:])
+    token = int(sparse.lm.compute_logits(h, None)[-1].argmax())
+    device = hidden.device; L = len(model.layers)
+    attn0 = model.layers[0].self_attn
+    groups = attn0.num_heads // attn0.num_kv_heads; scale = attn0.head_dim ** -0.5
+    table = sparse.attn_metadata.block_table[0][:b[-2] // 64][None].to(torch.int32)
+    seqlens = torch.tensor([b[-2]], device=device, dtype=torch.int32)
+    own = [[] for _ in range(L)]; queries = [[] for _ in range(L)]; tokens = []
+    for j in range(drafts):
+        tokens.append(token)
+        x = model.get_input_embeddings(torch.tensor([token], device=device)); r = None
+        pos = torch.tensor([b[-1] + j], device=device)
+        for i, layer in enumerate(model.layers):
+            cache = context.no_compile_layers[f'model.layers.{i}.self_attn.attn'].kv_cache[context.virtual_engine]
+            q, k, v, r = project(layer, x, r, pos)
+            queries[i].append(q); own[i].append((k, v))
+            out_c, lse_c = flash_attn_with_kvcache(q[None], cache[0], cache[1], cache_seqlens=seqlens,
+                block_table=table, softmax_scale=scale, causal=False, return_softmax_lse=True)
+            sk, sv = suffix_kv[i]
+            keys = torch.cat([sk] + [a for a, _ in own[i]]).repeat_interleave(groups, 1).float()
+            vals = torch.cat([sv] + [c for _, c in own[i]]).repeat_interleave(groups, 1).float()
+            logits = torch.einsum('hd,khd->hk', q[0].float(), keys) * scale
+            lse_l = torch.logsumexp(logits, -1)
+            out_l = torch.einsum('hk,khd->hd', (logits - lse_l[:, None]).exp(), vals)
+            lse_c = lse_c.reshape(-1).float()
+            lse = torch.logaddexp(lse_c, lse_l)
+            out = out_c.reshape(-1, attn0.head_dim).float() * (lse_c - lse).exp()[:, None] + out_l * (lse_l - lse).exp()[:, None]
+            o, _ = layer.self_attn.o_proj(out.to(q.dtype).reshape(1, -1))
+            o, r = layer.post_attention_layernorm(o, r)
+            x = layer.mlp(o)
+        h, _ = model.norm(x, r)
+        token = int(sparse.lm.compute_logits(h, None)[-1].argmax())
+    rows = torch.zeros(drafts, b[-2], device=device, dtype=torch.float32)
+    for i in range(L):
+        cache = context.no_compile_layers[f'model.layers.{i}.self_attn.attn'].kv_cache[context.virtual_engine]
+        ck = cache[0, slots // 64, slots % 64]
+        for j in range(drafts):
+            rows[j].add_(context_importance(queries[i][j], ck), alpha=1.0 / L)
+        del ck
+    return rows, tokens
 
 
 @torch.inference_mode()
@@ -104,6 +158,10 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     scoring_layers = sparse.scoring_layers
     capture = getattr(sparse, 'router_capture', False)
     captured = []
+    drafts = meta.drafts
+    if drafts and (sparse.method != 'prophetkv' or list(scoring_layers) != list(range(len(sparse.model.layers)))):
+        raise RuntimeError('Draft readers need the all-layer ProphetKV probe')
+    suffix_kv = []
     for i,layer in enumerate(sparse.model.layers):
         name=f'model.layers.{i}.self_attn.attn'
         sparse.connector.wait_for_layer_load(name)
@@ -130,6 +188,8 @@ def probe(sparse,positions,embeddings,query_budget=16384):
         if sparse.method == "selective_prophetkv" and i == scoring_layers[-1]:
             del ck,cv,q,k,v
             break
+        if drafts:
+            suffix_kv.append((k,v))
         full_k=torch.cat((ck,k));full_v=torch.cat((cv,v))
         next_hidden, next_residual = [], []
         for a in range(0, suffix_tokens, query_budget):
@@ -142,7 +202,9 @@ def probe(sparse,positions,embeddings,query_budget=16384):
             h,r=layer.post_attention_layernorm(h,residual[a:z])
             next_hidden.append(layer.mlp(h));next_residual.append(r)
         hidden=torch.cat(next_hidden);residual=torch.cat(next_residual)
-        del ck,cv,full_k,full_v,q,k,v,output,next_hidden,next_residual
+        del ck,cv,full_k,full_v,output,next_hidden,next_residual
+        if not drafts:
+            del q,k,v
     # All remaining cached layers must be loaded and rotated before recomputation.
     for i in range(len(sparse.model.layers)):
         sparse.connector.wait_for_layer_load(f"model.layers.{i}.self_attn.attn")
@@ -151,14 +213,27 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     # across the TP group before ranking, so every rank repairs the same tokens.
     scores.div_(len(scoring_layers))
     local_mean = scores.detach().clone() if capture else None
-    eligible, selected = global_selection(scores, b[1], sparse.ratio, *((meta.units,) if meta.units else ()))
+    extra = {}
+    if drafts:
+        rows, tokens = draft_readers(sparse, context, slots, hidden, residual, suffix_kv, b, drafts)
+        del suffix_kv
+        from vllm.distributed import tensor_model_parallel_all_reduce, get_tp_group
+        rows = tensor_model_parallel_all_reduce(rows) / get_tp_group().world_size
+        scores = tensor_model_parallel_all_reduce(scores) / get_tp_group().world_size
+        from .trajectory import gated_selection
+        selected, z, copying = gated_selection(torch.cat((scores[None], rows)), b[1], sparse.ratio)
+        eligible = scores[b[1]:]
+        extra = dict(selection_method='copy_gated_trajectory', drafts=drafts, draft_tokens=tokens,
+                     copy_z=float(z), copying=bool(copying), trajectory_lambda=16384.0, copy_z_threshold=2.0)
+    else:
+        eligible, selected = global_selection(scores, b[1], sparse.ratio, *((meta.units,) if meta.units else ()))
     sparse.selection_diagnostics.append(dict(kind='prophetkv_selection',request_id=meta.request_id,
         scores=eligible,selected_positions=selected,eligible_count=len(eligible),selected_count=len(selected),
         question_positions=list(meta.question_positions),units=list(meta.units),prefix_tokens=b[1],suffix_tokens=suffix_tokens,
         probe_layers=len(scoring_layers),scoring_layers=list(scoring_layers),sequential_project_layers=scoring_layers[-1]+1,
         suffix_forward_layers=scoring_layers[-1] if sparse.method == "selective_prophetkv" else len(sparse.model.layers),probe_tokens_per_layer=suffix_tokens,probe_query_budget=query_budget,probe_seconds=time.perf_counter()-started,
         normalization='all_context_keys',fusion='mean_layers_fp32',ratio=sparse.ratio,
-        selection_stage='before_layer_0_qkv',alignment_count=len(sparse.connector.prophet_aligned)))
+        selection_stage='before_layer_0_qkv',alignment_count=len(sparse.connector.prophet_aligned),**extra))
     if capture:
         sparse.router_arrays = (torch.stack(captured), eligible.detach().clone(), local_mean)
     return selected

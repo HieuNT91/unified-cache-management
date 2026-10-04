@@ -149,6 +149,12 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, num_
                     break
                 reference.extend(range(starts[u] + prefix, ends[u] + prefix)); used += ends[u] - starts[u]
             reference.sort()
+        elif event.get('selection_method') == 'copy_gated_trajectory' and event['copying']:
+            # Chain min-cut over the draft readers' trajectory: rows are not exported, so check the budget and range.
+            reference = event['selected_positions']
+            if (len(reference) != count or reference != sorted(set(reference))
+                    or reference[0] < prefix or reference[-1] >= end or not event['copy_z'] >= event['copy_z_threshold']):
+                raise RuntimeError('Invalid trajectory selection')
         else:
             reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
         if (event['selected_positions'] != reference or event['scoring_layers'] != list(expected_layers)

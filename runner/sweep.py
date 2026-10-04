@@ -62,10 +62,27 @@ def sweep_configs(args):
                              getattr(args, 'no_selective', False), getattr(args, 'num_layers', 64))
     variant = '_'.join(x for x in ('last' if getattr(args, 'probe_query', 'question') == 'last' else '',
                                    'sent' if getattr(args, 'units', 'none') == 'sent' else '',
-                                   f"ml{args.unit_min_len}" if getattr(args, 'unit_min_len', 0) else '') if x)
+                                   f"ml{args.unit_min_len}" if getattr(args, 'unit_min_len', 0) else '',
+                                   f"traj{args.drafts}" if getattr(args, 'drafts', 0) else '') if x)
     if variant:
         for c in configs:
             c['name'] = c['name'].replace('prophetkv-', f'prophetkv_{variant}-').replace('selective-', f'selective_{variant}-')
+    if getattr(args, 'variants', None):
+        # Several probe/selection variants share one baseline phase and one cached engine: 'question' (ProphetKV),
+        # 'last' (last-token probe, top-k), 'last:trajD' (copy-gated trajectory selection with D draft readers).
+        out = configs[:1]
+        for spec in args.variants:
+            probe, _, extra = spec.partition(':')
+            if probe not in ('question', 'last') or (extra and not (extra.startswith('traj') and extra[4:].isdigit())):
+                raise ValueError(f'Unknown variant {spec}')
+            drafts = int(extra[4:]) if extra else 0
+            if drafts and probe != 'last':
+                raise ValueError('Draft readers need the last-token probe')
+            tag = '_'.join(x for x in ('last' if probe == 'last' else '', extra) if x)
+            for c in configs[1:]:
+                out.append(dict(c, name=c['name'].replace('prophetkv', 'prophetkv' + (f'_{tag}' if tag else ''), 1),
+                                probe=probe, drafts=drafts))
+        configs = out
     return configs
 
 
@@ -253,6 +270,9 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
             probe_positions, units = selection_inputs(args, tokenizer, sample)
             for config in pending:
                 method, ratio = config['method'], config['ratio']
+                if 'probe' in config:
+                    probe_positions = [bounds[-1] - 1] if config['probe'] == 'last' else list(sample['question_positions'])
+                drafts = config.get('drafts', getattr(args, 'drafts', 0))
                 scoring = resolve_layers(method,config['layers'],None,num_layers) if cached else ()
                 if cached:
                     replies = llm.collective_rpc(configure, kwargs=dict(method=method, ratio=ratio, layers=config['layers']))
@@ -265,7 +285,8 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                     rid = f'{namespace}:{tag}:read:{config["name"]}-{purpose}'
                     if cached:
                         llm.collective_rpc(arm, kwargs=dict(request_id=rid, boundaries=bounds,
-                                                          question_positions=probe_positions, units=units))
+                                                          question_positions=probe_positions, units=units,
+                                                          drafts=drafts))
                     return rid, generate(llm.llm_engine, ids, budget, rid, thinking)
 
                 timings = {}
@@ -432,6 +453,10 @@ def main():
                         help='select tokens one by one (ProphetKV) or whole sentence units')
     parser.add_argument('--unit-min-len',type=int,default=0,
                         help='with --units sent: units shorter than this many tokens are selected token by token')
+    parser.add_argument('--drafts',type=int,default=0,
+                        help='copy-gated trajectory selection with this many greedy draft readers (needs --probe-query last)')
+    parser.add_argument('--variants',nargs='+',
+                        help="probe/selection variants sharing one baseline: question, last, last:trajD")
     parser.add_argument('--no-selective',action='store_true',
                         help='Run baseline and all-layer ProphetKV only (no resume semantics)')
     run_sweep(parser.parse_args())
