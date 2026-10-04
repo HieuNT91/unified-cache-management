@@ -38,8 +38,26 @@ def multi_words(prediction, truth):
     return sum(t.lower() in words for t in truth) / len(truth)
 
 
+def multi_number(prediction, truth):
+    numbers = re.findall(r'\d+', normalize_answer(prediction))
+    return sum(t in numbers for t in truth) / len(truth)
+
+
+def string_match_part(prediction, truth):
+    p = postprocess_pred(prediction).lower()
+    return max(max(float(t.lower() in p) for t in truth), max(float(p in t.lower()) for t in truth))
+
+
 def sparse_attention_score(task, prediction, references):
-    return multi_words(prediction, references) if task == 'cwe' else needle_score(prediction, references[0])
+    # sparse_attention / ShadowKV RULER metrics (data/dataset.py): multivalue/multiquery -> multi_number,
+    # vt/cwe/fwe -> multi_words, qa -> string_match_part, other NIAH -> needle_score
+    if 'multivalue' in task or 'multiquery' in task:
+        return multi_number(prediction, references)
+    if task in ('vt', 'cwe', 'fwe'):
+        return multi_words(prediction, references)
+    if task.startswith('qa_'):
+        return string_match_part(prediction, references)
+    return needle_score(prediction, references[0])
 
 
 def order(name):

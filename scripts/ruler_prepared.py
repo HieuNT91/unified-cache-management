@@ -24,7 +24,7 @@ from runner.profiles import PROFILES
 from runner.setups import atomic_json, file_hash, fingerprint
 
 # RULER generation lengths used by sparse_attention (ShadowKV/data/dataset.py).
-GEN_LEN = {'niah': 128, 'cwe': 120}
+GEN_LEN = {'niah': 128, 'cwe': 120, 'vt': 30, 'fwe': 50, 'qa': 32}
 
 
 def query_span(content, task):
@@ -99,7 +99,7 @@ def main():
         rows = [json.loads(line) for line in source.read_text().splitlines() if line.strip()][:args.samples]
         if len(rows) != args.samples:
             raise ValueError(f'Expected {args.samples} rows in {source}')
-        output = GEN_LEN['niah' if task.startswith('niah_') else task]
+        output = GEN_LEN['niah' if task.startswith('niah_') else 'qa' if task.startswith('qa_') else task]
         for ordinal, row in enumerate(rows):
             sample = format_sample(tokenizer, row, task, window, output, args.layout)
             sample['source_row'] = ordinal
@@ -108,7 +108,7 @@ def main():
             atomic_json(args.output / relative, sample)
             refs = row['outputs'] if isinstance(row['outputs'], list) else [row['outputs']]
             manifest.append(dict(id=f'{task}-{ordinal:03d}', prepared=relative, subtask=task,
-                                 references=refs, scoring='ruler_all'))
+                                 references=refs, scoring='ruler_any' if task.startswith('qa_') else 'ruler_all'))
             lengths.append(len(sample['token_ids']))
     # Task-interleaved order so every index % shards slice holds every task.
     order = sorted(range(len(manifest)), key=lambda i: (i % args.samples, i // args.samples))
