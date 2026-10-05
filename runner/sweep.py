@@ -410,10 +410,12 @@ def _run_sweep(args):
              scoring_layers=(c['layers'] or list(range(args.num_layers))) if c['method'] != 'baseline' else [],
              sweep_fingerprint=identity,
              cache_policy='temporary per prompt; construction excluded from TTFT'),args.shard,args.shards)
-        for c in configs}
+        for c in configs if not (getattr(args, 'skip_baseline', False) and c['method'] == 'baseline')}
     try:
         if resume:
             reporters['baseline'].finish()  # validated original engine-exit receipts
+        elif getattr(args, 'skip_baseline', False):
+            pass   # dense baseline measured by an earlier run on the same manifest; only cached configs here
         else:
             execute_phase(args,selected,configs[:1],reporters,group,cache,devices)
         execute_phase(args,selected,configs[1:],reporters,group,cache,devices)
@@ -457,6 +459,8 @@ def main():
                         help='copy-gated trajectory selection with this many greedy draft readers (needs --probe-query last)')
     parser.add_argument('--variants',nargs='+',
                         help="probe/selection variants sharing one baseline: question, last, last:trajD")
+    parser.add_argument('--skip-baseline',action='store_true',
+                        help='do not run the dense baseline phase (it was measured by an earlier run)')
     parser.add_argument('--no-selective',action='store_true',
                         help='Run baseline and all-layer ProphetKV only (no resume semantics)')
     run_sweep(parser.parse_args())
