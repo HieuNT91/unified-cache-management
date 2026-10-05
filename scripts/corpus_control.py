@@ -70,7 +70,7 @@ def check_hardware(settings):
     from runner.tree_profiles import hardware_profile,allocation
     from runner.tensor_parallel import protocol_tp
     tp=protocol_tp(settings)
-    profile=hardware_profile(settings.get('hardware_profile','server'),settings['dataset'],tp)
+    profile=hardware_profile(settings.get('hardware_profile','server'),settings.get('execution_profile',settings['dataset']),tp)
     raw=subprocess.check_output(['nvidia-smi','--query-gpu=uuid,name,memory.total,memory.free','--format=csv,noheader,nounits'],text=True)
     inventory={r[0].strip():dict(name=r[1].strip(),total_mib=float(r[2]),free_mib=float(r[3])) for r in csv.reader(raw.splitlines())}
     requested=sum(settings['groups'],[])
@@ -78,7 +78,7 @@ def check_hardware(settings):
     if settings.get('hardware_profile')=='l20-tp2' and tp!=2:
         raise ValueError('L20 TP2 allocation requires exactly two ranks')
     weights=index['metadata']['total_size']/tp
-    kv=allocation(settings['dataset'],settings.get('hardware_profile','server'))['kv_tokens']*262144/tp
+    kv=allocation(settings.get('execution_profile',settings['dataset']),settings.get('hardware_profile','server'))['kv_tokens']*262144/tp
     # Per-rank BF16 weights + full position KV + explicit activation/runtime reserve.
     required=(weights+kv+profile['workspace_gib']*2**30)/profile['memory']/2**20
     for gpu in requested:

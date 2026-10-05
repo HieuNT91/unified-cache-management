@@ -265,15 +265,134 @@ class TP2Tests(unittest.TestCase):
             protocol=dict(groups=[['a','b'],['c','d']],tp=2)
             processes=[Mock(pid=101,returncode=1),Mock(pid=102,returncode=-15)]
             processes[0].poll.return_value=1;processes[1].poll.return_value=None
+            calls=iter(processes)
+            def launch(*args,**kwargs):
+                kwargs['stdout'].write('Traceback (most recent call last):\nRuntimeError: synthetic worker failure\n')
+                kwargs['stdout'].flush()
+                return next(calls)
+            state={}
             with patch.object(control,'load',return_value=(dict(dataset='longbench-v2',watchdog_seconds=7200),{},[])), \
                  patch.object(control,'stage',return_value=(protocol,[dict(id='p0',ordinal=0),dict(id='p1',ordinal=1)])), \
                  patch.object(control,'pending',side_effect=lambda p,r,*a:r),patch.object(control,'engines_idle'), \
                  patch.object(control,'hardware',return_value={}),patch.object(control,'cleanup_caches'), \
-                 patch.object(control.subprocess,'Popen',side_effect=processes),patch.object(control,'identity',return_value={}), \
+                 patch.object(control.subprocess,'Popen',side_effect=launch),patch.object(control,'identity',return_value={}), \
                  patch.object(control,'group_alive',return_value=False),patch.object(control,'terminate_owned') as kill:
-                with self.assertRaisesRegex(RuntimeError,'failed'):control.execute_phase(base,'primary','cached',{})
+                with self.assertRaisesRegex(RuntimeError,'synthetic worker failure') as caught:
+                    control.execute_phase(base,'primary','cached',state)
             self.assertEqual(kill.call_args.args[0]['pid'],102)
             self.assertEqual(saved.read_text(),'untouched')
             self.assertEqual(len(list((base/'primary/exits').glob('*.json'))),2)
+            failed=state['failed_worker']
+            self.assertEqual((failed['pid'],failed['group'],failed['exit_code']), (101,0,1))
+            self.assertEqual(failed['gpu_uuids'],['a','b'])
+            self.assertTrue(Path(failed['log']).is_file())
+            self.assertIn(failed['log'],str(caught.exception))
+
+    def test_worker_saves_failure_before_shutdown_and_keeps_original_error(self):
+        from runner.corpus_runtime import Engine
+        for fail_begin in (True, False):
+            for secondary_failures in (False, True):
+                with self.subTest(begin=fail_begin,secondary=secondary_failures), tempfile.TemporaryDirectory() as tmp:
+                    base=Path(tmp);(base/'ruler').mkdir()
+                    protocol=dict(tp=2,groups=[['a','b']],scheduled_actions=['prophetkv-1'])
+                    row=dict(id='p0',ordinal=0)
+                    engine=Mock(spec=Engine)
+                    original=RuntimeError('cache inventory failed' if fail_begin else 'Incomplete external cache load')
+                    (engine.begin if fail_begin else engine.answer).side_effect=original
+                    order=[]
+                    def save(*args):
+                        order.append('receipt')
+                        if secondary_failures:raise OSError('disk full')
+                        return base/'failure.json'
+                    def close():
+                        order.append('shutdown')
+                        if secondary_failures:raise RuntimeError('engine already dead')
+                    engine.record_failure.side_effect=save;engine.close.side_effect=close
+                    with patch.object(control,'stage',return_value=(protocol,[row])), \
+                         patch.object(control,'pending',return_value=[row]), \
+                         patch.object(control,'accepted',return_value=None), \
+                         patch('runner.setups.check_environment',return_value=['a','b']), \
+                         patch('runner.corpus_runtime.Engine',return_value=engine), \
+                         patch.object(control,'publish') as publish:
+                        with self.assertRaises(RuntimeError) as caught:
+                            control.worker(base,'ruler','cached','attempt',0)
+                    self.assertIs(caught.exception,original)
+                    self.assertEqual(order,['receipt','shutdown'])
+                    engine.record_failure.assert_called_once_with(original,'cached',None if fail_begin else 'prophetkv-1')
+                    publish.assert_not_called()
+
+    def test_failure_inventory_survives_cache_cleanup_and_records_missing_extra(self):
+        from runner.corpus_runtime import Engine
+        import shutil
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp);cache=base/'cache';session=base/'sessions'/'attempt'
+            (cache/'kv').mkdir(parents=True)
+            (cache/'kv'/'expected').write_bytes(b'kv')
+            (cache/'kv'/'unexpected').write_bytes(b'other')
+            engine=Engine.__new__(Engine)
+            engine.group=3;engine.row=dict(id='p0');engine.namespace='a'*32
+            engine.session=session;engine.cache=cache;engine.cached=True
+            engine.pc=NS(files={'kv/expected','kv/missing'})
+            try:raise RuntimeError('Incomplete external cache load')
+            except RuntimeError as error:path=engine.record_failure(error,'cached','prophetkv-50')
+            receipt=json.loads(path.read_text());inventory=receipt['inventory']
+            self.assertEqual(receipt['case'],'prophetkv-50')
+            self.assertEqual(receipt['prompt_id'],'p0')
+            self.assertIn('RuntimeError: Incomplete external cache load',receipt['traceback'])
+            self.assertEqual(inventory['extra'],['kv/unexpected'])
+            self.assertEqual(inventory['missing'],['kv/missing'])
+            self.assertEqual(inventory['actual_files']['kv/expected']['bytes'],2)
+            self.assertFalse(inventory['quiescence_verified'])
+            self.assertEqual((cache/'kv'/'unexpected').read_bytes(),b'other')
+            shutil.rmtree(cache)
+            self.assertEqual(json.loads(path.read_text()),receipt)
+
+    def test_owned_cleanup_after_root_relocation_preserves_archived_cache_and_results(self):
+        from runner.setups import fingerprint
+        from scripts.router_control import cleanup_caches
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp);root=base/'ruler';cache=base/'cache'
+            root.mkdir();cache.mkdir()
+            accepted_path=root/'accepted.json';accepted_path.write_text('accepted')
+            saved=file_hash(accepted_path)
+            anchor=cache/fingerprint(str(root))[:16]/'group3'
+            old=anchor/('a'*32);old.mkdir(parents=True)
+            (old/'evidence').write_text('keep')
+            atomic_json(root/'sessions/old/ownership.json',dict(cache=str(old),group=3,pid=100,identity=None))
+            backup=base/'hdd-backup';cache.rename(backup)
+            target=base/'ssd-cache';target.mkdir();cache.symlink_to(target,target_is_directory=True)
+            new=anchor/('b'*32);new.mkdir(parents=True)
+            (new/'temporary').write_text('retired')
+            atomic_json(root/'sessions/new/ownership.json',dict(cache=str(new),group=3,pid=101,identity=None))
+            with patch('scripts.router_control.alive',return_value=False), \
+                 patch('scripts.router_control.group_alive',return_value=False):
+                self.assertEqual(cleanup_caches(root,dict(cache_root=str(cache))),[str(new)])
+            self.assertEqual((backup/old.relative_to(cache)/'evidence').read_text(),'keep')
+            self.assertFalse(new.exists())
+            self.assertEqual(file_hash(accepted_path),saved)
+
+    def test_worker_failure_reads_bounded_tail_and_handles_unavailable_logs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'worker with spaces.log'
+            receipt=dict(pid=42,phase='cached',group=4,log=str(path),gpu_uuids=['GPU-one','GPU-two'])
+            path.write_bytes(b'not-in-tail\n'+b'x'*40000+b'\n'+b'line\n'*90+b'RuntimeError: actual worker error\xff\n')
+            message=str(control.worker_failure(receipt,1))
+            self.assertIn('cached group4 failed (1)',message)
+            self.assertIn('actual worker error',message)
+            self.assertIn('GPU-one, GPU-two',message)
+            self.assertNotIn('not-in-tail',message)
+            self.assertLess(len(message),4000)
+            path.write_text('')
+            self.assertIn('Worker log is empty',str(control.worker_failure(receipt,1)))
+            path.unlink()
+            self.assertIn('Could not read worker log',str(control.worker_failure(receipt,1)))
+
+    def test_watchdog_message_keeps_log_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'worker.log';path.write_text('Waiting for committed shards\n')
+            receipt=dict(pid=42,phase='cached',group=4,log=str(path),gpu_uuids=['a','b'])
+            message=str(control.worker_failure(receipt,None,reason='Progress watchdog expired for group4'))
+            self.assertIn('Progress watchdog expired for group4',message)
+            self.assertIn('Waiting for committed shards',message)
 
 if __name__=='__main__':unittest.main()

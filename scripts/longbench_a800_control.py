@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TP2 A800/L20 control launchers, followed by attention collection."""
+"""A800/L20 TP2 and L40 thinking TP4 controls, then attention collection."""
 import argparse
 import csv
 import re
@@ -23,29 +23,51 @@ from scripts.corpus_control import idle, check_hardware
 from scripts.longbench_a800_data import read, freeze, load, stage, SCHEDULE, ACTIONS, publish_protocols, scheduled, ruler_samples
 
 
-def resolve_groups(devices, expected):
+def resolve_groups(devices, expected, tp=2, query_inventory=True):
     tokens = [v.strip() for v in devices.split(',')]
     if len(tokens) != expected or len(set(tokens)) != expected:
         raise ValueError(f'Expected {expected} distinct devices')
-    # Configure resolves identities only; availability/memory gates run at launch.
+    if not query_inventory:
+        # L40 assignments are supplied as full UUIDs; hardware is user-managed.
+        if expected % tp or any(not re.fullmatch(
+                r'GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', v) for v in tokens):
+            raise ValueError('Provide distinct full GPU UUIDs in complete TP groups')
+        return [tokens[i:i+tp] for i in range(0, expected, tp)]
+    # Legacy configure resolves identities; availability/memory gates run at launch.
     raw = subprocess.check_output(['nvidia-smi', '--query-gpu=index,uuid', '--format=csv,noheader'], text=True)
     inventory = {r[0].strip(): r[1].strip() for r in csv.reader(raw.splitlines())}
     values = [inventory.get(v, v) for v in tokens]
     if (len(set(values)) != expected or any(v not in inventory.values() or not re.fullmatch(
             r'GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', v) for v in values)):
         raise ValueError('Unknown or duplicate GPU identity')
-    return [values[i:i+2] for i in range(0, len(values), 2)]
+    return [values[i:i+tp] for i in range(0, len(values), tp)]
 
 
 def configure(args):
-    if args.tp != 2 or args.seed != 42:
-        raise ValueError('This collection requires TP2 and seed42')
-    count = ruler_samples(dict(samples_per_task=args.samples_per_task))
+    thinking = getattr(args,'thinking',False)
+    l40 = getattr(args, 'hardware_profile', None) == 'l40-tp4'
+    required_tp = 4 if l40 else 2
+    if args.tp != required_tp or args.seed != 42:
+        raise ValueError(f'This collection requires TP{required_tp} and seed42')
+    if l40 and (args.role != 'ruler' or not thinking):
+        raise ValueError('L40 TP4 requires the thinking RULER profile')
+    if thinking and args.role != 'ruler':
+        raise ValueError('Thinking RULER requires the ruler role')
+    count = ruler_samples(dict(samples_per_task=args.samples_per_task, execution_profile='ruler-thinking' if thinking else 'ruler'))
     dataset = 'ruler' if args.role == 'ruler' else 'longbench-v2'
-    selected = resolve_groups(args.devices, 10 if dataset == 'ruler' else 4)
-    settings = dict(schema='tp2-data-config-v2', dataset=dataset, tp=2, model=str(args.model), data=str(args.data),
+    selected = (resolve_groups(args.devices, 8, tp=4, query_inventory=False) if l40
+                else resolve_groups(args.devices, 10 if dataset == 'ruler' else 4))
+    hardware_profile = 'l40-tp4' if l40 else 'l20-tp2' if dataset == 'ruler' else 'server'
+    settings = dict(schema='tp2-data-config-v2', dataset=dataset, tp=args.tp, model=str(args.model), data=str(args.data),
                     prepared=str(args.prepared), cache_root=str(args.cache_root),
-                    samples_per_task=count if dataset == 'ruler' else 100, seed=42, hardware_profile='l20-tp2' if dataset == 'ruler' else 'server', code=code_hashes(), watchdog_seconds=7200, automatic_training=False)
+                    samples_per_task=count if dataset == 'ruler' else 100, seed=42, hardware_profile=hardware_profile, code=code_hashes(), watchdog_seconds=7200, automatic_training=False)
+    if l40:
+        settings['hardware_preflight'] = 'user-managed'
+    if thinking:
+        from runner.thinking_budget import PROTOCOL, THINKING_CAP, WINDOW, SAMPLING
+        from scripts.ruler import CAPS
+        settings.update(execution_profile='ruler-thinking', evaluation_protocol=PROTOCOL,
+                        thinking_cap=THINKING_CAP, answer_caps=CAPS, engine_window=WINDOW, sampling=SAMPLING)
     args.root.mkdir(parents=True, exist_ok=True)
     with (args.root/'configure.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -57,10 +79,10 @@ def configure(args):
         for other in args.root.glob('*/devices.json'):
             if other.parent.name != args.role and set(sum(read(other)['groups'], [])) & set(sum(selected, [])):
                 raise ValueError('Primary/extra GPU assignments overlap')
-        freeze(args.root/args.role/'devices.json', dict(tp=2, groups=selected))
+        freeze(args.root/args.role/'devices.json', dict(tp=args.tp, groups=selected))
         if (args.root/'plan.json').exists():
             publish_protocols(args.root)
-    print(f'Configured {args.role}: {len(selected)} TP2 pairs; training remains a separate command.')
+    print(f'Configured {args.role}: {len(selected)} TP{args.tp} groups; training remains a separate command.')
 
 
 def progress(base, role, message, group=0):
@@ -90,8 +112,11 @@ def worker(base, role, phase, attempt, group=0):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         engine = Engine(root, protocol, group, 'baseline' if phase == 'baseline' else 'cached', attempt, remaining)
         definitions = {a['id']: a for a in ACTIONS}
+        failure = None
+        case = None
         try:
             for row in remaining:
+                case = None
                 progress(base, role, f"{phase}: starting {row['id']}", group)
                 engine.begin(row)
                 for case in cases:
@@ -109,11 +134,34 @@ def worker(base, role, phase, attempt, group=0):
                     progress(base, role, f"{case}: accepted {row['id']}", group)
                 deletion = engine.end()
                 atomic_json(root/'deletions'/f'{phase}-{row["id"]}.json', deletion)
+        except BaseException as error:
+            failure = error
+            try:
+                path = engine.record_failure(error, phase, case)
+                print(f'Worker failure receipt: {path}', flush=True)
+            except Exception as diagnostic_error:
+                print(f'Could not save worker failure receipt: {diagnostic_error}', file=sys.stderr, flush=True)
+            raise
         finally:
-            engine.close()
+            try:
+                engine.close()
+            except Exception as shutdown_error:
+                if failure is None:
+                    raise
+                print(f'Engine shutdown also failed: {shutdown_error}', file=sys.stderr, flush=True)
 
 
 def hardware(protocol):
+    if protocol.get('hardware_profile') == 'l40-tp4':
+        from runner.tensor_parallel import protocol_tp
+        if (protocol_tp(protocol) != 4 or len(protocol['groups']) != 2
+                or protocol.get('execution_profile') != 'ruler-thinking'
+                or protocol.get('hardware_preflight') != 'user-managed'):
+            raise ValueError('Invalid L40 thinking deployment')
+        # User explicitly owns device availability checks. Do not query GPUs or
+        # claim measured memory/identity evidence in this preflight receipt.
+        return dict(hardware_preflight='user-managed', configured_groups=protocol['groups'],
+                    tp=4, gpu_memory_utilization=.9, kv_cache_mode='fixed')
     receipt = check_hardware(protocol)
     name = 'L20' if protocol['dataset'] == 'ruler' else 'A800'
     if any(name not in device['name'] for group in receipt['groups'] for device in group):
@@ -129,6 +177,30 @@ def engines_idle(root):
     for path in root.glob('group*.lock'):
         with path.open('a') as handle:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def worker_failure(receipt, code, reason=None):
+    """Surface the worker's evidence instead of replacing it with an exit code.
+
+    Read a bounded suffix: full vLLM logs can be large, and diagnostic failures
+    must never hide the original worker exit or interfere with peer cleanup.
+    """
+    prefix = reason or f"{receipt['phase']} group{receipt['group']} failed ({code})"
+    path = Path(receipt['log'])
+    try:
+        with path.open('rb') as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size-32768))
+            content = stream.read(32768).decode('utf-8', errors='replace')
+        excerpt = '\n'.join(content.splitlines()[-80:])
+        detail = f'Worker log tail (up to 80 lines / 32 KiB):\n{excerpt}' if excerpt else 'Worker log is empty.'
+    except OSError as error:
+        detail = f'Could not read worker log: {error}'
+    return RuntimeError(f'{prefix}; accepted results retained.\n'
+                        f'Worker PID: {receipt["pid"]}; GPU UUIDs: {", ".join(receipt["gpu_uuids"])}\n'
+                        f'Worker log: {path}\n{detail}\n'
+                        'Inspect the worker error before resuming; the exit code alone does not identify the cause.')
 
 
 def execute_phase(base, role, phase, state):
@@ -150,10 +222,12 @@ def execute_phase(base, role, phase, state):
                 continue
             command = [sys.executable, '-u', str(Path(__file__).resolve()), 'worker', '--root', str(base),
                        '--role', role, '--phase', phase, '--attempt', attempt, '--group', str(group)]
-            with (base/role/f'{phase}-{attempt}-group{group}.log').open('a') as log:
+            log_path = base/role/f'{phase}-{attempt}-group{group}.log'
+            with log_path.open('a') as log:
                 child = subprocess.Popen(command, cwd=ROOT, env=environment(','.join(devices)),
                                          stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            receipt = dict(pid=child.pid, identity=identity(child.pid), phase=phase, group=group, command=command)
+            receipt = dict(pid=child.pid, identity=identity(child.pid), phase=phase, group=group,
+                           command=command, log=str(log_path), gpu_uuids=list(devices))
             children.append((child, receipt))
             # Keep feature worker ownership in the launching role for stop/resume.
             atomic_json(base/role/'processes'/f'{attempt}-group{group}.json', receipt)
@@ -165,14 +239,16 @@ def execute_phase(base, role, phase, state):
                 code = child.poll(); group = receipt['group']
                 if code is not None:
                     if code:
-                        raise RuntimeError(f'{phase} group{group} failed ({code}); accepted results retained, use resume')
+                        state['failed_worker'] = dict(receipt, exit_code=code)
+                        raise worker_failure(receipt, code)
                     continue
                 running = True
                 path = base/role/f'progress-group{group}.json'
                 if path.exists() and path.stat().st_mtime_ns > changed[group]:
                     changed[group] = path.stat().st_mtime_ns; last[group] = time.monotonic()
                 if time.monotonic()-last[group] > settings['watchdog_seconds']:
-                    raise RuntimeError(f'Progress watchdog expired for group{group}')
+                    state['failed_worker'] = dict(receipt, exit_code=None, reason='progress watchdog expired')
+                    raise worker_failure(receipt, None, reason=f'Progress watchdog expired for group{group}')
             if not running:
                 break
             time.sleep(2)
@@ -287,6 +363,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('configure', 'prepare', 'detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'supervise', 'worker'))
     parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--thinking', action='store_true', help='Separate 30/task thinking RULER protocol')
+    parser.add_argument('--hardware-profile', choices=('l40-tp4',),
+                        help='Eight explicit L40 UUIDs, thinking TP4; user checks GPU availability')
     parser.add_argument('--role', choices=('primary', 'extra', 'ruler'), required=True)
     for name in ('model', 'data', 'prepared', 'cache-root'):
         parser.add_argument('--'+name, type=Path)

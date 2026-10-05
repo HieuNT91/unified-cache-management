@@ -84,9 +84,13 @@ def validate_sample(sample, kv_chunk_size=4096, context_length=WINDOW):
     if len(ids) > context_length:
         raise ValueError('Formatted prompt exceeds context-length; truncation is forbidden')
     budget = sample['max_output_tokens']
-    if type(budget) is not int or not 1 <= budget <= 16384 or len(ids) + budget > WINDOW:
+    from runner.thinking_budget import PROTOCOL as THINKING_PROTOCOL, validate_sample_policy
+    thinking_ruler = sample.get('evaluation_protocol') == THINKING_PROTOCOL
+    if thinking_ruler:
+        validate_sample_policy(sample)
+    if type(budget) is not int or not 1 <= budget <= (WINDOW if thinking_ruler else 16384) or len(ids) + budget > WINDOW:
         raise ValueError('Prompt plus output exceeds the 131072-token window')
-    if sample.get('evaluation_protocol'):
+    if sample.get('evaluation_protocol') and not thinking_ruler:
         from scripts.ruler import CAPS, EVALUATION_PROTOCOL
         if sample['evaluation_protocol'] != EVALUATION_PROTOCOL or sample['max_output_tokens'] != CAPS.get(sample.get('task')) or len(ids) + budget > 65536 or sample['thinking']:
             raise ValueError('Invalid original RULER budget/decoding protocol')

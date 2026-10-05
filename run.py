@@ -81,9 +81,20 @@ def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None,
     started = time.perf_counter()
     from runner.layout import request_metadata, METADATA_KEY
     metadata = request_metadata(request_id, tokens, phase or 'read', sample) if (sample is not None or phase is not None) else None
+    from runner.thinking_budget import KEY, PROTOCOL, BudgetState, validate_sample_policy
+    policy = None
+    if sample is not None and (KEY in sample or sample.get('evaluation_protocol')==PROTOCOL) and budget != 1 and phase != 'populate':
+        policy = validate_sample_policy(sample)
+        if not thinking or budget != policy['output_reserve']:
+            raise ValueError('Thinking answer requires its complete frozen generation policy')
+    extra = {METADATA_KEY: metadata} if metadata is not None else {}
+    if policy is not None:
+        extra[KEY] = policy
+    state = BudgetState(policy) if policy is not None else None
+    answer_first = None
     params = SamplingParams(temperature=.6 if thinking else 0., top_p=.95 if thinking else 1.,
                             top_k=20 if thinking else 32, min_p=0., seed=0, max_tokens=budget,
-                            extra_args={METADATA_KEY: metadata} if metadata is not None else None)
+                            extra_args=extra or None, ignore_eos=policy is not None)
     # vLLM normalizes greedy top_k to zero in __post_init__. Preserve the
     # requested RULER parameter on the wire; temperature zero remains greedy.
     if not thinking:
@@ -96,10 +107,19 @@ def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None,
                 raise RuntimeError('Unexpected request')
             if output.outputs and output.outputs[0].token_ids and first is None:
                 first = time.perf_counter() - started
+            if state is not None and output.outputs:
+                state.consume(output.outputs[0].token_ids)
+                if state.first_answer_index is not None and answer_first is None:
+                    answer_first = time.perf_counter() - started
             if output.finished:
                 result = output
     if result is None or first is None:
         raise RuntimeError('Generation did not return a token-bearing result')
+    if state is not None:
+        if state.phase != 'done':
+            raise ValueError('Thinking request finished before answer phase completion')
+        result.ruler_thinking_state = state
+        result.first_answer_content_seconds = answer_first
     return result, first, time.perf_counter() - started
 
 

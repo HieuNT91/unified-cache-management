@@ -66,8 +66,16 @@ def accepted(root,case,row,protocol,prepared=None,full=False):
         if not math.isfinite(result['accuracy']) or not 0<=result['accuracy']<=1:raise ValueError('Invalid score')
         if case=='nocache' and (result['num_cached_tokens']!=0 or initial['engine_config'].get('kv_transfer_config')):
             raise ValueError('Baseline is not connector-free')
-    if any(not isinstance(t,(int,float)) or not math.isfinite(t) or t<0 for t in result['timings'].values()):
+    if any(not isinstance(t,(int,float)) or not math.isfinite(t) or t<0
+           for k,t in result['timings'].items()
+           if not (k=='first_answer_content_seconds' and t is None and result.get('generated_answer_tokens')==0)):
         raise ValueError('Invalid timing')
+    if protocol.get('execution_profile')=='ruler-thinking' and case!='probe':
+        from runner.thinking_budget import KEY, PROTOCOL, validate_thinking_outcome
+        if result.get(KEY)!=row[KEY] or result.get('evaluation_protocol')!=PROTOCOL:
+            raise ValueError('Thinking result policy/provenance changed')
+        validate_thinking_outcome(dict(result,ttft_seconds=result['timings']['ttft_seconds'],
+            first_answer_content_seconds=result['timings'].get('first_answer_content_seconds')),row[KEY])
     if full and case=='router':validate_routed(root,folder,row,protocol,result)
     if full and case!='router':
         from run import verify_diagnostics

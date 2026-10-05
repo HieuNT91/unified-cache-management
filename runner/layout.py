@@ -86,8 +86,10 @@ def validate_request_metadata(metadata, request_id, tokens, sparse=True):
 
 
 def sample_provenance(sample):
-    return {key:sample.get(key) for key in ('prompt_protocol','token_sha256','template_sha256',
+    result = {key:sample.get(key) for key in ('prompt_protocol','token_sha256','template_sha256',
         'evaluation_protocol','generator_revision','generator_config_sha256')}
+    result.update({k:sample[k] for k in ('execution_profile','ruler_thinking_budget') if k in sample})
+    return result
 
 
 def validate_policy_protocol(policy, sample):

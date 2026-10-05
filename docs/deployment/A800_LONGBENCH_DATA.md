@@ -143,6 +143,82 @@ updated version and shared paths; do not mix a fixed-cache primary with a new ex
 
 ## Collection commands
 
+### Diagnosing a worker exit on L20
+
+`cached group4 failed (1)` is the supervisor reporting a worker exit, not the
+underlying exception. Group4 is the fifth configured TP2 pair; its UUIDs are in
+`EXPERIMENT_DIR/ruler/devices.json`. With device order0–9 it maps to8,9.
+Read the matching worker log before attempting resume:
+
+```bash
+cd /data/jh/unified-cache-management/.worktrees/tp2-router-data
+source scripts/launcher/server_env.sh
+UCM_ENV_FILE="${UCM_ENV_FILE:-$PWD/.env.l20}"
+ucm_load_server_env "$PWD"
+tail -n 150 "$EXPERIMENT_DIR"/ruler/cached-*-group4.log
+```
+
+If there have been multiple attempts, `tail` prints each matching file with its
+filename. The worker command in `ruler/supervisor.json` records `--attempt`; use
+that identifier to select the exact log. This is a read-only diagnostic and needs
+no GPU launch. A return code of1 alone cannot establish an OOM, cache failure or
+validation mismatch. New launchers retain the failed PID, group, GPU UUIDs and log
+path in `failed_worker`, and include a bounded worker-log excerpt in the supervisor
+error. Configured runs keep their frozen source; do not update their source hashes
+just to obtain improved error reporting.
+
+For new runs, worker failures also write `sessions/cached-groupN-ATTEMPT/failure.json`
+before engine shutdown. This includes the prompt/action, exception and traceback,
+and a metadata-only cache inventory with expected/actual names, sizes, mtimes,
+extra/missing files and inventory errors. It survives subsequent cache cleanup;
+the snapshot does not claim quiescence or KV integrity. Diagnostic or shutdown
+errors do not replace the original worker exception. Abrupt process termination
+or an unwritable result filesystem can still prevent a receipt. Existing frozen
+runs do not acquire this behavior by resuming.
+
+`PC::S2D ... timeout(120000)` followed by `Incomplete external cache load` means
+the backend transfer did not complete within the configured120-second wait.
+It does not by itself establish missing files, an OOM, or the separate
+`Unexpected files in temporary prompt cache` inventory error. The transfer can
+stall in storage reads or device transfer. With five TP2 pairs sharing a HDD,
+storage contention is a plausible cause; confirm the cache mount and I/O activity
+before changing transfer code. For a new collection, use a local SSD/NVMe cache
+with adequate space. A larger timeout only helps a slow but progressing transfer;
+the launcher currently exposes no `.env` timeout override. Do not rewrite a frozen
+run's settings/source hashes to apply this advice.
+
+The previous cache-inspection command only searched `group4` inventory failures.
+A `group3` transfer timeout belongs to another session and will not match it.
+Old caches may also have been removed at the next resume, as recorded by each
+session's `cache-cleanup.json`; worker logs and accepted results are retained.
+
+For the diagnosed L20 machine, `/data` is rotational `/dev/sda`, `/ssd` has only
+113GB available, and `/` is SSD `/dev/sdb2` with1.6TB available. A stopped run can
+keep its pinned logical cache path while placing a new empty cache root on the
+root SSD:
+
+1. Read the cache path from the existing experiment's `settings.json`. Keep the
+   existing checkout, `.env`, settings, protocol and result paths unchanged.
+2. Use `l20_ruler_data.sh stop` for this experiment and require successful owned
+   engine exit. Do not launch/resume concurrently with the filesystem change.
+3. Create a new, previously nonexistent directory such as
+   `/var/cache/ucm/ruler-l20-tp2-200-v2`; check it is on the root SSD.
+4. Rename the original cache root to a timestamped sibling on the HDD, preserving
+   its contents as evidence. Create a symlink at the original cache-root path to
+   the new SSD directory. Restore the original name if link creation fails.
+5. Check the resolved path and mount, then use the existing launcher's `resume`.
+   Temporary prompt KV is rebuilt; committed answers remain in their original
+   result tree and are skipped by resume. Keep the HDD backup until the diagnosis
+   is complete. Do not run `configure` or change source pins for this operation.
+
+Only the cache-root ancestor is relocated: per-attempt namespace directories,
+`kv`, hash directories and individual shards must remain real directories/files,
+as required by the existing symlink/ownership checks. CPU tests cover readiness,
+retirement and owned cleanup through a relocated root, preserving the HDD backup
+and accepted result bytes. They do not establish remote I/O performance or fix
+the separate unexpected-file failure. This procedure changes the storage timing
+environment; retain a record of the move when comparing earlier/later TTFT.
+
 Only primary is intended to start initially on A800:
 
 ```bash
@@ -300,3 +376,10 @@ FP32 reduction/masks, warmup, memory gates, two/five-way assignments, independen
 primary and late extra, failure/handoff, owned stop/resume, matched reports,
 checksum export/import and three-mode training/evaluation. They do not establish
 A800/L20 runtime performance or memory feasibility.
+
+## Separate thinking RULER collection
+
+The [thinking RULER guide](L20_RULER_THINKING_DATA.md) describes the separate
+`l20_ruler_thinking_data.sh` launcher:13×30,seed42,390 prompts,4,680 answers
+and390 probes. It uses `.env.l20.thinking` and fresh paths. Existing100/200-row
+non-thinking collections and LongBench retain their protocols.

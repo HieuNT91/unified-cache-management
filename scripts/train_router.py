@@ -44,6 +44,7 @@ def select_data(mode, ruler=None, longbench=None, requested=('common',)):
     if len({r['sample_id'] for r in rows}) != len(rows):
         raise ValueError('Duplicate training identity')
     metadata = dict(mode=mode, dataset_hashes={n: b['payload_sha256'] for n, b in bundles.items()},
+                    dataset_provenance={n:b['provenance'] for n,b in bundles.items()},
                     actions=inventory, excluded_actions={n: sorted(set(a)-selected) for n, a in inventories.items()},
                     evaluation='training', training_overlap=True, weighting='equal-prompt',
                     cost_normalization='(answer TTFT + probe overhead) / same-prompt nocache TTFT',

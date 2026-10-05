@@ -3,6 +3,36 @@ import json
 import time
 
 
+def failure_inventory(cache_dir, expected_files):
+    """Read file metadata for a failure receipt, without loading or changing KV.
+
+    This is a snapshot during failure handling, not a quiescence or integrity
+    audit. Keep it outside the cache so later owned-cache cleanup preserves it.
+    """
+    from pathlib import Path
+    cache_dir = Path(cache_dir)
+    files, errors = {}, []
+    try:
+        for path in (cache_dir/'kv').rglob('*'):
+            try:
+                if not path.is_file() and not path.is_symlink():
+                    continue
+                stat = path.lstat()
+                files[str(path.relative_to(cache_dir))] = dict(
+                    bytes=stat.st_size, mtime_ns=stat.st_mtime_ns,
+                    symlink=path.is_symlink())
+            except OSError as error:
+                errors.append(dict(path=str(path), error=str(error)))
+    except OSError as error:
+        errors.append(dict(path=str(cache_dir/'kv'), error=str(error)))
+    expected, actual = set(expected_files), set(files)
+    return dict(cache=str(cache_dir), cache_exists=cache_dir.exists(),
+                captured_at_ns=time.time_ns(), quiescence_verified=False,
+                expected_files=sorted(expected), actual_files=files,
+                extra=sorted(actual-expected), missing=sorted(expected-actual),
+                inventory_errors=errors)
+
+
 def verify_cache(args, token_groups):
     """Check every expected block and TP shard in this UCM 0.3.0 NFS store.
 

@@ -102,7 +102,11 @@ class PromptCache:
         self.before = self.snapshot()
         actual = {str(p.relative_to(self.cache)) for p in (self.cache/'kv').rglob('*') if p.is_file()}
         if actual != self.files:
-            raise RuntimeError('Unexpected files in temporary prompt cache')
+            extra, missing = sorted(actual-self.files), sorted(self.files-actual)
+            raise RuntimeError('Unexpected files in temporary prompt cache: '
+                f'cache={self.cache}, expected={len(self.files)}, actual={len(actual)}, '
+                f'extra={len(extra)}, missing={len(missing)}, '
+                f'extra_examples={extra[:10]}, missing_examples={missing[:10]}')
         return result
 
     def snapshot(self):

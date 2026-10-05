@@ -58,6 +58,11 @@ def protocol_for(settings, role, plan_sha, groups):
                     model=settings['model'], prepared=settings['prepared'], cache_root=settings['cache_root'],
                     groups=groups, actions=ACTIONS, scheduled_actions=scheduled(settings, role), plan_sha256=plan_sha,
                     answer_validation=PROBE_ANSWER_VALIDATION if role == 'features' else NATIVE_ANSWER_VALIDATION)
+    if settings.get('execution_profile'):
+        protocol['execution_profile'] = settings['execution_profile']
+        protocol['evaluation_protocol'] = settings['evaluation_protocol']
+    if 'hardware_preflight' in settings:
+        protocol['hardware_preflight'] = settings['hardware_preflight']
     if role == 'features':
         protocol['feature_profile'] = DEFINITIONS
     return protocol
@@ -80,7 +85,8 @@ def prepare(base):
     else:
         from scripts.ruler import prepare as prepare_inputs
         prepare_inputs(SimpleNamespace(model=Path(settings['model']), ruler=Path(settings['data']), output=prepared,
-                                       samples=settings['samples_per_task'], seed=settings['seed']))
+                                       samples=settings['samples_per_task'], seed=settings['seed'],
+                                       thinking=settings.get('execution_profile') == 'ruler-thinking'))
     receipt = read(prepared/'preparation.json')
     if file_hash(prepared/'manifest.jsonl') != receipt['files']['manifest.jsonl']:
         raise ValueError('Prepared manifest changed')
@@ -97,6 +103,10 @@ def prepare(base):
             if length not in LENGTHS:
                 raise ValueError('Expected official LongBench short/medium/long labels')
             value.update(length=length, source_id=sample['source_id'])
+        if settings.get('execution_profile') == 'ruler-thinking':
+            from runner.thinking_budget import KEY, validate_sample_policy
+            validate_sample_policy(sample)
+            value[KEY] = sample[KEY]
         rows.append(value)
     validate_rows(settings, rows)
     freeze(base/'rows.json', rows)
@@ -113,8 +123,9 @@ def prepare(base):
 
 def ruler_samples(settings):
     count = settings.get('samples_per_task', 100)
-    if type(count) is not int or count not in (100, 200):
-        raise ValueError('RULER collection requires 100 or 200 samples/task')
+    allowed = (30,) if settings.get('execution_profile') == 'ruler-thinking' else (100, 200)
+    if type(count) is not int or count not in allowed:
+        raise ValueError('RULER collection requires 30 thinking or 100 or 200 non-thinking samples/task')
     return count
 
 
@@ -128,6 +139,15 @@ def validate_rows(settings, rows):
             raise ValueError('Expected 503 unique source rows')
     else:
         from scripts.ruler import TASKS
+        if settings.get('execution_profile') == 'ruler-thinking':
+            from runner.thinking_budget import PROTOCOL, KEY, validate_policy
+            if any(r.get('evaluation_protocol') != PROTOCOL for r in rows):
+                raise ValueError('Thinking RULER evaluation identity mismatch')
+            for row in rows:
+                from scripts.ruler import CAPS
+                policy = validate_policy(row[KEY])
+                if policy['answer_cap'] != CAPS.get(row['subtask']) or row['input_tokens']+policy['output_reserve'] > 82304:
+                    raise ValueError('Thinking row task cap or capacity mismatch')
         if (set(r['subtask'] for r in rows) != set(TASKS) or
                 any(sorted(r['ordinal'] for r in rows if r['subtask'] == t) != list(range(count)) for t in TASKS)):
             raise ValueError(f'Expected 13 tasks x{count} source ordinals')

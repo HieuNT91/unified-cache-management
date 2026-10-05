@@ -72,7 +72,8 @@ def report(base, same_count=False, final=False, emit=True):
         for role in roles(settings) if role != 'features'}
     result.update(expected_answers=plan['answers'], available_answers=sum(map(len, data.values())),
                   same_count=same_count, final=final, report_validation='committed-results-only-v1',
-                  timing='Native answer TTFT excludes construction/readiness/priming and later feature capture; TP2 pairs are separate timing cohorts.',
+                  timing=('Native answer TTFT excludes construction/readiness/priming and later feature capture; '
+                          + ('TP4 groups' if settings['tp'] == 4 else 'TP2 pairs') + ' are separate timing cohorts.'),
                   length_definition=('Original LongBench v2 source length labels, before any official middle truncation'
                       if settings['dataset'] == 'longbench-v2' else 'RULER: overall and all 13 upstream tasks'))
     result['processes'] = {}
@@ -84,12 +85,15 @@ def report(base, same_count=False, final=False, emit=True):
     training = base/'training/summary.json'
     if training.exists():
         result['training'] = read(training)
+    thinking = settings.get('execution_profile') == 'ruler-thinking'
     lines = [f"{settings['dataset']}: {result['available_answers']}/{plan['answers']} accepted answers; feature probes {result['feature_probes']}/{plan['probes']}",
              result['timing'], result['length_definition']]
     if result['matching']:
         lines.append(f"Same-count: {result['matching']['matched_samples']} exact shared prompt IDs across all 12 methods.")
     lines += [f'{role}: configured={item["configured"]}, waiting for {item["missing_answers"]} answers'
               for role, item in result['waiting'].items()]
+    if thinking:
+        lines.append('Thinking RULER: TTFT retains first-output-token semantics; answer-content latency excludes forced prefix. Separate content caps and closure counts follow.')
     csvrows = []
     for label in ('overall', *(LENGTHS if settings['dataset'] == 'longbench-v2' else sorted({r['subtask'] for r in rows}))):
         lines += ['', label.upper(), '| Method | Done/total | Accuracy % | TTFT s | Speedup | Thinking tokens | Answer tokens | Capped |',
@@ -103,6 +107,14 @@ def report(base, same_count=False, final=False, emit=True):
             cells = [case, f"{value['completed']}/{value['expected']}"] + [fmt(value[k]) for k in
                 ('accuracy_percent', 'mean_ttft_seconds', 'ttft_speedup', 'mean_thinking_tokens', 'mean_answer_tokens')]
             lines.append('| '+' | '.join(cells+[str(value['output_cap_reached'])])+' |')
+    if thinking:
+        lines += ['', '| Method | Generated answer tokens | Forced tokens | First answer content s | Thinking capped | Answer capped | Natural / forced closure |',
+                  '|---|---:|---:|---:|---:|---:|---:|']
+        for case,item in result['methods'].items():
+            v=item['overall']
+            lines.append('| '+' | '.join([case,fmt(v['mean_generated_answer_tokens']),fmt(v['mean_forced_tokens']),
+                fmt(v['mean_first_answer_content_seconds']),str(v['thinking_cap_reached']),str(v['answer_cap_reached']),
+                f"{v['natural_thinking_closures']} / {v['forced_thinking_closures']}"] )+' |')
     comparisons = [('ALL 12 METHODS MATCHED', result['all_methods_matched'])]
     if 'primary_matched' in result:
         comparisons.insert(0, ('PRIMARY MATCHED (seven methods)', result['primary_matched']))

@@ -75,6 +75,31 @@ class SweepTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'timed out'):
             cache.ready()
 
+    def test_readiness_reports_extra_files_without_removing_them(self):
+        cache=self.populated()
+        extra=self.cache/'kv'/'unexpected';extra.write_bytes(b'evidence')
+        with self.assertRaises(RuntimeError) as caught:
+            cache.ready()
+        message=str(caught.exception)
+        self.assertIn('Unexpected files in temporary prompt cache',message)
+        self.assertIn(f'cache={self.cache}',message)
+        self.assertIn('expected=4, actual=5, extra=1, missing=0',message)
+        self.assertIn('kv/unexpected',message)
+        self.assertEqual(extra.read_bytes(),b'evidence')
+        self.assertTrue(all((self.cache/name).exists() for name in cache.files))
+
+    def test_prompt_cache_accepts_relocated_root_but_preserves_hdd_backup(self):
+        original=self.populated();original.ready()
+        backup=self.root/'hdd-backup'
+        self.cache.rename(backup)
+        target=self.root/'ssd-cache';target.mkdir()
+        self.cache.symlink_to(target,target_is_directory=True)
+        relocated=self.populated()
+        self.assertEqual(relocated.ready()['verified_shards'],4)
+        self.assertEqual(relocated.delete()['deleted_shards'],4)
+        self.assertFalse(list((target/'kv').glob('*/*')))
+        self.assertTrue(all((backup/name).is_file() for name in original.files))
+
     def test_store_blocks_writes_on_read_path(self):
         backend=Mock(); store=TemporaryStore(backend)
         with self.assertRaisesRegex(RuntimeError,'read-only'):

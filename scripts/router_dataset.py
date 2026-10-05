@@ -15,6 +15,7 @@ from runner.setups import atomic_json, file_hash, fingerprint
 from runner.tree_policy import actions
 from runner.corpus_records import accepted, protocol_identity
 from runner.layout import PROMPT_PROTOCOL
+from runner.thinking_budget import validate_thinking_outcome
 
 SCHEMA = 'attention-router-dataset-v2'
 
@@ -29,8 +30,17 @@ def validate(data):
     from scripts.longbench_a800_data import ACTIONS
     if data.get('actions') != ACTIONS:
         raise ValueError('Portable training requires all 12 canonical measured actions')
-    if data.get('provenance', {}).get('tp') != 2 or data['provenance'].get('seed') != 42:
-        raise ValueError('Portable collection must declare TP2 and seed42')
+    provenance = data.get('provenance', {})
+    tp = provenance.get('tp')
+    thinking = provenance.get('execution_profile') == 'ruler-thinking'
+    l40 = provenance.get('hardware_profile') == 'l40-tp4'
+    if (type(tp) is not int or provenance.get('seed') != 42
+            or (l40 and (tp != 4 or not thinking or data['dataset'] != 'ruler'))
+            or (not l40 and tp != 2)):
+        raise ValueError('Portable collection requires TP2 or L40 thinking TP4, with seed42')
+    from runner.thinking_budget import PROTOCOL, KEY, validate_policy
+    if thinking and (data['dataset'] != 'ruler' or data['provenance'].get('evaluation_protocol') != PROTOCOL):
+        raise ValueError('Invalid thinking dataset provenance')
     inventory = actions(data['actions']); rows = data['rows']
     if not rows or len({r['id'] for r in rows}) != len(rows):
         raise ValueError('Empty/duplicate dataset membership')
@@ -46,6 +56,13 @@ def validate(data):
     if data['dataset'] == 'longbench-v2' and len({r.get('source_id') for r in rows}) != 503:
         raise ValueError('LongBench source identities must be unique')
     for row in rows:
+        if thinking:
+            from scripts.ruler import CAPS
+            policy = validate_policy(row[KEY])
+            if row.get('evaluation_protocol') != PROTOCOL or policy['answer_cap'] != CAPS.get(row['subtask']):
+                raise ValueError('Thinking row protocol/cap mismatch')
+        elif row.get('evaluation_protocol') == PROTOCOL or KEY in row:
+            raise ValueError('Thinking rows require thinking provenance')
         if (row['dataset'] != data['dataset'] or set(row['features']) != set(FEATURES)
                 or set(row['outcomes']) != set(inventory)):
             raise ValueError('Missing features/actions or inconsistent dataset identity')
@@ -61,15 +78,17 @@ def validate(data):
             raise ValueError('Missing official LongBench length label')
         devices = []
         for value in row['outcomes'].values():
+            if thinking:
+                validate_thinking_outcome(value, policy)
             gpu = value.get('gpu_uuids', [])
-            if len(gpu) != 2 or len(set(gpu)) != 2 or any(not re.fullmatch(r'GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', g) for g in gpu):
-                raise ValueError('Each outcome must preserve its TP2 GPU identities')
+            if len(gpu) != tp or len(set(gpu)) != tp or any(not re.fullmatch(r'GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', g) for g in gpu):
+                raise ValueError(f'Each outcome must preserve its TP{tp} GPU identities')
             devices.append(tuple(gpu))
             if (not math.isfinite(value['accuracy']) or not 0 <= value['accuracy'] <= 1
                     or not math.isfinite(value['ttft_seconds']) or value['ttft_seconds'] <= 0):
                 raise ValueError('Invalid measured outcome')
         if data['dataset'] == 'ruler' and len(set(devices)) != 1:
-            raise ValueError('RULER actions of one prompt must share a TP2 pair')
+            raise ValueError('RULER actions of one prompt must share a TP group')
         if data['dataset'] == 'longbench-v2':
             from scripts.longbench_a800_data import SCHEDULE
             pairs = []
@@ -81,6 +100,7 @@ def validate(data):
             if set(pairs[0]) & set(pairs[1]):
                 raise ValueError('A800 primary and extra pairs must be disjoint')
     return data
+
 
 
 def load(path):
@@ -119,6 +139,9 @@ def example(row, probe, outcomes, source_pins, dataset):
                   evaluation_protocol=row.get('evaluation_protocol'), features=probe['features'],
                   probe_overhead_seconds=probe['timings']['routing_overhead_seconds'],
                   source_pins=source_pins, outcomes={})
+    from runner.thinking_budget import KEY
+    if KEY in row:
+        result[KEY] = row[KEY]
     if dataset == 'longbench-v2':
         result.update(length=row['length'], source_id=row['source_id'])
     for case, record in outcomes.items():
@@ -128,6 +151,10 @@ def example(row, probe, outcomes, source_pins, dataset):
             gpu_uuids=record['gpu_uuids'], thinking_tokens=record['thinking_tokens'], answer_tokens=record['answer_tokens'],
             output_tokens=record['output_tokens'], control_tokens=record['control_tokens'],
             output_cap_reached=record['output_cap_reached'])
+        if KEY in row:
+            result['outcomes'][case].update({k:record[k] for k in ('generated_answer_tokens','generated_thinking_open_tokens','forced_tokens',
+                'thinking_cap_reached','answer_cap_reached','thinking_closure')})
+            result['outcomes'][case]['first_answer_content_seconds'] = record['timings']['first_answer_content_seconds']
     return result
 
 
@@ -157,10 +184,13 @@ def export_collection(base, output):
                 if case != 'probe':
                     outcomes[case] = accepted(base/role, case, row, protocols[role])
         values.append(example(row, probe, outcomes, pins, settings['dataset']))
-    return save(output, settings['dataset'], ACTIONS, values, dict(plan_sha256=file_hash(base/'plan.json'), tp=2,
+    return save(output, settings['dataset'], ACTIONS, values, dict(plan_sha256=file_hash(base/'plan.json'), tp=settings['tp'],
+                **({'hardware_profile': 'l40-tp4', 'hardware_preflight': settings['hardware_preflight']}
+                   if settings.get('hardware_profile') == 'l40-tp4' else {}),
+                **{k:settings[k] for k in ('execution_profile','evaluation_protocol') if k in settings},
                 seed=42, samples_per_task=settings['samples_per_task'] if settings['dataset'] == 'ruler' else None,
                 validation='committed-results-and-record-pins; per-request runtime validation, no offline attention replay',
-                timing='TP2 controls; independent feature probes collected after all control engines exited'))
+                timing=f'TP{settings["tp"]} controls; independent feature probes collected after all control engines exited'))
 
 
 def export_longbench(base, output):

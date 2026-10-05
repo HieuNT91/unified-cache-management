@@ -192,6 +192,50 @@ def format_sample(tokenizer, row, task, *, template=None):
     return sample
 
 
+def format_thinking_sample(tokenizer, row, task, *, template=None):
+    """Keep the upstream row intact; replace only validated chat boundaries."""
+    from runner.layout import boundaries_for, stamp_sample
+    from runner.thinking_budget import KEY, PROTOCOL, WINDOW, make_policy
+    if task not in TASKS or not isinstance(row.get('answer_prefix'), str) or not row['answer_prefix']:
+        raise ValueError('Expected original RULER answer_prefix')
+    sentinel = 'RPKV_TEMPLATE_CONTENT_9fd17'
+    original = tokenizer.apply_chat_template([dict(role='user', content=sentinel)],
+        tokenize=False, add_generation_prompt=True, enable_thinking=False)
+    head, tail = original.split(sentinel)
+    if not tail or not row['input'].startswith(head) or not row['input'].endswith(tail):
+        raise ValueError('Row must have validated native non-thinking template boundaries')
+    if len(tokenizer.encode(row['input'] + row['answer_prefix'], add_special_tokens=False)) + CAPS[task] > INPUT:
+        raise ValueError('Upstream source row exceeds original reserve; retain raw and halt')
+    content = row['input'][len(head):-len(tail)]
+    rendered = tokenizer.apply_chat_template([dict(role='user', content=sentinel)],
+        tokenize=False, add_generation_prompt=True, enable_thinking=True)
+    thinking_head, thinking_tail = rendered.split(sentinel)
+    text = tokenizer.apply_chat_template([dict(role='user', content=content)],
+        tokenize=False, add_generation_prompt=True, enable_thinking=True)
+    if text != thinking_head + content + thinking_tail or not (thinking_tail.endswith('<think>\n') or thinking_tail.endswith('assistant\n')):
+        raise ValueError('Expected native thinking template with unchanged user content')
+    begin, question = query_span(content, task)
+    begin += len(thinking_head)
+    end = len(thinking_head) + len(content)
+    encoded = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+    ids = encoded['input_ids']
+    positions = [i for i, (a, b) in enumerate(encoded['offset_mapping']) if b > begin and a < end]
+    if not positions:
+        raise ValueError('Missing complete question span')
+    policy = make_policy(tokenizer, row['answer_prefix'], CAPS[task], thinking_tail.endswith('<think>\n'))
+    sample = dict(token_ids=ids, boundaries=boundaries_for(len(ids), positions[0]),
+        question_positions=positions, thinking=True, max_output_tokens=policy['output_reserve'],
+        task=task, question=question, formatted_text=text, answer_prefix=row['answer_prefix'],
+        source_index=row['index'], source_row_sha256=fingerprint(row), references=row['outputs'],
+        scoring='ruler_any' if task.startswith('qa_') else 'ruler_all', evaluation_protocol=PROTOCOL,
+        execution_profile='ruler-thinking', original_chat_tokens=len(ids), truncated=False,
+        answer_prefix_policy='forced once after thinking closure and two newlines; excluded from scoring',
+        generator_revision=REVISION, max_seq_length=INPUT, **{KEY: policy})
+    stamp_sample(sample, tokenizer.chat_template)
+    validate_sample(sample, 4096, WINDOW)
+    return sample
+
+
 def generator_command(args, task, target, tokenizer=None):
     if tokenizer is None:
         from transformers import AutoTokenizer
@@ -225,7 +269,9 @@ def prepare(args):
     templates = {t:model_template(tokenizer,constants[custom[t]['task']]) for t in TASKS}
     asset_root = args.ruler/'scripts/data/synthetic/json'
     from importlib.metadata import version
-    spec = dict(protocol=EVALUATION_PROTOCOL,revision=REVISION,tasks=list(TASKS),samples=args.samples,
+    thinking = getattr(args, 'thinking', False)
+    from runner.thinking_budget import PROTOCOL, THINKING_CAP, WINDOW, SAMPLING
+    spec = dict(protocol=PROTOCOL if thinking else EVALUATION_PROTOCOL,revision=REVISION,tasks=list(TASKS),samples=args.samples,
         max_seq_length=INPUT,output_caps=CAPS,seed=getattr(args,'seed',42),
         task_parameters=custom,templates=templates,
         tokenizer_hashes={p.name:file_hash(p) for p in args.model.iterdir() if p.is_file() and
@@ -236,6 +282,10 @@ def prepare(args):
             ('squad.json','hotpotqa.json','PaulGrahamEssays.json','english_words.json')},
         versions={n:version(n) for n in ('transformers','numpy','wonderwords','nltk','scipy','PyYAML')},
         adapter=file_hash(Path(__file__)),chunker=file_hash(ROOT/'runner/layout.py'))
+    if thinking:
+        spec.update(execution_profile='ruler-thinking', thinking_cap=THINKING_CAP, engine_window=WINDOW,
+                    sampling=SAMPLING, phase_policies='per-sample ruler_thinking_budget; prefixes expanded by upstream',
+                    thinking_adapter=file_hash(ROOT/'runner/thinking_budget.py'))
     spec = json.loads(json.dumps(spec))
     with setup_lock(args.output,build=True):
         sp = args.output/'spec.json'
@@ -273,7 +323,7 @@ def prepare(args):
             # Sharding occurs only downstream, after a complete task batch.
             for ordinal,row in enumerate(rows):
                 try:
-                    sample=format_sample(tokenizer,row,task,template=templates[task])
+                    sample=(format_thinking_sample if thinking else format_sample)(tokenizer,row,task,template=templates[task])
                 except Exception as error:
                     atomic_json(args.output/'validation-error.json',dict(task=task,row=ordinal,
                         raw=str(raw),raw_sha256=file_hash(raw),error=str(error)))
@@ -291,7 +341,7 @@ def prepare(args):
         files['manifest.jsonl']=file_hash(path)
         summary=dict(prompts=len(manifest),subtasks=dict(Counter(r['subtask'] for r in manifest)),
             min_input_tokens=min(lengths),max_input_tokens=max(lengths),output_caps=CAPS,
-            max_seq_length=INPUT,thinking=False,protocol=EVALUATION_PROTOCOL)
+            max_seq_length=INPUT,thinking=thinking,protocol=spec['protocol'])
         atomic_json(complete,dict(spec=spec,files=files,summary=summary))
         print(json.dumps(summary,indent=2))
 

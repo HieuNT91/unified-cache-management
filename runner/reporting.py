@@ -56,6 +56,8 @@ def ruler_preprocess(text):
 
 
 def scoring_text(generated_text, analysis, evaluation):
+    if 'scored_text' in analysis:
+        return analysis['scored_text']
     return generated_text if evaluation['scoring'] in ('ruler_all', 'ruler_any') else analysis['answer_text']
 
 
@@ -136,11 +138,22 @@ def metrics(records, expected):
                   unfinished_thinking=sum(r['unfinished_thinking'] for r in records))
     ruler = [r for r in records if r.get('scoring') in ('ruler_all', 'ruler_any')]
     result['ruler_score'] = round(sum(r['accuracy'] for r in ruler)/len(ruler)*100, 2) if ruler else None
-    result['ruler_nulls'] = f"{sum(not ruler_preprocess(r['prediction']) for r in ruler)}/{len(ruler)}" if ruler else None
+    result['ruler_nulls'] = f"{sum(not ruler_preprocess(r.get('scored_text',r['prediction'])) for r in ruler)}/{len(ruler)}" if ruler else None
     for name in ('thinking_tokens', 'answer_tokens', 'control_tokens', 'output_tokens'):
         values = [r[name] for r in records]
         result['mean_'+name] = statistics.mean(values) if values else None
         result['total_'+name] = sum(values)
+    for name in ('generated_answer_tokens', 'forced_tokens'):
+        values = [r[name] for r in records if name in r]
+        result['mean_'+name] = statistics.mean(values) if values else None
+        result['total_'+name] = sum(values)
+    for name in ('thinking_cap_reached', 'answer_cap_reached'):
+        result[name] = sum(r.get(name, False) for r in records)
+    result['forced_thinking_closures'] = sum(r.get('thinking_closure') == 'forced' for r in records)
+    result['natural_thinking_closures'] = sum(r.get('thinking_closure') == 'natural' for r in records)
+    values = [r['timings']['first_answer_content_seconds'] for r in records if r['timings'].get('first_answer_content_seconds') is not None]
+    result['mean_first_answer_content_seconds'] = statistics.mean(values) if values else None
+    result['first_answer_content_samples'] = len(values)
     return result
 
 
@@ -182,7 +195,10 @@ def aggregate(records, expected, context, status):
 COLUMNS = ('expected', 'completed', 'accuracy_scored', 'accuracy_unscored', 'accuracy_percent',
            'mean_ttft_seconds', 'median_ttft_seconds', 'mean_thinking_tokens', 'mean_answer_tokens',
            'mean_control_tokens', 'mean_output_tokens', 'total_thinking_tokens', 'total_answer_tokens',
-           'total_control_tokens', 'total_output_tokens', 'output_cap_reached', 'unfinished_thinking', 'ruler_score', 'ruler_nulls')
+           'total_control_tokens', 'total_output_tokens', 'output_cap_reached', 'unfinished_thinking', 'ruler_score', 'ruler_nulls',
+           'mean_generated_answer_tokens', 'total_generated_answer_tokens', 'mean_forced_tokens', 'total_forced_tokens',
+           'thinking_cap_reached', 'answer_cap_reached', 'forced_thinking_closures', 'natural_thinking_closures',
+           'mean_first_answer_content_seconds', 'first_answer_content_samples')
 
 
 def render_markdown(report):

@@ -48,6 +48,7 @@ class Engine:
         from ucm.sparse.prophetkv.lifecycle import seed_value,delete_retired_files
         from runner.tensor_parallel import protocol_tp
         self.tp=protocol_tp(protocol)
+        self.profile=protocol.get('execution_profile',protocol['dataset'])
         self.root=Path(root);self.protocol=protocol;self.group=group;self.cached=phase=='cached';self.pc=None
         self.session=self.root/'sessions'/f'{phase}-group{group}-{attempt}'
         self.session.mkdir(parents=True,exist_ok=False)
@@ -56,13 +57,16 @@ class Engine:
         atomic_json(self.session/'ownership.json',dict(cache=str(self.cache),group=group,pid=os.getpid(),identity=identity(os.getpid())))
         self.scheduler=self.session/'scheduler.json'
         os.environ['PROPHETKV_SCHEDULER_RECEIPT']=str(self.scheduler)
-        first=json.loads((Path(protocol['prepared'])/rows[0]['prepared']).read_text());validate(first,protocol['dataset'])
+        first=json.loads((Path(protocol['prepared'])/rows[0]['prepared']).read_text());validate(first,self.profile)
         for row in rows:
             sample=json.loads((Path(protocol['prepared'])/row['prepared']).read_text())
             from runner.tree_profiles import allocation
-            if len(sample['token_ids'])+sample['max_output_tokens']>allocation(protocol['dataset'],protocol.get('hardware_profile','server'))['kv_tokens']:
+            if self.profile=='ruler-thinking':
+                from runner.thinking_budget import validate_sample_policy
+                validate_sample_policy(sample)
+            if len(sample['token_ids'])+sample['max_output_tokens']>allocation(self.profile,protocol.get('hardware_profile','server'))['kv_tokens']:
                 raise ValueError('Complete input plus output reserve exceeds assigned hardware KV capacity')
-        cfg=config(protocol['model'],protocol['dataset'],self.cached,self.cache,None,
+        cfg=config(protocol['model'],self.profile,self.cached,self.cache,None,
                    protocol.get('hardware_profile','server'),tp=self.tp)
         if self.cached:
             cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts']={
@@ -70,7 +74,7 @@ class Engine:
         start=time.perf_counter();self.llm=start_engine(cfg)
         try:
             init=dict(model_load_seconds=time.perf_counter()-start,engine_config=cfg)
-            init['setup']=self.llm.collective_rpc(setup);validate_initialization(init['setup'],protocol['dataset'],protocol.get('hardware_profile','server'),tp=self.tp)
+            init['setup']=self.llm.collective_rpc(setup);validate_initialization(init['setup'],self.profile,protocol.get('hardware_profile','server'),tp=self.tp)
             self.analyzer=OutputAnalyzer(self.llm.get_tokenizer())
             warmup_started=time.perf_counter()
             warm_namespace=uuid.uuid4().hex;warm=[100,200,300,400]*32
@@ -92,7 +96,7 @@ class Engine:
         from run import generate
         from runner.worker import drain
         self.row=row;self.sample=json.loads((Path(self.protocol['prepared'])/row['prepared']).read_text())
-        validate(self.sample,self.protocol['dataset']);self.namespace=uuid.uuid4().hex;self.construction={}
+        validate(self.sample,self.protocol.get('execution_profile',self.protocol['dataset']));self.namespace=uuid.uuid4().hex;self.construction={}
         if file_hash(Path(self.protocol['prepared'])/row['prepared'])!=row['sha256']:raise ValueError('Input changed')
         if self.sample['model_config_sha256']!=file_hash(Path(self.protocol['model'])/'config.json'):
             raise ValueError('Prepared model mismatch')
@@ -210,7 +214,9 @@ class Engine:
             match_answer(ds,self.sample,definition['id'],attention,self.protocol['actions'],tp=self.tp)
         retired=verify_retired(self.llm,self.tp,rid,self.scheduler if self.cached else None)
         if self.pc:self.pc.unchanged();clean_capture(self.llm,self.tp)
-        tokens=list(output.outputs[0].token_ids);metrics=self.analyzer.analyze(tokens,self.sample['token_ids'],self.sample['thinking'])
+        tokens=list(output.outputs[0].token_ids);metrics=self.analyzer.analyze(tokens,[] if hasattr(output,'ruler_thinking_state') else self.sample['token_ids'],self.sample['thinking'])
+        if hasattr(output,'ruler_thinking_state'):
+            metrics.update(output.ruler_thinking_state.metrics(self.analyzer.tokenizer))
         evaluation=evaluation_metadata({},self.row)
         record=self.common(case,dict(answer_engine_ttft_seconds=ttft,ttft_seconds=routing_time+ttft,
             generation_seconds=elapsed,routing_overhead_seconds=routing_time,tp_sync_seconds=sync_seconds),retired)
@@ -218,12 +224,35 @@ class Engine:
             answer_validation=mode,
             output_cap_reached=len(tokens)>=self.sample['max_output_tokens'],max_output_tokens=self.sample['max_output_tokens'],
             dense_receipts=audits,decision_sync=sync,**metrics,**evaluation,accuracy=score_answer(scoring_text(output.outputs[0].text,metrics,evaluation),evaluation))
+        if 'scored_text' in metrics:
+            record['timings']['first_answer_content_seconds']=(routing_time+output.first_answer_content_seconds
+                if output.first_answer_content_seconds is not None else None)
+            record['output_cap_reached']=metrics['thinking_cap_reached'] or metrics['answer_cap_reached']
+            from runner.thinking_budget import KEY, validate_thinking_outcome
+            validate_thinking_outcome(dict(record,ttft_seconds=record['timings']['ttft_seconds'],
+                first_answer_content_seconds=record['timings']['first_answer_content_seconds']),self.sample[KEY])
         return record,ds
 
     def end(self):
         if self.pc:
             deletion=self.pc.delete();self.pc=None;return deletion
         return dict(deleted_shards=0)
+
+    def record_failure(self,error,phase,case=None):
+        """Preserve diagnostic metadata in the session before cache cleanup."""
+        import traceback
+        from runner.cache import failure_inventory
+        receipt=dict(phase=phase,case=case,group=self.group,
+                     prompt_id=getattr(self,'row',{}).get('id'),
+                     namespace=getattr(self,'namespace',None),
+                     error_type=type(error).__name__,error=str(error),
+                     traceback=''.join(traceback.format_exception(type(error),error,error.__traceback__)),
+                     initialization=str(self.session/'initialization.json'))
+        if self.cached:
+            receipt['inventory']=failure_inventory(self.cache,self.pc.files if self.pc else ())
+        path=self.session/'failure.json'
+        atomic_json(path,receipt)
+        return path
 
     def close(self):
         self.llm.llm_engine.engine_core.shutdown()

@@ -1,6 +1,6 @@
 # RULER 64K protocol
 
-This is the current `rpkv` protocol. Historical exact-64000/padded/thinking guides
+This is the default non-thinking `rpkv` protocol. Historical exact-64000/padded/thinking guides
 are retained only for their original experiments. Follow [invariants](../agents/invariants.md)
 for the common token/layout/cache contract.
 
@@ -72,3 +72,11 @@ Record prompt/cache/evaluation versions, full token and template hashes, generat
 arguments/seed/batch size, source commit/assets, tokenizer/model identity, YaRN,
 backend and hardware. Incompatible old cache/results/policies require a separate
 protocol and may not be silently accepted or refitted.
+
+## Separate thinking TP2 protocol
+
+The [thinking RULER collection](../deployment/L20_RULER_THINKING_DATA.md) reuses
+the original source generation with30 rows/task and seed42, but renders the native
+thinking prompt, defers the original prefix, and scores only new answer content
+after a separately budgeted thinking phase. Its distinct evaluation identity and
+82,304-token execution profile must not be applied to existing non-thinking runs.

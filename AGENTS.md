@@ -3,6 +3,15 @@
 These rules govern the current worktree. Historical notes under
 `docs/studies/` describe earlier scopes and do not override these rules.
 
+- L40 thinking RULER on `noah`: `scripts/launcher/l40_ruler_thinking_data.sh`
+  and `docs/deployment/L40_RULER_THINKING_DATA.md`. Eight supplied UUIDs form two
+  TP4 groups; each owns195 of390 prompts (13x30), with4680 answers and390 probes.
+  Explicit `l40-tp4` profile retains BF16, thinking16K, window82304 and fixed1286
+  KV blocks/rank at90% memory. User owns GPU availability checks: this launcher
+  does not scan device inventory/free memory/busy processes before execution.
+  Preserve worker identity, KV/result/lifecycle and owned-process checks.
+  Portable export records TP4/L40 provenance. Implementation only; user asked
+  to perform checks themselves, so no tests or GPU run were performed here.
 - TP2 A800/L20 collection and portable training live on
   `prophetkv/tp2-router-data`, based on `d0483b1`. Guide:
   `docs/deployment/A800_LONGBENCH_DATA.md`. This scope authorizes source edits,

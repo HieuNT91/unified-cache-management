@@ -1,6 +1,7 @@
 """Execution constraints are independent of a learned tree's actions/features."""
 from runner.config import engine_config,validate_sample
 PROFILES={
+    'ruler-thinking':dict(input_tokens=65536,output_tokens=None,thinking=True,kv_tokens=82304,kv_blocks=1286),
     'ruler':dict(input_tokens=65536,output_tokens=None,thinking=False,kv_tokens=65920,kv_blocks=1031),
     'longbench-v2':dict(input_tokens=114688,output_tokens=16384,thinking=True,kv_tokens=131072,kv_blocks=2048),
 }
@@ -10,9 +11,11 @@ def hardware_profile(name='server',dataset='ruler',tp=4):
     if name=='server':
         return dict(names=('A800','L20'),memory=.95 if tp==2 else .9,workspace_gib=8.,
                     kv_cache_mode='auto' if tp==2 else 'fixed')
-    if name=='l20-tp2' and dataset=='ruler':
+    if name=='l20-tp2' and dataset in ('ruler','ruler-thinking'):
         return dict(names=('L20',),memory=.95,workspace_gib=3.,
                     kv_cache_mode='auto' if tp==2 else 'fixed')
+    if name=='l40-tp4' and dataset=='ruler-thinking' and tp==4:
+        return dict(names=('L40',),memory=.9,workspace_gib=8.,kv_cache_mode='fixed')
     if name=='rtx4500ada' and dataset in PROFILES:
         # Local 24 GiB TP4 profile: validated clean YaRN4/16K-prefill runs,
         # with 4096-token activation tiles and full original-position KV.
@@ -25,6 +28,9 @@ def validate(sample,dataset):
     p=PROFILES[dataset];validate_sample(sample,4096,p['input_tokens'])
     if sample['thinking']!=p['thinking'] or (p['output_tokens'] is not None and sample['max_output_tokens']!=p['output_tokens']):
         raise ValueError('Dataset execution profile mismatch')
+    if dataset=='ruler-thinking':
+        from runner.thinking_budget import validate_sample_policy
+        validate_sample_policy(sample)
     if dataset=='ruler':
         from scripts.ruler import EVALUATION_PROTOCOL
         if sample.get('evaluation_protocol')!=EVALUATION_PROTOCOL:

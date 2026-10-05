@@ -14,3 +14,5 @@ outputs/
 !.env.example
 !.env.a800.example
 !.env.l20.example
+!.env.l20.thinking.example
+!.env.l40.thinking.example
