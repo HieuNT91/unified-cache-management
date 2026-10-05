@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A800/L20 TP2 and L40 thinking TP4 controls, then attention collection."""
+"""A800/L20 TP2 and L40 thinking TP2/TP4 controls, then attention collection."""
 import argparse
 import csv
 import re
@@ -45,19 +45,20 @@ def resolve_groups(devices, expected, tp=2, query_inventory=True):
 
 def configure(args):
     thinking = getattr(args,'thinking',False)
-    l40 = getattr(args, 'hardware_profile', None) == 'l40-tp4'
-    required_tp = 4 if l40 else 2
+    requested_hardware = getattr(args, 'hardware_profile', None)
+    l40 = requested_hardware in ('l40-tp2', 'l40-tp4')
+    required_tp = 4 if requested_hardware == 'l40-tp4' else 2
     if args.tp != required_tp or args.seed != 42:
         raise ValueError(f'This collection requires TP{required_tp} and seed42')
     if l40 and (args.role != 'ruler' or not thinking):
-        raise ValueError('L40 TP4 requires the thinking RULER profile')
+        raise ValueError('L40 requires the thinking RULER profile')
     if thinking and args.role != 'ruler':
         raise ValueError('Thinking RULER requires the ruler role')
     count = ruler_samples(dict(samples_per_task=args.samples_per_task, execution_profile='ruler-thinking' if thinking else 'ruler'))
     dataset = 'ruler' if args.role == 'ruler' else 'longbench-v2'
-    selected = (resolve_groups(args.devices, 8, tp=4, query_inventory=False) if l40
+    selected = (resolve_groups(args.devices, 8, tp=required_tp, query_inventory=False) if l40
                 else resolve_groups(args.devices, 10 if dataset == 'ruler' else 4))
-    hardware_profile = 'l40-tp4' if l40 else 'l20-tp2' if dataset == 'ruler' else 'server'
+    hardware_profile = requested_hardware if l40 else 'l20-tp2' if dataset == 'ruler' else 'server'
     settings = dict(schema='tp2-data-config-v2', dataset=dataset, tp=args.tp, model=str(args.model), data=str(args.data),
                     prepared=str(args.prepared), cache_root=str(args.cache_root),
                     samples_per_task=count if dataset == 'ruler' else 100, seed=42, hardware_profile=hardware_profile, code=code_hashes(), watchdog_seconds=7200, automatic_training=False)
@@ -152,16 +153,19 @@ def worker(base, role, phase, attempt, group=0):
 
 
 def hardware(protocol):
-    if protocol.get('hardware_profile') == 'l40-tp4':
+    if protocol.get('hardware_profile') in ('l40-tp2', 'l40-tp4'):
         from runner.tensor_parallel import protocol_tp
-        if (protocol_tp(protocol) != 4 or len(protocol['groups']) != 2
+        from runner.tree_profiles import hardware_profile
+        tp = 2 if protocol['hardware_profile'] == 'l40-tp2' else 4
+        if (protocol_tp(protocol) != tp or len(protocol['groups']) != 8//tp
                 or protocol.get('execution_profile') != 'ruler-thinking'
                 or protocol.get('hardware_preflight') != 'user-managed'):
             raise ValueError('Invalid L40 thinking deployment')
         # User explicitly owns device availability checks. Do not query GPUs or
         # claim measured memory/identity evidence in this preflight receipt.
+        profile = hardware_profile(protocol['hardware_profile'], 'ruler-thinking', tp)
         return dict(hardware_preflight='user-managed', configured_groups=protocol['groups'],
-                    tp=4, gpu_memory_utilization=.9, kv_cache_mode='fixed')
+                    tp=tp, gpu_memory_utilization=profile['memory'], kv_cache_mode=profile['kv_cache_mode'])
     receipt = check_hardware(protocol)
     name = 'L20' if protocol['dataset'] == 'ruler' else 'A800'
     if any(name not in device['name'] for group in receipt['groups'] for device in group):
@@ -364,8 +368,8 @@ def main():
     parser.add_argument('command', choices=('configure', 'prepare', 'detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'supervise', 'worker'))
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--thinking', action='store_true', help='Separate 30/task thinking RULER protocol')
-    parser.add_argument('--hardware-profile', choices=('l40-tp4',),
-                        help='Eight explicit L40 UUIDs, thinking TP4; user checks GPU availability')
+    parser.add_argument('--hardware-profile', choices=('l40-tp2', 'l40-tp4'),
+                        help='Eight explicit L40 UUIDs, thinking TP2/TP4; user checks GPU availability')
     parser.add_argument('--role', choices=('primary', 'extra', 'ruler'), required=True)
     for name in ('model', 'data', 'prepared', 'cache-root'):
         parser.add_argument('--'+name, type=Path)

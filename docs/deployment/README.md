@@ -6,8 +6,8 @@ This documentation move does not authorize a launch, update, stop or resume.
 
 ## TP2 collection and portable training
 
-For `noah` with eight L40 GPUs, use [thinking RULER on L40 TP4](L40_RULER_THINKING_DATA.md).
-It has a separate launcher/env and two TP4 groups; GPU availability is user-managed.
+For `noah` with eight L40 GPUs, use [thinking RULER on L40 TP2](L40_RULER_THINKING_DATA.md).
+It has a separate launcher/env and four TP2 groups at96% memory; GPU availability is user-managed.
 
 Use [TP2 A800/L20 collection and training](A800_LONGBENCH_DATA.md) for the new
 503 LongBench / 2600 RULER twelve-action scope (200/task; older100/task exports remain supported). Launchers are

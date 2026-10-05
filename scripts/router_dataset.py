@@ -33,11 +33,12 @@ def validate(data):
     provenance = data.get('provenance', {})
     tp = provenance.get('tp')
     thinking = provenance.get('execution_profile') == 'ruler-thinking'
-    l40 = provenance.get('hardware_profile') == 'l40-tp4'
+    l40 = provenance.get('hardware_profile') in ('l40-tp2', 'l40-tp4')
+    expected_tp = 4 if provenance.get('hardware_profile') == 'l40-tp4' else 2
     if (type(tp) is not int or provenance.get('seed') != 42
-            or (l40 and (tp != 4 or not thinking or data['dataset'] != 'ruler'))
+            or (l40 and (tp != expected_tp or not thinking or data['dataset'] != 'ruler'))
             or (not l40 and tp != 2)):
-        raise ValueError('Portable collection requires TP2 or L40 thinking TP4, with seed42')
+        raise ValueError('Portable collection requires matching TP2 or L40 thinking TP4 provenance, with seed42')
     from runner.thinking_budget import PROTOCOL, KEY, validate_policy
     if thinking and (data['dataset'] != 'ruler' or data['provenance'].get('evaluation_protocol') != PROTOCOL):
         raise ValueError('Invalid thinking dataset provenance')
@@ -185,8 +186,8 @@ def export_collection(base, output):
                     outcomes[case] = accepted(base/role, case, row, protocols[role])
         values.append(example(row, probe, outcomes, pins, settings['dataset']))
     return save(output, settings['dataset'], ACTIONS, values, dict(plan_sha256=file_hash(base/'plan.json'), tp=settings['tp'],
-                **({'hardware_profile': 'l40-tp4', 'hardware_preflight': settings['hardware_preflight']}
-                   if settings.get('hardware_profile') == 'l40-tp4' else {}),
+                **({'hardware_profile': settings['hardware_profile'], 'hardware_preflight': settings['hardware_preflight']}
+                   if settings.get('hardware_profile') in ('l40-tp2', 'l40-tp4') else {}),
                 **{k:settings[k] for k in ('execution_profile','evaluation_protocol') if k in settings},
                 seed=42, samples_per_task=settings['samples_per_task'] if settings['dataset'] == 'ruler' else None,
                 validation='committed-results-and-record-pins; per-request runtime validation, no offline attention replay',

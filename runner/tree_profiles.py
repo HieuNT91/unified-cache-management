@@ -16,6 +16,8 @@ def hardware_profile(name='server',dataset='ruler',tp=4):
                     kv_cache_mode='auto' if tp==2 else 'fixed')
     if name=='l40-tp4' and dataset=='ruler-thinking' and tp==4:
         return dict(names=('L40',),memory=.9,workspace_gib=8.,kv_cache_mode='fixed')
+    if name=='l40-tp2' and dataset=='ruler-thinking' and tp==2:
+        return dict(names=('L40',),memory=.96,workspace_gib=3.,kv_cache_mode='auto')
     if name=='rtx4500ada' and dataset in PROFILES:
         # Local 24 GiB TP4 profile: validated clean YaRN4/16K-prefill runs,
         # with 4096-token activation tiles and full original-position KV.

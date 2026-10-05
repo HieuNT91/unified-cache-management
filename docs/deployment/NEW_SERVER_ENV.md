@@ -34,7 +34,7 @@ python -m pip install \
   --index-url https://download.pytorch.org/whl/cu128
 python -m pip install 'vllm==0.9.2' 'transformers==4.53.2' 'wrapt==1.17.2' \
   'numpy==2.2.6' 'scipy==1.15.3' 'nltk==3.10.3' \
-  'wonderwords==3.0.1' 'matplotlib==3.10.6' PyYAML
+  'wonderwords==3.0.1' 'matplotlib==3.10.6' PyYAML tenacity
 ```
 
 Bỏ qua `conda create` nếu env đã tồn tại. Giữ `NVCC_PREPEND_FLAGS` khi build:
@@ -44,6 +44,35 @@ linker hệ thống, tránh lỗi `__nptl_change_stack_perm@GLIBC_PRIVATE`.
 Giữ nguyên các phiên bản trên; không cần cài riêng `flash-attn`.
 Wheel CUDA theo [PyTorch](https://pytorch.org/get-started/previous-versions/) và
 [vLLM 0.9.2](https://docs.vllm.ai/en/v0.9.2/getting_started/installation/gpu.html).
+
+### Dữ liệu NLTK `punkt_tab` (RULER)
+
+`punkt_tab` là dữ liệu tokenizer, không phải package pip. Nếu NLTK downloader
+không truy cập mạng được, tải ZIP chính thức bằng trình duyệt:
+
+```text
+https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/tokenizers/punkt_tab.zip
+```
+
+Đặt file tại `/home/zhufangzhou/jh/downloads/punkt_tab.zip` trên server, rồi chạy:
+
+```bash
+export NLTK_DATA=/home/zhufangzhou/jh/nltk_data
+mkdir -p "$NLTK_DATA/tokenizers"
+/home/zhufangzhou/jh/envs/ucm/bin/python -m zipfile -e \
+  /home/zhufangzhou/jh/downloads/punkt_tab.zip "$NLTK_DATA/tokenizers"
+```
+
+Kết quả là `nltk_data/tokenizers/punkt_tab/english/` (và các ngôn ngữ khác).
+Thêm dòng sau vào `.env.l40.thinking` hoặc file env của launcher đang dùng để
+process prepare/worker luôn tìm được dữ liệu:
+
+```dotenv
+NLTK_DATA=/home/zhufangzhou/jh/nltk_data
+```
+
+Sau đó chạy lại `prepare`; không cần cài lại hoặc nâng phiên bản `nltk`.
+Hướng dẫn cài dữ liệu thủ công của NLTK: https://www.nltk.org/data.html
 
 ## 2. Native UCM 0.3.0
 
