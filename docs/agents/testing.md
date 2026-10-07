@@ -106,3 +106,31 @@ larger caches with matching per-rank capacity, rejects insufficient/mismatched
 caches and invalid YaRN/context receipts, checks the95% free-memory budget on
 A800/L20, and preserves fixed TP4/local allocations. No GPU inference or
 remote experiment ran; actual memory occupancy and performance remain unverified.
+
+## Standalone compact feature export (2026-10-07)
+
+The13 tests in `tests/test_export_features.py` passed, as did the20 current
+TP2 collection regression tests. Coverage includes the100-name/18-group schema,
+uniform/one-hot/zero/random attention, independent five-feature arithmetic and
+pairwise head-mask checks, TP4 all-head archive reconstruction, missing/corrupt
+records, incomplete cohort/engine-exit receipts, source locks, atomic publication
+failure, no overwrite and portable payload checksums.
+
+A copied single-file script exported a full synthetic503-prompt LongBench cohort
+outside the repo with no model/prepared path or repo imports. A full synthetic
+1300-prompt RULER export checked every record/archive and role/action join while
+reusing computed features for its identical synthetic captures. Membership checks
+also covered2600 non-thinking and390 thinking RULER prompts. These are CPU
+fixtures, not GPU experiments or real-data training/export results.
+
+Use discovery so the existing TP2 tests can resolve their sibling test helpers:
+
+```bash
+CUDA_VISIBLE_DEVICES='' OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  "$PYTHON_BIN" -m unittest discover -s tests -p test_export_features.py -v
+CUDA_VISIBLE_DEVICES='' OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  "$PYTHON_BIN" -m unittest discover -s tests -p test_tp2_collection.py -v
+```
+
+See [compact export](../deployment/COMPACT_FEATURE_EXPORT.md). The existing
+JSON five-feature trainer and all running/frozen experiment protocols are unchanged.
