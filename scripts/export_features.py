@@ -2,18 +2,22 @@
 """Export 100 scalar attention features and 12 measured actions (CPU only).
 
 Python >=3.9 and NumPy >=1.22. This file is standalone: copy it to any server.
-Usage: python export_features.py EXPERIMENT_DIR [--output FILE.npz]
+Usage: python export_features.py EXPERIMENT_DIR [--workers 64] [--output FILE.npz]
+Default: 64 CPU worker processes, one BLAS thread per worker.
 Supported: completed tp2-data-config-v2 LongBench v2 / RULER collections,
 including L40 thinking TP2/TP4. No model, prepared inputs, CUDA or repo imports.
 Source results are read-only. Existing output files are never overwritten.
 """
 import argparse
 from collections import Counter
-from contextlib import ExitStack, contextmanager
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures.process import BrokenProcessPool
+from contextlib import ExitStack, closing, contextmanager
 import hashlib
 import itertools
 import json
 import math
+import multiprocessing
 import os
 from pathlib import Path
 import re
@@ -25,6 +29,16 @@ import zipfile
 
 class ExportError(ValueError):
     """Invalid or incomplete source data; never silently export a partial cohort."""
+
+
+DEFAULT_WORKERS = 64
+BLAS_THREAD_VARIABLES = ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS',
+                         'BLIS_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS', 'NUMEXPR_NUM_THREADS')
+# Set before NumPy loads in the CLI and spawned copy of this script. Imported
+# library callers get the same limits in fresh workers via worker_environment().
+if __name__ in ('__main__', '__mp_main__'):
+    for variable in BLAS_THREAD_VARIABLES:
+        os.environ[variable] = '1'
 
 try:
     import numpy as np
@@ -931,7 +945,84 @@ def publish_npz(output, arrays, metadata):
     return file_hash(output)
 
 
-def export(root, output=None, quiet=False):
+def extract_prompt(job):
+    """A worker reads one capture and returns scalars, never attention arrays."""
+    index, folder, probe, row, tp = job
+    try:
+        started = time.perf_counter()
+        layers, heads, scores, prefix = load_attention(Path(folder), probe, row, tp)
+        values = compute_features(layers, heads, scores, prefix)
+        seconds = time.perf_counter()-started
+        for name in OLD_FEATURES:
+            saved = probe['features'][name]
+            value = values[FEATURE_NAMES.index(name)]
+            require((saved is None and np.isnan(value)) or (number(saved) and np.isclose(value, saved, rtol=1e-10, atol=1e-12)),
+                    f'Legacy feature replay mismatch: {name}')
+        return index, values, seconds
+    except (ValueError, KeyError, TypeError, OSError, IndexError, EOFError, zipfile.BadZipFile) as e:
+        raise ExportError(f'Prompt {row["id"]}: {e}') from e
+
+
+@contextmanager
+def worker_environment():
+    """Spawned interpreters inherit limits before importing NumPy; restore caller env."""
+    saved = {name: os.environ.get(name) for name in BLAS_THREAD_VARIABLES}
+    try:
+        for name in BLAS_THREAD_VARIABLES:
+            os.environ[name] = '1'
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def extracted_prompts(jobs, workers):
+    """Bound in-flight captures to workers; yield promptly in completion order.
+
+    Spawn avoids inheriting initialized BLAS pools and source read-lock handles.
+    The parent alone owns metadata validation, ordering and output publication.
+    On failure, cancel queued work and join owned workers before releasing locks.
+    """
+    require(type(workers) is int and workers > 0, 'workers must be a positive integer')
+    if workers == 1:
+        for job in jobs:
+            yield extract_prompt(job)
+        return
+    with worker_environment():
+        pool = ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context('spawn'))
+        pending = {}
+        jobs = iter(jobs)
+        exhausted = False
+        try:
+            while pending or not exhausted:
+                while not exhausted and len(pending) < workers:
+                    try:
+                        job = next(jobs)
+                    except StopIteration:
+                        exhausted = True
+                        break
+                    pending[pool.submit(extract_prompt, job)] = job[0]
+                if not pending:
+                    break
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    index = pending.pop(future)
+                    result = future.result()
+                    require(result[0] == index, 'Worker returned a different prompt index')
+                    yield result
+        except BrokenProcessPool as e:
+            raise ExportError('An export worker exited unexpectedly. Check system logs/available RAM or reduce --workers.') from e
+        finally:
+            for future in pending:
+                future.cancel()
+            pool.shutdown(wait=True, cancel_futures=True)
+
+
+def export(root, output=None, quiet=False, workers=DEFAULT_WORKERS):
+    require(type(workers) is int and workers > 0, 'workers must be a positive integer')
     root = Path(root).resolve()
     with source_read_lock(root):
         source = Collection(root)
@@ -939,6 +1030,7 @@ def export(root, output=None, quiet=False):
         require(output.suffix == '.npz', 'Output must end in .npz')
         require(not output.exists(), f'Output exists; choose another --output: {output}')
         n, tp = len(source.rows), source.tp
+        active_workers = min(workers, n)
         X = np.empty((n, 100), dtype=np.float32)
         accuracy = np.empty((n, 12), dtype=np.float32)
         ttft = np.empty((n, 12), dtype=np.float32)
@@ -946,44 +1038,49 @@ def export(root, output=None, quiet=False):
         offline_seconds = np.empty(n, dtype=np.float64)
         control_gpus = np.empty((n, 12, tp), dtype='<U40')
         probe_gpus = np.empty((n, tp), dtype='<U40')
-        token_hashes = []
+        token_hashes = ['']*n
         if not quiet:
-            print(f'{source.dataset}: {n} prompts, 100 features, 12 actions; CPU only.', flush=True)
+            print(f'{source.dataset}: {n} prompts, 100 features, 12 actions; '
+                  f'{active_workers} CPU workers, 1 BLAS thread per CLI/worker process.', flush=True)
         last_print = time.monotonic()
-        for i, row in enumerate(source.rows):
-            try:
-                probe, folder = source.record('features', 'probe', row)
-                overhead[i] = probe['timings']['routing_overhead_seconds']
-                probe_gpus[i] = probe['gpu_uuids']
-                token_hash = probe['token_sha256']
-                require(isinstance(token_hash, str) and re.fullmatch('[0-9a-f]{64}', token_hash), 'Invalid probe token hash')
-                token_hashes.append(token_hash)
-                for j, case in enumerate(ACTION_NAMES):
-                    role = ('ruler' if source.dataset == 'ruler' else 'primary' if case in PRIMARY else 'extra')
-                    result, _ = source.record(role, case, row)
-                    require(result['token_sha256'] == token_hash, 'Answer and probe token hashes differ')
-                    if source.settings.get('execution_profile') == 'ruler-thinking':
-                        require(result.get('ruler_thinking_budget') == row.get('ruler_thinking_budget')
-                                and result.get('ruler_thinking_budget') is not None, 'Thinking budget mismatch')
-                    accuracy[i, j] = result['accuracy']
-                    ttft[i, j] = result['timings']['ttft_seconds']
-                    control_gpus[i, j] = result['gpu_uuids']
-                started = time.perf_counter()
-                layers, heads, scores, prefix = load_attention(folder, probe, row, tp)
-                values = compute_features(layers, heads, scores, prefix)
-                del layers, heads, scores
-                offline_seconds[i] = time.perf_counter()-started
-                for name in OLD_FEATURES:
-                    saved = probe['features'][name]
-                    value = values[FEATURE_NAMES.index(name)]
-                    require((saved is None and np.isnan(value)) or (number(saved) and np.isclose(value, saved, rtol=1e-10, atol=1e-12)),
-                            f'Legacy feature replay mismatch: {name}')
+
+        def jobs():
+            # Validate records and accumulate provenance in frozen manifest order,
+            # independent of worker scheduling/completion order.
+            for i, row in enumerate(source.rows):
+                try:
+                    probe, folder = source.record('features', 'probe', row)
+                    overhead[i] = probe['timings']['routing_overhead_seconds']
+                    probe_gpus[i] = probe['gpu_uuids']
+                    token_hash = probe['token_sha256']
+                    require(isinstance(token_hash, str) and re.fullmatch('[0-9a-f]{64}', token_hash), 'Invalid probe token hash')
+                    token_hashes[i] = token_hash
+                    for j, case in enumerate(ACTION_NAMES):
+                        role = ('ruler' if source.dataset == 'ruler' else 'primary' if case in PRIMARY else 'extra')
+                        result, _ = source.record(role, case, row)
+                        require(result['token_sha256'] == token_hash, 'Answer and probe token hashes differ')
+                        if source.settings.get('execution_profile') == 'ruler-thinking':
+                            require(result.get('ruler_thinking_budget') == row.get('ruler_thinking_budget')
+                                    and result.get('ruler_thinking_budget') is not None, 'Thinking budget mismatch')
+                        accuracy[i, j] = result['accuracy']
+                        ttft[i, j] = result['timings']['ttft_seconds']
+                        control_gpus[i, j] = result['gpu_uuids']
+                except (ValueError, KeyError, TypeError, OSError, IndexError) as e:
+                    raise ExportError(f'Prompt {row["id"]}: {e}') from e
+                yield i, str(folder), probe, row, tp
+
+        completed = set()
+        with closing(extracted_prompts(jobs(), active_workers)) as results:
+            for i, values, seconds in results:
+                require(0 <= i < n and i not in completed, 'Duplicate/invalid completed prompt')
                 X[i] = values
-            except (ValueError, KeyError, TypeError, OSError, IndexError) as e:
-                raise ExportError(f'Prompt {row["id"]}: {e}') from e
-            if not quiet and (i == 0 or (i+1) % 10 == 0 or i+1 == n or time.monotonic()-last_print >= 30):
-                print(f'Exported scalars {i+1}/{n}: {row["id"]}', flush=True)
-                last_print = time.monotonic()
+                offline_seconds[i] = seconds
+                completed.add(i)
+                count = len(completed)
+                if not quiet and (count == 1 or count % 10 == 0 or count == n or time.monotonic()-last_print >= 30):
+                    print(f'Exported scalars {count}/{n}: {source.rows[i]["id"]}', flush=True)
+                    last_print = time.monotonic()
+        require(len(completed) == n, 'Workers exited without all prompt features')
         require(not np.isinf(X).any() and np.isfinite(accuracy).all()
                 and np.isfinite(ttft).all() and (ttft > 0).all() and np.isfinite(overhead).all(),
                 'Float32 conversion produced invalid/underflowed values')
@@ -1016,21 +1113,37 @@ def export(root, output=None, quiet=False):
             source_settings=source.settings, plan_sha256=source.pins['plan.json'],
             source_protocols=source.protocols, source_record_receipts_sha256=source.record_digest.hexdigest(),
             source_control_files={k: v for k, v in source.pins.items() if '/records/' not in k},
-            exporter_sha256=file_hash(Path(__file__)), numpy_version=np.__version__)
+            exporter_sha256=file_hash(Path(__file__)), numpy_version=np.__version__,
+            export_execution=dict(workers_requested=workers, workers_used=active_workers,
+                                  start_method='spawn' if active_workers > 1 else 'serial',
+                                  blas_threads_per_worker=1 if active_workers > 1 or __name__ == '__main__' else None,
+                                  output_order='rows.json'))
         checksum = publish_npz(output, arrays, metadata)
     if not quiet:
         print(f'Saved {output}\nSHA256 {checksum}\nShapes: X={X.shape}, y_accuracy={accuracy.shape}, y_ttft={ttft.shape}', flush=True)
     return output
 
 
+def positive_workers(value):
+    try:
+        parsed = int(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError('workers must be a positive integer') from e
+    if parsed < 1:
+        raise argparse.ArgumentTypeError('workers must be a positive integer')
+    return parsed
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('experiment_dir', type=Path, help='Completed collection root containing settings.json, plan.json and rows.json')
     parser.add_argument('--output', type=Path, help='New output .npz path (default: EXPERIMENT_DIR/DATASET-features.npz)')
+    parser.add_argument('--workers', type=positive_workers, default=DEFAULT_WORKERS,
+                        help='Parallel CPU processes (default: 64); use 1 for serial export')
     parser.add_argument('--quiet', action='store_true', help='Suppress progress messages')
     args = parser.parse_args(argv)
     try:
-        export(args.experiment_dir, args.output, args.quiet)
+        export(args.experiment_dir, args.output, args.quiet, workers=args.workers)
     except (ValueError, OSError, KeyError, TypeError, IndexError, EOFError, zipfile.BadZipFile) as e:
         parser.exit(1, f'Export failed: {e}\n')
     return 0

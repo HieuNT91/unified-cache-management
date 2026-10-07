@@ -1,7 +1,9 @@
 """CPU-only arithmetic, integrity and standalone export tests using synthetic data."""
 import hashlib
+import io
 import json
 import math
+import multiprocessing
 import os
 from pathlib import Path
 import re
@@ -10,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from unittest.mock import patch
 
 import numpy as np
@@ -99,6 +102,34 @@ def fixture(root, dataset='longbench-v2', count=200, records=True, tp=2, thinkin
     return rows
 
 
+def vary_probe(root, row, peak):
+    """Different scalar features expose reordered-row bugs in parallel exports."""
+    folder=root/'features/records/probe'/row['id']
+    record=json.loads((folder/'result.json').read_text())
+    local=np.full((64,320),.001,np.float32);local[:,peak]=1
+    mean=np.zeros(320,np.float32)
+    for v in local:mean+=v
+    mean/=np.float32(64)
+    scores=mean[64:].copy()
+    captured=[]
+    for artifact in record['artifacts']:
+        path=folder/artifact['path']
+        with np.load(path,allow_pickle=False) as saved:
+            arrays={k:saved[k] for k in saved.files}
+        heads=np.broadcast_to(local[0],arrays['heads'].shape).copy()
+        arrays.update(layers=local,local_mean=mean,scores=scores,heads=heads)
+        arrays.update({f'prophetkv-{b}':ef.mask(ef.ranked(scores),b)+64 for b in ef.RATIOS})
+        path.unlink()  # Other synthetic prompts share the original immutable inode.
+        np.savez_compressed(path,**arrays)
+        artifact['sha256']=ef.file_hash(path);captured.append(heads)
+    record['features']=legacy_features(dict(layers=np.stack([local]*2),scores=scores,
+        heads=np.stack(captured),head_layers=ef.HEAD_LAYERS),64,320)
+    write(folder/'result.json',record)
+    receipt=json.loads((folder/'validated.json').read_text())
+    receipt['files']={p.name:ef.file_hash(p) for p in folder.iterdir() if p.name!='validated.json'}
+    write(folder/'validated.json',receipt)
+
+
 class FeatureMathTests(unittest.TestCase):
     def uniform(self):
         return np.full((64,320),1/320),np.full((8,64,320),1/320,np.float32),np.full(256,1/320,np.float32),64
@@ -173,12 +204,35 @@ class FeatureMathTests(unittest.TestCase):
         self.assertTrue(np.isfinite(f['coverage5_median']))
 
 
+class WorkerConfigurationTests(unittest.TestCase):
+    def test_default_64_and_explicit_workers(self):
+        for args,expected in [([],64),(['--workers','2'],2),(['--workers','1'],1)]:
+            with self.subTest(args=args),patch.object(ef,'export') as export:
+                self.assertEqual(ef.main(['/unused','--quiet',*args]),0)
+                self.assertEqual(export.call_args.kwargs['workers'],expected)
+        for value in ('0','-1','1.5','bad'):
+            with self.subTest(value=value),redirect_stderr(io.StringIO()),self.assertRaises(SystemExit) as error:
+                ef.main(['/unused','--workers',value])
+            self.assertEqual(error.exception.code,2)
+
+    def test_worker_environment_limits_and_restoration(self):
+        with patch.dict(os.environ,{'OPENBLAS_NUM_THREADS':'64','MKL_NUM_THREADS':'32'},clear=True):
+            before=dict(os.environ)
+            with self.assertRaisesRegex(RuntimeError,'injected'):
+                with ef.worker_environment():
+                    self.assertTrue(all(os.environ[v]=='1' for v in ef.BLAS_THREAD_VARIABLES))
+                    raise RuntimeError('injected')
+            self.assertEqual(dict(os.environ),before)
+
+
 class CollectionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp=tempfile.TemporaryDirectory(prefix='compact export test ')
         cls.root=Path(cls.temp.name)/'source';cls.root.mkdir()
         cls.rows=fixture(cls.root)
+        vary_probe(cls.root,cls.rows[1],100)
+        vary_probe(cls.root,cls.rows[2],260)
 
     @classmethod
     def tearDownClass(cls):cls.temp.cleanup()
@@ -229,9 +283,10 @@ class CollectionTests(unittest.TestCase):
         work=Path(self.temp.name)/'standalone';work.mkdir(exist_ok=True)
         script=work/'export_features.py';shutil.copyfile(ef.__file__,script)
         output=work/'longbench-v2-features.npz'
-        env=dict(os.environ,CUDA_VISIBLE_DEVICES='',PYTHONPATH='',OPENBLAS_NUM_THREADS='1',OMP_NUM_THREADS='1')
-        result=subprocess.run([sys.executable,str(script),str(self.root),'--output',str(output),'--quiet'],
-                              cwd=work,env=env,text=True,capture_output=True,timeout=180)
+        # The CLI must override inherited thread fan-out before NumPy loads.
+        env=dict(os.environ,CUDA_VISIBLE_DEVICES='',PYTHONPATH='',OPENBLAS_NUM_THREADS='64',OMP_NUM_THREADS='64')
+        result=subprocess.run([sys.executable,str(script),str(self.root),'--output',str(output),'--workers','2','--quiet'],
+                              cwd=work,env=env,text=True,capture_output=True,timeout=240)
         self.assertEqual(result.returncode,0,result.stderr)
         arrays,meta=ef.verify_npz(output)
         self.assertEqual(arrays['X'].shape,(503,100));self.assertEqual(arrays['y_ttft'].shape,(503,12))
@@ -244,6 +299,18 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(len(set(arrays['length_group'])),3)
         self.assertTrue((arrays['probe_overhead_seconds']==.25).all())
         self.assertIn('not online',meta['timing'])
+        self.assertEqual(meta['export_execution']['workers_used'],2)
+        self.assertEqual(meta['export_execution']['blas_threads_per_worker'],1)
+        self.assertEqual(meta['export_execution']['start_method'],'spawn')
+        serial=ef.export(self.root,work/'serial.npz',quiet=True,workers=1)
+        serial_arrays,serial_meta=ef.verify_npz(serial)
+        for name in arrays:
+            if name!='offline_extraction_seconds':
+                np.testing.assert_array_equal(arrays[name],serial_arrays[name],err_msg=name)
+        self.assertFalse(np.array_equal(arrays['X'][0],arrays['X'][1],equal_nan=True))
+        self.assertFalse(np.array_equal(arrays['X'][1],arrays['X'][2],equal_nan=True))
+        self.assertEqual(meta['source_record_receipts_sha256'],serial_meta['source_record_receipts_sha256'])
+        self.assertEqual(meta['source_control_files'],serial_meta['source_control_files'])
         prior=ef.file_hash(output)
         with self.assertRaisesRegex(ef.ExportError,'exists'):ef.export(self.root,output,quiet=True)
         self.assertEqual(ef.file_hash(output),prior)
@@ -272,7 +339,7 @@ class CollectionTests(unittest.TestCase):
             # its result for identical synthetic attention, still validate every
             # archive/record and the RULER-specific role/ordinal joins.
             with patch.object(ef,'compute_features',return_value=values) as compute:
-                output=ef.export(root,quiet=True)
+                output=ef.export(root,quiet=True,workers=1)
             self.assertEqual(compute.call_count,1300)
             self.assertEqual(output.name,'ruler-features.npz')
             a,m=ef.verify_npz(output)
@@ -282,6 +349,24 @@ class CollectionTests(unittest.TestCase):
             for i in range(1300):
                 self.assertEqual(len({tuple(g) for g in a['control_gpu_uuids'][i]}),1)
             self.assertEqual(m['source_settings']['samples_per_task'],100)
+
+    def test_worker_failure_cleans_up_and_publishes_nothing(self):
+        output=Path(self.temp.name)/'worker-failure.npz'
+        original=ef.extracted_prompts
+        before={p.pid for p in multiprocessing.active_children()}
+        def fail_one(jobs,workers):
+            def changed():
+                for index,folder,probe,row,tp in jobs:
+                    if index==0:
+                        probe=json.loads(json.dumps(probe))
+                        probe['artifacts'][0]['sha256']='0'*64
+                    yield index,folder,probe,row,tp
+            return original(changed(),workers)
+        with patch.object(ef,'extracted_prompts',side_effect=fail_one):
+            with self.assertRaisesRegex(ef.ExportError,'Prompt longbench-0: Attention checksum mismatch'):
+                ef.export(self.root,output,quiet=True,workers=2)
+        self.assertFalse(output.exists())
+        self.assertEqual({p.pid for p in multiprocessing.active_children()},before)
 
     def test_tp4_archive_head_coverage_and_shapes(self):
         c=ef.Collection(self.root);row=c.rows[0]

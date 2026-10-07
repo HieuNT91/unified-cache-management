@@ -15,6 +15,12 @@ giữ làm provenance, không dùng để mở model/prepared/cache.
 python scripts/export_features.py /path/to/experiment
 ```
 
+Mặc định **64 worker processes**, mỗi worker dùng **1 BLAS thread**. Có thể ghi rõ:
+
+```bash
+python scripts/export_features.py /path/to/experiment --workers 64
+```
+
 Với Python trong môi trường A800 đã khai báo:
 
 ```bash
@@ -39,11 +45,29 @@ python /path/to/export_features.py /path/to/experiment \
   --output /path/to/exports/ruler-200-features.npz --quiet
 ```
 
-Script xử lý tuần tự từng prompt; bộ nhớ phụ thuộc một attention capture,
-không phụ thuộc tổng số prompt. Các phép sorting và pairwise head-mask overlap
-có thể tốn CPU/I/O; thời gian export phụ thuộc context và storage. Nếu thư viện
-BLAS tự mở nhiều thread, có thể đặt `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1`
-cho process export.
+Mỗi worker đọc/check archive và tính feature cho một prompt. Parent kiểm tra
+record/provenance, giữ thứ tự `rows.json` và ghi file cuối cùng. Capture lớn không
+được truyền qua process queue; chỉ scalar được trả về. Số prompt đang xử lý được
+giới hạn theo `--workers`; không load toàn dataset vào RAM.
+
+64 worker có thể đồng thời giữ 64 capture và buffer tính toán, nên RAM tăng theo
+số worker. Throughput còn phụ thuộc CPU và storage; không đảm bảo speedup 64 lần.
+Có thể giảm xuống `--workers 8` hoặc dùng `--workers 1` để chạy serial. Script
+không tự giảm số worker theo số core/RAM; nếu số prompt ít hơn thì chỉ dùng đủ
+worker cho số prompt đó. CLI và các process mới tự đặt BLAS/OpenMP về 1 thread
+trước khi NumPy load, kể cả khi environment cũ đặt nhiều thread hơn.
+
+Workers dùng multiprocessing `spawn`. Nếu import và gọi `export()` từ chương
+trình Python riêng, đặt lời gọi trong `if __name__ == '__main__':`; lệnh CLI ở
+trên đã có guard. Khi worker lỗi, queued tasks được hủy, workers đang chạy được
+thu dọn trước khi trả lỗi; không xuất NPZ thiếu hàng. Các phép kiểm tra checksum
+và input/action alignment vẫn được áp dụng ở mọi số worker. Metadata ghi
+`export_execution`. X, accuracy và TTFT giữ nguyên; thời gian extraction và
+metadata execution có thể khác, nên checksum toàn file có thể khác.
+
+Tham số worker áp dụng từ lúc khởi động process mới; không đổi process export
+đang chạy. Chưa có checkpoint/resume cho export dở: một lần chạy mới tính lại
+từ đầu. Các experiment/inference process không bị script export thay đổi.
 
 ## Experiment được hỗ trợ
 

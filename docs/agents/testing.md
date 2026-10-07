@@ -134,3 +134,14 @@ CUDA_VISIBLE_DEVICES='' OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
 
 See [compact export](../deployment/COMPACT_FEATURE_EXPORT.md). The existing
 JSON five-feature trainer and all running/frozen experiment protocols are unchanged.
+
+The subsequent parallel-export update passed all16 exporter CPU tests. The CLI
+default of64 processes, positive worker-count validation and one-thread worker
+environment/restoration are covered. A relocated standalone script with2 spawned
+workers exported the full synthetic503-prompt cohort, including distinct attention
+captures; its features, labels, identities, GPU metadata, missing masks and source
+receipt digest matched serial export exactly. Only offline extraction timings and
+execution metadata are allowed to differ. An actual worker checksum failure
+published no output and left no owned child processes. The1300-row RULER fixture,
+TP4 captures and prior integrity checks still passed. No real-data export, GPU
+job or64-worker performance benchmark was run for this update.
