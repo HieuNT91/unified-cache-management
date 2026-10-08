@@ -68,7 +68,7 @@ def extract_features(artifacts, sample, tp):
 
 
 def measure(llm, sample, request_id, policy, router_id, output, tp=4, unchanged=lambda:None, scheduler_path=None):
-    from run import generate, verify_diagnostics
+    from runner.generation import generate, verify_diagnostics
     from runner.worker import router_export, drain
     validate_profile(sample,tp)
     from runner.layout import PROMPT_PROTOCOL
@@ -116,7 +116,7 @@ def measure(llm, sample, request_id, policy, router_id, output, tp=4, unchanged=
 
 
 def validate_answer(llm, diagnostics, result, sample, routing, tp):
-    from run import verify_diagnostics
+    from runner.generation import verify_diagnostics
     from runner.worker import router_dense_receipt
     decision = routing['decision']
     dense = decision['action'] == 'baseline'

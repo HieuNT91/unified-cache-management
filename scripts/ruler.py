@@ -256,7 +256,7 @@ def generator_command(args, task, target, tokenizer=None):
 
 
 def prepare(args):
-    from run import check_model
+    from runner.preparation import check_model
     from transformers import AutoTokenizer
     if os.environ.get('CUDA_VISIBLE_DEVICES') != '':
         raise ValueError("CPU preparation requires CUDA_VISIBLE_DEVICES=''")

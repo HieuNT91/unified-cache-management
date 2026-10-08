@@ -1,13 +1,16 @@
 # Architecture
 
 Start with [root rules](../../AGENTS.md). Commands and data paths in this guide
-are relative to the worktree root.
+are relative to the repository root.
 
 ## Entry points and modules
 
 | Area | Files | Responsibility |
 |---|---|---|
-| Public CLI | `run.py`, `run.sh` | Prepare, run, setup and sweep dispatch |
+| Public CLI | `run.py`, `run.sh` | Argument parsing, environment setup and prepare/run/setup/sweep dispatch |
+| Prompt preparation | `runner/preparation.py` | Model identity checks and CPU tokenization |
+| Shared inference | `runner/generation.py` | Request generation, decoding/TTFT and native attention diagnostic validation |
+| Single-input execution | `runner/single.py` | Engine/cache lifecycle and baseline/ProphetKV/router result publication |
 | Input identity | `runner/layout.py`, `runner/config.py`, `runner/identity.py` | Token-preserving layouts, request metadata, configuration and hashes |
 | Execution | `runner/worker.py`, `runner/rope_window.py` | Model/worker integration, bounded prefill and RoPE window |
 | Cache lifecycle | `runner/cache.py`, `runner/setup_store.py`, `runner/setups.py` | Construction, persistent setup, readiness and reader ownership |
@@ -20,6 +23,10 @@ are relative to the worktree root.
 | Fixed controls | `scripts/rpkv_gpu_validation.py`, `scripts/rpkv_gpu_sequence.py`, `scripts/rpkv_gpu_results.py`, `scripts/rpkv_longbench_inputs.py` | Cohort execution, sequencing, reporting and full-text fitting selection |
 | Launchers | `scripts/launcher/*.sh` | Server and corpus/router shell entry points; shared `.env` loader |
 | Router training and evidence | `runner/corpus*.py`, `scripts/corpus_*.py`, `scripts/launcher/ruler_corpus*.sh` | Collect baseline/ProphetKV outcomes and router probe features, train/export policies, replay and validate evidence |
+
+`run.py` handles CLI dispatch only. Runtime modules and dataset adapters import
+shared functions from `runner.preparation` and `runner.generation`, rather than
+depending on the CLI. The existing `run.sh` commands remain unchanged.
 
 `scripts/ruler.py` contains both the RULER implementation and CLI; use
 `scripts.ruler` for Python imports. The complete prompt plus output reserve must

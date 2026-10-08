@@ -101,7 +101,7 @@ def model_stamp(model):
 
 
 def model_identity(model, cached=None, stamp=None):
-    from run import check_model
+    from runner.preparation import check_model
     check_model(model)
     files = model_files(model)
     if not any(p.suffix in ('.safetensors', '.bin') for p in files):
@@ -329,7 +329,7 @@ def persistent_config(root, descriptor, readonly, layouts=None):
 
 def construct_missing(root, descriptor, samples, missing, args, progress):
     """One engine, only incomplete independent chunks; completion follows retirement."""
-    from run import generate
+    from runner.generation import generate
     from runner.cache import wait_for_cache
     check_environment(args.tp)
     from runner.worker import setup
@@ -431,7 +431,7 @@ def build_setup(args):
 
 
 def prepare_collection(args, entries, preparation, write):
-    from run import tokenize_sample
+    from runner.preparation import tokenize_sample
     tokenizer = None
     samples = []
     config_sha = file_hash(args.model / 'config.json')
@@ -548,7 +548,7 @@ def run_collection(args):
 
 
 def execute_collection(args, root, descriptor, samples, cfg, devices, receipt, reporter=None):
-    from run import generate, verify_diagnostics
+    from runner.generation import generate, verify_diagnostics
     from runner.worker import setup, arm, drain
     from ucm.sparse.prophetkv.layers import resolve_layers
     cached = args.method != 'baseline'

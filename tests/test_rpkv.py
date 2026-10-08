@@ -142,12 +142,12 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(c.store.mock_calls,[])
 
     def test_generation_transport_has_identical_tokens_and_task_decoding(self):
-        import run
+        from runner import generation
         s=sample();received=[]
         engine=NS(has_unfinished_requests=Mock(side_effect=[False,True,False]))
         engine.add_request=lambda rid,prompt,params:received.append((rid,prompt,params))
         engine.step=lambda:[NS(request_id='request',outputs=[NS(token_ids=[1])],finished=True)]
-        run.generate(engine,s['token_ids'],32,'request',False,sample=s)
+        generation.generate(engine,s['token_ids'],32,'request',False,sample=s)
         rid,prompt,params=received[0]
         self.assertEqual(prompt['prompt_token_ids'],s['token_ids'])
         self.assertEqual((params.temperature,params.top_p,params.top_k,params.max_tokens),(0.,1.,32,32))

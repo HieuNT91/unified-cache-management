@@ -188,7 +188,7 @@ class LifecycleTests(unittest.TestCase):
             def generate(engine,tokens,budget,rid,thinking=False,**metadata):
                 events.append(('generate',budget,rid))
                 return NS(outputs=[NS(token_ids=[7])]),.02,.1
-            with patch.dict(sys.modules,{'runner.worker':worker}),patch('run.generate',side_effect=generate),patch('run.verify_diagnostics'):
+            with patch.dict(sys.modules,{'runner.worker':worker}),patch('runner.generation.generate',side_effect=generate),patch('runner.generation.verify_diagnostics'):
                 result,ttft,elapsed,routing=measure(llm,sample(),'a'*32+':p:read:measured',payload('baseline'),'router1',out,
                     unchanged=lambda:events.append(('immutable',)))
             self.assertEqual([e[1] for e in events if e[0]=='generate'],[1,256])
@@ -325,7 +325,7 @@ class NativeExecutionTests(unittest.TestCase):
             with patch.dict(sys.modules,{'runner.worker':worker}),patch.object(sweep,'start_engine',side_effect=start), \
                  patch.object(sweep,'check_environment',return_value=['GPU-a']*4),patch('scripts.router_inputs.load_prepared',return_value=[row]), \
                  patch.object(sweep,'PromptCache',Cache),patch('runner.cache.wait_for_cache',return_value={'verified_shards':8}), \
-                 patch('run.generate',side_effect=generate),patch('run.verify_diagnostics'):
+                 patch('runner.generation.generate',side_effect=generate),patch('runner.generation.verify_diagnostics'):
                 for case in CASES:sweep.run_group(root,0,case,'fixture')
                 self.assertEqual(sum(e[0]=='start' for e in events),7)
                 self.assertEqual(sum(e[0]=='shutdown' for e in events),7)

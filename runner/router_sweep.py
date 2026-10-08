@@ -68,7 +68,7 @@ def accepted(root, case, row, protocol, full=False):
         initialization=Path(root)/record['session']/'initialization.json'
         if file_hash(initialization)!=record['initialization_sha256']:
             raise ValueError('Scheduled initialization/warmup evidence changed')
-        from run import verify_diagnostics
+        from runner.generation import verify_diagnostics
         diagnostics=json.loads((folder/'diagnostics.json').read_text())
         sample=json.loads((Path(protocol['prepared'])/row['prepared']).read_text())
         routing=record.get('routing')
@@ -96,7 +96,7 @@ def accepted(root, case, row, protocol, full=False):
 
 
 def run_group(root, group, case, attempt):
-    from run import generate, verify_diagnostics
+    from runner.generation import generate, verify_diagnostics
     from runner.worker import setup, arm, drain
     from runner.reporting import OutputAnalyzer, evaluation_metadata, score_answer
     from scripts.router_inputs import load_prepared

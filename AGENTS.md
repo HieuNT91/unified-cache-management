@@ -1,6 +1,27 @@
-# Agent rules for rpkv
+# Agent rules for tp2-router-data
 
-These rules govern the current worktree. Historical notes under
+## Primary workspace and trash access (2026-10-08)
+
+- The repository root is the primary workspace for `tp2-router-data`, on branch
+  `prophetkv/tp2-router-data`. Work directly in `run.py`, `runner/`, `ucm/`,
+  `scripts/`, `tests/` and project documentation/configuration here.
+- The former `.worktrees/tp2-router-data/` linked worktree has been removed;
+  its code, uncommitted changes and local artifacts now live at the root.
+  This supersedes historical references to its former location.
+- The legacy `prophetkv-clean` and `rpkv` worktrees, benchmarks and unrelated
+  artifacts remain archived under `.trash/`. Their notes are historical
+  context and do not govern current work.
+- Do not read, search, recursively list, index, import, execute or otherwise
+  use files under `.trash/` unless the user explicitly requests that scope.
+  Exclude `.trash/` from discovery even when hidden or ignored paths are included.
+  Permission for one archived file does not authorize browsing the rest or
+  restarting jobs. Keep `.trash/` ignored by Git; do not delete, restore or
+  modify archived contents without a user request covering that action.
+- Retained analysis data: `.analysis/ruler-features.npz` and
+  `.analysis/longbenchv2.npz`. Preserve their contents unless asked to change
+  them; do not regenerate or replace these datasets without authorization.
+
+These rules govern the primary workspace. Historical notes under
 `docs/studies/` describe earlier scopes and do not override these rules.
 
 - L40 thinking RULER on `noah`: `scripts/launcher/l40_ruler_thinking_data.sh`
@@ -43,8 +64,8 @@ These rules govern the current worktree. Historical notes under
 - No separate `verify` stage or repeated cohort/diagnostic audits during normal
   launch, resume or reporting. Keep per-request runtime checks; resume defaults
   to fast and reports use committed results without claiming independent replay.
-- Parent `benchmarks/` is historical reference only: do not import/invoke its
-  implementation for new work or restart historical schedulers.
+- Archived benchmarks are historical reference only. Access requires an explicit
+  user request; never import/invoke them for new work or restart old schedulers.
 - All methods must receive identical original prepared token IDs. Never insert
   chunk markers, EOT padding, filler or replacement separators; retain genuine
   source/chat special tokens. Boundaries and populate/read phase are metadata.

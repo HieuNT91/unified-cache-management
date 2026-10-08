@@ -56,7 +56,7 @@ class LightweightLoadingTests(unittest.TestCase):
             engine = Engine.__new__(Engine)
             engine.protocol = dict(prepared=str(root), model=str(root), dataset='ruler')
             with patch.dict(sys.modules, {'runner.worker': SimpleNamespace(drain=object())}), \
-                    patch('runner.corpus_runtime.validate'), patch('run.generate') as generate:
+                    patch('runner.corpus_runtime.validate'), patch('runner.generation.generate') as generate:
                 with self.assertRaisesRegex(ValueError, 'Prepared model mismatch'):
                     engine.begin(row)
                 row['sha256'] = 'changed'
@@ -71,7 +71,7 @@ class LightweightLoadingTests(unittest.TestCase):
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         del fixture.args.validation
-        with patch('run.verify_diagnostics', side_effect=AssertionError('Unexpected replay')):
+        with patch('runner.generation.verify_diagnostics', side_effect=AssertionError('Unexpected replay')):
             receipt = resume.prepare(fixture.args)
         self.assertEqual(receipt['validation']['mode'], 'fast')
         self.assertFalse(receipt['validation']['diagnostic_replay'])

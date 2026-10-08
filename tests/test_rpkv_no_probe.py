@@ -47,7 +47,7 @@ class NoProbeTests(unittest.TestCase):
         engine.row=dict(subtask='niah_single_1',scoring='ruler_all',references=['x'])
         engine.analyzer=Mock();engine.analyzer.analyze.return_value=dict(thinking_tokens=0,answer_tokens=1)
         output=NS(outputs=[NS(token_ids=[3],text='x')],num_cached_tokens=64)
-        with patch.dict('sys.modules',{'runner.worker':NS(drain=object(),router_dense_receipt=object())}),patch('run.generate',return_value=(output,.2,.3)) as generate,patch('runner.corpus_runtime.clean_capture'),patch('runner.corpus_runtime.arm_tree'),patch('runner.corpus_runtime.verify_retired',return_value=[]) as retire,patch('runner.corpus_runtime.match_answer') as replay:
+        with patch.dict('sys.modules',{'runner.worker':NS(drain=object(),router_dense_receipt=object())}),patch('runner.generation.generate',return_value=(output,.2,.3)) as generate,patch('runner.corpus_runtime.clean_capture'),patch('runner.corpus_runtime.arm_tree'),patch('runner.corpus_runtime.verify_retired',return_value=[]) as retire,patch('runner.corpus_runtime.match_answer') as replay:
             record,_=engine.answer(ACTIONS[2],'prophetkv-5')
             self.assertEqual(record['answer_validation'],NATIVE_ANSWER_VALIDATION)
             self.assertEqual(record['accuracy'],1);generate.assert_called_once();retire.assert_called_once();engine.pc.unchanged.assert_called_once();replay.assert_not_called()
@@ -116,7 +116,7 @@ class NoProbeTests(unittest.TestCase):
                 return dict(subtask=row['subtask'],output_token_ids=[9],prediction='The correct answer is (A)',references=['A'],scoring='ruler_all' if root.name=='ruler' else 'longbench_v2',
                     token_sha256=token_hash([1,2,3]),prompt_tokens=3,max_output_tokens=cap,accuracy=1.,output_cap_reached=False,
                     timings=dict(ttft_seconds=.2,answer_engine_ttft_seconds=.19),**analysis)
-            with patch.dict('os.environ',{'CUDA_VISIBLE_DEVICES':''}),patch('transformers.AutoTokenizer.from_pretrained',side_effect=AssertionError('Reporter must not load a model')),patch('scripts.rpkv_gpu_results.accepted',side_effect=outcome),patch('run.verify_diagnostics',side_effect=AssertionError('Reporter must not replay diagnostics')),patch('builtins.print'):
+            with patch.dict('os.environ',{'CUDA_VISIBLE_DEVICES':''}),patch('transformers.AutoTokenizer.from_pretrained',side_effect=AssertionError('Reporter must not load a model')),patch('scripts.rpkv_gpu_results.accepted',side_effect=outcome),patch('runner.generation.verify_diagnostics',side_effect=AssertionError('Reporter must not replay diagnostics')),patch('builtins.print'):
                 report(base)
             receipt=json.loads((base/'final/completion.json').read_text())
             self.assertEqual((receipt['answers'],receipt['probes']),(42,0))

@@ -1,15 +1,26 @@
 """Linux process identity and owned process-group helpers; no historical job control."""
 import os
+import time
 from pathlib import Path
 
 
 def identity(pid):
     try:
         root = Path('/proc')/str(pid)
-        stat = (root/'stat').read_text().rsplit(')',1)[1].split()
-        if stat[0] == 'Z':
-            return None
-        return dict(start=stat[19],cmd=(root/'cmdline').read_bytes().hex())
+        start = None
+        for attempt in range(100):
+            stat = (root/'stat').read_text().rsplit(')',1)[1].split()
+            if stat[0] == 'Z' or (start is not None and stat[19] != start):
+                return None
+            start = stat[19]
+            command = (root/'cmdline').read_bytes()
+            if command:
+                return dict(start=start,cmd=command.hex())
+            # Newly launched processes may briefly expose an empty cmdline.
+            # Never persist a start-only identity as if argv had been observed.
+            if attempt < 99:
+                time.sleep(.01)
+        return None
     except (OSError,IndexError):
         return None
 

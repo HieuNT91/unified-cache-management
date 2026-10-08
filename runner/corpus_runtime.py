@@ -41,7 +41,7 @@ def clean_capture(llm,tp=4):
 class Engine:
     def __init__(self,root,protocol,group,phase,attempt,rows):
         from runner.worker import setup
-        from run import generate
+        from runner.generation import generate
         from runner.reporting import OutputAnalyzer
         from runner.router_process import identity
         from runner.cache import wait_for_cache
@@ -93,7 +93,7 @@ class Engine:
 
     def begin(self,row):
         from runner.sweep import PromptCache
-        from run import generate
+        from runner.generation import generate
         from runner.worker import drain
         self.row=row;self.sample=json.loads((Path(self.protocol['prepared'])/row['prepared']).read_text())
         validate(self.sample,self.protocol.get('execution_profile',self.protocol['dataset']));self.namespace=uuid.uuid4().hex;self.construction={}
@@ -135,7 +135,7 @@ class Engine:
         if answer_validation(self.protocol)==NATIVE_ANSWER_VALIDATION:
             raise ValueError('Independent probes are disabled for native answer controls')
         import numpy as np
-        from run import generate,verify_diagnostics
+        from runner.generation import generate, verify_diagnostics
         from runner.worker import drain
         from runner.corpus_worker import export as export_attention
         folder=Path(folder);folder.mkdir(parents=True,exist_ok=True)
@@ -189,7 +189,7 @@ class Engine:
         return result,ds,attention
 
     def answer(self,definition,case,attention=None,overhead=0.,route_started=None):
-        from run import generate,verify_diagnostics
+        from runner.generation import generate, verify_diagnostics
         from runner.worker import drain,router_dense_receipt
         from runner.reporting import evaluation_metadata,score_answer
         mode=answer_validation(self.protocol)

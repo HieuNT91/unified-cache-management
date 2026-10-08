@@ -135,7 +135,7 @@ class FeatureMathTests(unittest.TestCase):
         return np.full((64,320),1/320),np.full((8,64,320),1/320,np.float32),np.full(256,1/320,np.float32),64
 
     def test_schema_matches_document(self):
-        doc=(Path(__file__).resolve().parents[1]/'features_list.md').read_text()
+        doc=(Path(__file__).resolve().parents[1]/'docs/studies/features_list.md').read_text()
         names=re.findall(r'^\| \d{3} \| `([^`]+)`',doc,re.M)
         self.assertEqual(names,list(ef.FEATURE_NAMES));self.assertEqual(len(set(names)),100)
         self.assertEqual(len({s[1] for s in ef.FEATURE_SPEC}),18)

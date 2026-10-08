@@ -78,7 +78,7 @@ def accepted(root,case,row,protocol,prepared=None,full=False):
             first_answer_content_seconds=result['timings'].get('first_answer_content_seconds')),row[KEY])
     if full and case=='router':validate_routed(root,folder,row,protocol,result)
     if full and case!='router':
-        from run import verify_diagnostics
+        from runner.generation import verify_diagnostics
         from runner.corpus import load_attention,match_answer
         sample=json.loads(relative(prepared or protocol['prepared'],row['prepared']).read_text())
         ds=json.loads((folder/'diagnostics.json').read_text())

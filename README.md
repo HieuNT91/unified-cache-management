@@ -21,7 +21,8 @@ and real-data training have not been performed for this implementation.
 | Path | Purpose |
 |---|---|
 | [AGENTS.md](AGENTS.md) | Short mandatory rules for work in this branch |
-| [run.py](run.py), [run.sh](run.sh) | Public preparation/inference entry points |
+| [run.py](run.py), [run.sh](run.sh) | CLI dispatch and environment setup |
+| [runner/preparation.py](runner/preparation.py), [runner/generation.py](runner/generation.py), [runner/single.py](runner/single.py) | Prompt preparation, shared inference/validation and single-input execution |
 | [runner/](runner/) | Layouts, orchestration, cache lifecycle, reporting and routers |
 | [ucm/](ucm/) | Connector, storage, sparse attention and runtime integration |
 | [scripts/](scripts/) | Dataset adapters, launchers, baseline/ProphetKV controls and router workflows |

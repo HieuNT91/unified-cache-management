@@ -87,7 +87,7 @@ def load_attention(folder,receipt,sample,inventory=None,head_layers=None,tp=4):
 def match_answer(diagnostics,sample,action,attention,inventory=None,tp=4):
     inventory=action_inventory(inventory)
     if action not in inventory or action=='nocache':raise ValueError('Unknown sparse action')
-    from run import verify_diagnostics
+    from runner.generation import verify_diagnostics
     verify_diagnostics(diagnostics,sample,'prophetkv',inventory[action]['ratio'],tp,range(64))
     for worker in diagnostics:
         event=next(e for e in worker['diagnostics'] if e['kind']=='prophetkv_selection')

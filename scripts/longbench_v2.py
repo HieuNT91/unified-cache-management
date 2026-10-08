@@ -86,7 +86,7 @@ def prepare_prompt(tokenizer, row, template, limit=INPUT):
 def prepare(args):
     if os.environ.get('CUDA_VISIBLE_DEVICES') != '':
         raise ValueError("CPU preparation requires CUDA_VISIBLE_DEVICES=''")
-    from run import check_model
+    from runner.preparation import check_model
     from transformers import AutoTokenizer
     check_model(args.model)
     rows = json.loads(args.data.read_text())

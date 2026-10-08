@@ -71,6 +71,23 @@ def receipts(state, root, controller):
             if members(dict(pid=pid, identity=None), process_table()):
                 raise RuntimeError(f'Missing process identity: {path}')
             continue
+        if ident.get('cmd') == '':
+            # A launch-time /proc read can capture start time before argv is
+            # available. Recover only from that same live process executing the
+            # exact saved launch command. Never rewrite historical receipts.
+            table = process_table()
+            live = table.get(pid)
+            if live is None:
+                if any(row['group'] == pid for row in table.values()):
+                    raise RuntimeError(f'Empty identity with orphaned session: {path}')
+                continue
+            expected = receipt.get('command')
+            actual = os.fsdecode(bytes.fromhex(live['identity']['cmd'])).split('\0')[:-1]
+            if (not isinstance(expected, list) or not expected
+                    or not all(isinstance(arg, str) for arg in expected)
+                    or live['identity']['start'] != ident.get('start') or actual != expected):
+                raise RuntimeError(f'Cannot recover exact live process identity: {path}')
+            ident = live['identity']
         command = os.fsdecode(bytes.fromhex(ident['cmd'])).split('\0')[:-1]
         # Bind saved identity to the requested controller and experiment, without
         # loading a model, prepared data, policy or changed source hashes.
@@ -173,3 +190,13 @@ def stop(root, controller, state_dir=None):
         temporary.replace(state/'stop-receipt.json')
         print('Owned processes exited. Existing results and caches were preserved.', flush=True)
         return receipt
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--controller', required=True)
+    parser.add_argument('--state-dir', type=Path)
+    args = parser.parse_args()
+    stop(args.root, args.controller, args.state_dir)

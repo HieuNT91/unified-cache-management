@@ -246,7 +246,7 @@ class TP2Tests(unittest.TestCase):
                     stack.enter_context(patch('runner.corpus_runtime.'+name))
                 stack.enter_context(patch('runner.corpus_runtime.start_engine',return_value=llm))
                 stack.enter_context(patch('runner.reporting.OutputAnalyzer'))
-                stack.enter_context(patch('run.generate'))
+                stack.enter_context(patch('runner.generation.generate'))
                 stack.enter_context(patch('ucm.sparse.prophetkv.lifecycle.delete_retired_files'))
                 ready=stack.enter_context(patch('runner.cache.wait_for_cache',return_value=dict(verified_shards=4)))
                 retire=stack.enter_context(patch('runner.corpus_runtime.retirement'))

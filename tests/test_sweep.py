@@ -297,7 +297,7 @@ class SweepTests(unittest.TestCase):
             return NS(outputs=[NS(token_ids=[97,10],text='B',finish_reason='stop')],num_cached_tokens=0),.2,.4
         with patch.dict('sys.modules',{'runner.worker':worker}), \
                 patch.object(sweep,'start_engine',side_effect=start), \
-                patch('run.generate',side_effect=generate),patch('run.verify_diagnostics') as verify:
+                patch('runner.generation.generate',side_effect=generate),patch('runner.generation.verify_diagnostics') as verify:
             sweep.execute_phase(self.args,selected,configs[:1],reporters,group,self.cache,['GPU-a','GPU-b'])
             self.assertFalse(list(self.cache.iterdir()))  # baseline made no cache lookup/population
             sweep.execute_phase(self.args,selected,configs[1:],reporters,group,self.cache,['GPU-a','GPU-b'])

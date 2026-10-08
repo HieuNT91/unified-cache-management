@@ -84,7 +84,7 @@ def compatible_identity(spec, original, diagnostic_path=None):
 def validate_record(path, config, entry, sample, model, tp, devices, validation='full'):
     if validation not in ('full', 'fast'):
         raise ValueError('Resume validation must be full or fast')
-    from run import verify_diagnostics
+    from runner.generation import verify_diagnostics
     from ucm.sparse.prophetkv.layers import resolve_layers
     record = json.loads(path.read_text())
     layers = list(resolve_layers(config['method'], config['layers'])) if config['method'] != 'baseline' else []

@@ -132,7 +132,7 @@ class PromptCache:
 
 
 def load_inputs(args):
-    from run import check_model
+    from runner.preparation import check_model
     check_model(args.model)
     rows = manifest_entries(args.manifest)
     expected, selected, hashes = [], [], []
@@ -172,7 +172,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
         for config in configs:
             reporters[config['name']].finish()
         return
-    from run import generate, verify_diagnostics
+    from runner.generation import generate, verify_diagnostics
     from runner.worker import setup, arm, drain, configure
     from ucm.sparse.prophetkv.layers import resolve_layers
     cached = configs[0]['method'] != 'baseline'

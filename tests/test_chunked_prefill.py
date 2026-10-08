@@ -458,7 +458,7 @@ class AllocationCompatibilityTests(unittest.TestCase):
 
 class DiagnosticTests(unittest.TestCase):
     def test_multistep_coverage_rank_agreement_and_empty_layers(self):
-        from run import verify_diagnostics
+        from runner.generation import verify_diagnostics
         prefix,end,length=64,33088,40000
         event=dict(kind='prophetkv_selection',scores=[1.]*(end-prefix),selected_positions=[],
                    scoring_layers=[63],fusion='mean_layers_fp32',alignment_count=64)
@@ -484,7 +484,7 @@ class DiagnosticTests(unittest.TestCase):
                 verify_diagnostics(broken,sample,'selective_prophetkv',0.,2,[63])
 
     def test_baseline_reports_dense_16k_steps(self):
-        from run import verify_diagnostics
+        from runner.generation import verify_diagnostics
         steps=[dict(kind='prefill_step',start=a,end=min(a+16384,32769),
                scheduled_tokens=min(16384,32769-a),recomputed_tokens=min(16384,32769-a),
                no_forward=False,prefill_complete=a==32768) for a in (0,16384,32768)]

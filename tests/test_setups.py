@@ -59,7 +59,7 @@ class SetupTests(unittest.TestCase):
 
     def build(self):
         with patch.object(setups, 'construct_missing', side_effect=self.fake_build), \
-                patch('run.tokenize_sample', side_effect=AssertionError('Imported tokens must not be tokenized')), \
+                patch('runner.preparation.tokenize_sample', side_effect=AssertionError('Imported tokens must not be tokenized')), \
                 patch('sys.stdout', new=io.StringIO()):
             setups.build_setup(self.args)
         descriptor = setups.read_descriptor(self.args.output)
@@ -233,7 +233,7 @@ class SetupTests(unittest.TestCase):
                 ('selective_prophetkv',.2,None,5), ('baseline',.2,None,None)]:
             args = self.run_args(method=method, ratio=ratio, layers=layers, num_layers=count,
                 prompt_ids=['b'], max_output_tokens=256, dry_run=True)
-            with patch('run.tokenize_sample', side_effect=AssertionError('retokenized')), \
+            with patch('runner.preparation.tokenize_sample', side_effect=AssertionError('retokenized')), \
                     patch.object(setups, 'construct_missing', side_effect=AssertionError('reconstructed')), \
                     patch('sys.stdout', new=io.StringIO()) as stdout:
                 setups.run_collection(args)
@@ -409,7 +409,7 @@ class SetupTests(unittest.TestCase):
             return result,.1,.2
         with patch.object(setups,'start_engine',return_value=llm) as start, \
                 patch.object(setups,'check_environment',return_value=['GPU-a','GPU-b']), \
-                patch('run.generate',side_effect=generate), patch('run.verify_diagnostics') as verify, \
+                patch('runner.generation.generate',side_effect=generate), patch('runner.generation.verify_diagnostics') as verify, \
                 patch.object(setups,'construct_missing',side_effect=AssertionError('population')), \
                 patch('sys.stdout',new=io.StringIO()):
             setups.run_collection(self.run_args())
@@ -458,7 +458,7 @@ class SetupTests(unittest.TestCase):
             return None,0.,0.
         progress=dict(attempts=[])
         with patch.object(setups,'check_environment'), patch.object(setups,'start_engine',return_value=llm) as start, \
-                patch('run.generate',side_effect=generate) as gen:
+                patch('runner.generation.generate',side_effect=generate) as gen:
             setups.construct_missing(self.args.output,descriptor,samples,missing,self.args,progress)
         self.assertEqual(gen.call_count,1)
         start.assert_called_once()

@@ -1,7 +1,7 @@
 # Export 100 attention feature thành NPZ
 
 Script độc lập: [`scripts/export_features.py`](../../scripts/export_features.py).
-Định nghĩa: [`features_list.md`](../../features_list.md), 100 scalar / 18 nhóm.
+Định nghĩa: [`features_list.md`](../studies/features_list.md), 100 scalar / 18 nhóm.
 
 ## Chạy trên A800, L20 hoặc máy CPU khác
 

@@ -82,7 +82,7 @@ def environment_check(protocol):
     from importlib.metadata import version
     from runner.config import VERSIONS
     from scripts.corpus_inputs import spec
-    from run import check_model
+    from runner.preparation import check_model
     model = Path(protocol['model'])
     check_model(model)
     for package, wanted in VERSIONS.items():
@@ -128,7 +128,7 @@ def prepare(root):
     from scripts.corpus_inputs import TASKS
     from scripts.corpus_control import groups
     from scripts.router_control import code_hashes
-    from run import verify_diagnostics
+    from runner.generation import verify_diagnostics
     state = root/STATE
     if (state/'protocol.json').exists():
         corpus = Extension(root)

@@ -122,7 +122,7 @@ class ThinkingTests(unittest.TestCase):
         self.assertEqual(stop(probe,WINDOW),'legacy');original.assert_called_once()
 
     def test_generate_wire_serialization_latency_and_probe_exclusion(self):
-        import run
+        from runner import generation
         from vllm import SamplingParams
         from vllm.v1.serial_utils import MsgpackDecoder,MsgpackEncoder
         s=sample();p=s[KEY]
@@ -137,7 +137,7 @@ class ThinkingTests(unittest.TestCase):
                     self.active=self.tokens[-1]!=3
                     return [NS(request_id=self.rid,outputs=[NS(token_ids=list(self.tokens))],finished=not self.active)]
             engine=Engine()
-            out,ttft,_=run.generate(engine,s['token_ids'],s['max_output_tokens'],'read',True,sample=s)
+            out,ttft,_=generation.generate(engine,s['token_ids'],s['max_output_tokens'],'read',True,sample=s)
             wire=MsgpackDecoder(SamplingParams).decode(MsgpackEncoder().encode(engine.params))
             self.assertEqual(wire.extra_args[KEY],p)
             self.assertEqual(wire.temperature,.6);self.assertEqual(wire.top_k,20);self.assertTrue(wire.ignore_eos)
@@ -149,7 +149,7 @@ class ThinkingTests(unittest.TestCase):
             engine.active=False
             return [NS(request_id='probe',outputs=[NS(token_ids=[65])],finished=True)]
         engine.step=step
-        run.generate(engine,s['token_ids'],1,'probe',False,sample=s)
+        generation.generate(engine,s['token_ids'],1,'probe',False,sample=s)
         self.assertNotIn(KEY,engine.params.extra_args);self.assertEqual(engine.params.max_tokens,1)
 
     def test_native_preparation_preserves_source_question_and_defers_prefix(self):
@@ -368,7 +368,7 @@ class ThinkingTests(unittest.TestCase):
         exported=example(row,probe,{a['id']:record for a in ACTIONS},{'r':'0'*64},'ruler')
         self.assertEqual(exported[KEY],p)
         self.assertIsNone(exported['outcomes']['nocache']['first_answer_content_seconds'])
-        settings=dict(dataset='ruler',execution_profile=PROFILE)
+        settings=dict(dataset='ruler',execution_profile=PROFILE,tp=2)
         plan=dict(answers=4680,probes=390)
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp)

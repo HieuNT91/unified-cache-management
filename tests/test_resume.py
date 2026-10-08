@@ -327,7 +327,7 @@ class ResumeTests(unittest.TestCase):
                 raise AssertionError('Fast mode hashed a diagnostic payload')
             return file_hash(path)
         with patch.object(Path,'read_text',read),patch.object(resume,'file_hash',side_effect=digest), \
-                patch('run.verify_diagnostics',side_effect=AssertionError('Unexpected saved replay')):
+                patch('runner.generation.verify_diagnostics',side_effect=AssertionError('Unexpected saved replay')):
             scope=resume.prepare(self.args)
         self.assertEqual(scope['validation']['mode'],'fast')
         self.assertFalse(scope['validation']['diagnostic_replay'])

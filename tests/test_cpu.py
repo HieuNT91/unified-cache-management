@@ -10,6 +10,24 @@ from ucm.sparse.prophetkv.layers import resolve_layers
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_shared_runtime_and_cli_help_without_gpu_imports(self):
+        import os
+        import subprocess
+        script = '''
+import sys
+sys.modules.update({name: None for name in ('run', 'torch', 'vllm', 'transformers')})
+from runner import generation, preparation, single
+from runner import corpus_runtime, router_measure, setups, sweep
+import runpy
+sys.argv = ['run.py', '--help']
+runpy.run_path('run.py', run_name='__main__')
+'''
+        result = subprocess.run([sys.executable, '-c', script],
+            env=dict(os.environ, CUDA_VISIBLE_DEVICES=''),
+            capture_output=True, text=True, check=True)
+        self.assertIn('prepare', result.stdout)
+        self.assertIn('setup', result.stdout)
+
     def test_shared_model_settings_and_baseline_isolation(self):
         for method in ('baseline', 'prophetkv', 'selective_prophetkv'):
             cfg = engine_config('/model', method, count=5 if method.startswith('selective') else None,
@@ -88,7 +106,7 @@ class ConfigurationTests(unittest.TestCase):
 
 class AlgorithmTests(unittest.TestCase):
     def test_saved_score_replay_rejects_wrong_masks_and_missing_layers(self):
-        from run import verify_diagnostics
+        from runner.generation import verify_diagnostics
         scores = [1.] * 64
         event = dict(kind='prophetkv_selection', scores=scores,
             selected_positions=list(range(64, 96)), scoring_layers=[63],
