@@ -54,6 +54,10 @@ def validate(data):
         count = ruler_samples(data['provenance'])
         if len(rows) != 13*count or Counter(r['subtask'] for r in rows) != Counter({t: count for t in TASKS}):
             raise ValueError(f'RULER data must contain all 13x{count} prompts')
+        if 'extension' in provenance or provenance.get('collection') == 'verified-30-plus-170':
+            start = 30 if 'extension' in provenance else 0
+            if {r['id'] for r in rows} != {f'{t}-{i:03d}' for t in TASKS for i in range(start, start+count)}:
+                raise ValueError('Extension/combined dataset source ordinals differ')
     if data['dataset'] == 'longbench-v2' and len({r.get('source_id') for r in rows}) != 503:
         raise ValueError('LongBench source identities must be unique')
     for row in rows:
@@ -185,13 +189,17 @@ def export_collection(base, output):
                 if case != 'probe':
                     outcomes[case] = accepted(base/role, case, row, protocols[role])
         values.append(example(row, probe, outcomes, pins, settings['dataset']))
-    return save(output, settings['dataset'], ACTIONS, values, dict(plan_sha256=file_hash(base/'plan.json'), tp=settings['tp'],
+    result = save(output, settings['dataset'], ACTIONS, values, dict(plan_sha256=file_hash(base/'plan.json'), tp=settings['tp'],
                 **({'hardware_profile': settings['hardware_profile'], 'hardware_preflight': settings['hardware_preflight']}
                    if settings.get('hardware_profile') in ('l40-tp2', 'l40-tp4') else {}),
-                **{k:settings[k] for k in ('execution_profile','evaluation_protocol') if k in settings},
+                **{k:settings[k] for k in ('execution_profile','evaluation_protocol','extension') if k in settings},
                 seed=42, samples_per_task=settings['samples_per_task'] if settings['dataset'] == 'ruler' else None,
                 validation='committed-results-and-record-pins; per-request runtime validation, no offline attention replay',
                 timing=f'TP{settings["tp"]} controls; independent feature probes collected after all control engines exited'))
+    if 'extension' in settings:
+        from scripts.ruler_extension import combine_exports
+        combine_exports(base, result, output)
+    return result
 
 
 def export_longbench(base, output):

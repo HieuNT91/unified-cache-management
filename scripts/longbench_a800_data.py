@@ -85,17 +85,23 @@ def prepare(base):
     else:
         from scripts.ruler import prepare as prepare_inputs
         prepare_inputs(SimpleNamespace(model=Path(settings['model']), ruler=Path(settings['data']), output=prepared,
-                                       samples=settings['samples_per_task'], seed=settings['seed'],
+                                       samples=settings.get('extension', {}).get('target_samples_per_task', settings['samples_per_task']), seed=settings['seed'],
                                        thinking=settings.get('execution_profile') == 'ruler-thinking'))
     receipt = read(prepared/'preparation.json')
     if file_hash(prepared/'manifest.jsonl') != receipt['files']['manifest.jsonl']:
         raise ValueError('Prepared manifest changed')
     manifest = [json.loads(line) for line in (prepared/'manifest.jsonl').read_text().splitlines() if line.strip()]
-    rows = []; counts = {}
+    if 'extension' in settings:
+        from scripts.ruler_extension import verify_prepared_extension
+        freeze(base/'extension.json', verify_prepared_extension(settings, receipt, manifest))
+    rows = []; counts = {}; start = ruler_start(settings)
     for index, row in enumerate(manifest):
-        sample = read(prepared/row['prepared']); task = row['subtask']
+        task = row['subtask']
         ordinal = index if dataset == 'longbench-v2' else counts.get(task, 0)
         counts[task] = counts.get(task, 0)+1
+        if ordinal < start:
+            continue
+        sample = read(prepared/row['prepared'])
         value = dict(row, ordinal=ordinal, sha256=receipt['files'][row['prepared']], dataset=dataset,
                      input_tokens=len(sample['token_ids']), evaluation_protocol=sample.get('evaluation_protocol'))
         if dataset == 'longbench-v2':
@@ -116,6 +122,8 @@ def prepare(base):
                 schedule={role: scheduled(settings, role) for role in roles(settings)},
                 feature_profile=DEFINITIONS, evaluation='training', training_overlap=True,
                 train_ids=[r['id'] for r in rows], heldout_ids=[], folds=assign_folds(rows), seed=42)
+    if 'extension' in settings:
+        plan['extension_sha256'] = file_hash(base/'extension.json')
     freeze(base/'plan.json', plan)
     publish_protocols(base)
     return plan
@@ -123,10 +131,21 @@ def prepare(base):
 
 def ruler_samples(settings):
     count = settings.get('samples_per_task', 100)
-    allowed = (30,) if settings.get('execution_profile') == 'ruler-thinking' else (100, 200)
+    allowed = (30, 200) if settings.get('execution_profile') == 'ruler-thinking' else (100, 200)
+    if 'extension' in settings:
+        ruler_start(settings)
+        allowed = (170,)
     if type(count) is not int or count not in allowed:
-        raise ValueError('RULER collection requires 30 thinking or 100 or 200 non-thinking samples/task')
+        raise ValueError('RULER collection requires 30/200 thinking, 170 with extension, or 100 or 200 non-thinking samples/task')
     return count
+
+
+def ruler_start(settings):
+    if 'extension' not in settings:
+        return 0
+    from scripts.ruler_extension import validate_extension
+    validate_extension(settings)
+    return 30
 
 
 def validate_rows(settings, rows):
@@ -139,6 +158,7 @@ def validate_rows(settings, rows):
             raise ValueError('Expected 503 unique source rows')
     else:
         from scripts.ruler import TASKS
+        start = ruler_start(settings)
         if settings.get('execution_profile') == 'ruler-thinking':
             from runner.thinking_budget import PROTOCOL, KEY, validate_policy
             if any(r.get('evaluation_protocol') != PROTOCOL for r in rows):
@@ -149,7 +169,7 @@ def validate_rows(settings, rows):
                 if policy['answer_cap'] != CAPS.get(row['subtask']) or row['input_tokens']+policy['output_reserve'] > 82304:
                     raise ValueError('Thinking row task cap or capacity mismatch')
         if (set(r['subtask'] for r in rows) != set(TASKS) or
-                any(sorted(r['ordinal'] for r in rows if r['subtask'] == t) != list(range(count)) for t in TASKS)):
+                any(sorted(r['ordinal'] for r in rows if r['subtask'] == t) != list(range(start, start+count)) for t in TASKS)):
             raise ValueError(f'Expected 13 tasks x{count} source ordinals')
 
 
@@ -159,6 +179,8 @@ def load(base, check_code=False):
             or file_hash(base/'rows.json') != plan['rows_sha256']):
         raise ValueError('Frozen experiment metadata changed')
     rows = read(base/'rows.json'); validate_rows(settings, rows)
+    if 'extension' in settings and plan.get('extension_sha256') != file_hash(base/'extension.json'):
+        raise ValueError('Extension preparation receipt changed')
     if (plan['actions'] != ACTIONS or plan['schedule'] != {r: scheduled(settings, r) for r in roles(settings)}
             or plan['feature_profile'] != DEFINITIONS):
         raise ValueError('Unexpected experiment scope')

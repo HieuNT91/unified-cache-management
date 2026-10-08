@@ -54,6 +54,9 @@ def configure(args):
         raise ValueError('L40 requires the thinking RULER profile')
     if thinking and args.role != 'ruler':
         raise ValueError('Thinking RULER requires the ruler role')
+    extend_from = getattr(args, 'extend_from', None)
+    if extend_from and (not l40 or not thinking or args.samples_per_task != 200):
+        raise ValueError('--extend-from requires L40 thinking and --samples-per-task 200')
     count = ruler_samples(dict(samples_per_task=args.samples_per_task, execution_profile='ruler-thinking' if thinking else 'ruler'))
     dataset = 'ruler' if args.role == 'ruler' else 'longbench-v2'
     selected = (resolve_groups(args.devices, 8, tp=required_tp, query_inventory=False) if l40
@@ -69,6 +72,10 @@ def configure(args):
         from scripts.ruler import CAPS
         settings.update(execution_profile='ruler-thinking', evaluation_protocol=PROTOCOL,
                         thinking_cap=THINKING_CAP, answer_caps=CAPS, engine_window=WINDOW, sampling=SAMPLING)
+    if extend_from:
+        from scripts.ruler_extension import configure_extension
+        settings['extension'] = configure_extension(args, settings)
+        settings['samples_per_task'] = 170
     args.root.mkdir(parents=True, exist_ok=True)
     with (args.root/'configure.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -367,7 +374,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('configure', 'prepare', 'detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'supervise', 'worker'))
     parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--thinking', action='store_true', help='Separate 30/task thinking RULER protocol')
+    parser.add_argument('--thinking', action='store_true', help='Separate thinking RULER protocol')
+    parser.add_argument('--extend-from', type=Path, help='Completed L40 thinking 30/task run; collect only rows 30..199')
     parser.add_argument('--hardware-profile', choices=('l40-tp2', 'l40-tp4'),
                         help='Eight explicit L40 UUIDs, thinking TP2/TP4; user checks GPU availability')
     parser.add_argument('--role', choices=('primary', 'extra', 'ruler'), required=True)

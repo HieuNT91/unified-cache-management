@@ -13,6 +13,15 @@ shift
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 TP="${TP:-2}"
+extension_args=()
+if [[ -n "${EXTEND_FROM:-}" ]]; then
+  extension_args=(--extend-from "$EXTEND_FROM")
+  SAMPLES_PER_TASK="${SAMPLES_PER_TASK:-200}"
+  # Old .env paths are never used implicitly for an extension.
+  for key in EXPERIMENT_DIR PREPARED_DIR CACHE_ROOT; do
+    [[ -n "${!key:-}" ]] || { echo "Set a fresh $key for EXTEND_FROM" >&2; exit 2; }
+  done
+fi
 exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/longbench_a800_control.py" "$command" \
   --role ruler --thinking --hardware-profile "l40-tp$TP" \
   --root "${EXPERIMENT_DIR:-$CODE_ROOT/outputs/ruler-l40-tp$TP-thinking-30-v1}" \
@@ -21,4 +30,4 @@ exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/lon
   --prepared "${PREPARED_DIR:-$CODE_ROOT/inputs/ruler-l40-tp$TP-thinking-30-v1}" \
   --cache-root "${CACHE_ROOT:-$CODE_ROOT/.cache/ruler-l40-tp$TP-thinking-30-v1}" \
   --tp "$TP" --devices "${GPU_DEVICES:?Set GPU_DEVICES in .env.l40.thinking to eight full UUIDs}" \
-  --samples-per-task "${SAMPLES_PER_TASK:-30}" --seed "${SEED:-42}" "$@"
+  --samples-per-task "${SAMPLES_PER_TASK:-30}" --seed "${SEED:-42}" "${extension_args[@]}" "$@"

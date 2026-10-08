@@ -80,3 +80,9 @@ the original source generation with30 rows/task and seed42, but renders the nati
 thinking prompt, defers the original prefix, and scores only new answer content
 after a separately budgeted thinking phase. Its distinct evaluation identity and
 82,304-token execution profile must not be applied to existing non-thinking runs.
+
+The [L40 extension](../deployment/L40_RULER_THINKING_DATA.md) supports a fresh
+200-row source batch at seed42, with a verified30-row prefix from a completed
+thinking run. Only source ordinals30..199 receive new inference. A separate
+extension receipt pins the parent and prefix comparison; the portable200-row
+union preserves both runs' measurement provenance and original sample hashes.

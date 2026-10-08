@@ -1,5 +1,20 @@
 # Testing and evidence limits
 
+## L40 thinking 30 + 170 extension (2026-10-08)
+
+49 focused CPU tests passed using the available local Python3.12/NumPy environment:
+`test_ruler_extension`, `test_tp2_collection`, `test_a800_longbench`,
+`test_export_features`, and the thinking preparation/launcher regression cases.
+Fixtures cover the full390-row parent plus2210-row delta, immutable parent files,
+prefix/token/policy/version mismatches, duplicate rejection, original ordinals,
+546/546/559/559 TP2 sharding, frozen resume metadata, compact delta membership,
+and portable2600-row union retaining original measurements and source provenance.
+Shell/Python syntax and diff checks passed. No real source generation, training,
+GPU inference, SSH, push or remote launch was performed. The deployment remains
+Python3.10; these checks do not establish GPU/runtime compatibility.
+
+## General requirements
+
 Follow [invariants](invariants.md) and [experiment protection](experiment-rules.md).
 Run commands from the worktree root. Use the compatible installed environment:
 Python 3.10, uc-manager 0.3.0, vLLM 0.9.2, PyTorch 2.7.0 and transformers 4.53.2
