@@ -82,7 +82,8 @@ after a separately budgeted thinking phase. Its distinct evaluation identity and
 82,304-token execution profile must not be applied to existing non-thinking runs.
 
 The [L40 extension](../deployment/L40_RULER_THINKING_DATA.md) supports a fresh
-200-row source batch at seed42, with a verified30-row prefix from a completed
-thinking run. Only source ordinals30..199 receive new inference. A separate
+200-row source batch at seed42, with a verified30-row prefix from a thinking run with completed controls.
+Parent probes may finish separately; a complete portable union requires both
+probe exports. Only source ordinals30..199 receive new inference. A separate
 extension receipt pins the parent and prefix comparison; the portable200-row
 union preserves both runs' measurement provenance and original sample hashes.

@@ -6,7 +6,7 @@ UCM_ENV_FILE="${UCM_ENV_FILE:-$CODE_ROOT/.env.l40.thinking}"
 ucm_load_server_env "$CODE_ROOT"
 command="${1:-}"
 if [[ -z "$command" ]]; then
-  echo 'Usage: l40_ruler_thinking_data.sh {configure|prepare|detach|resume|stop|status|status_same_count|report}' >&2
+  echo 'Usage: l40_ruler_thinking_data.sh {configure|prepare|detach|resume|stop|status|status_same_count|report|merge}' >&2
   exit 2
 fi
 shift

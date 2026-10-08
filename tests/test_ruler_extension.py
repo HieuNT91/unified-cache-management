@@ -61,7 +61,8 @@ def dataset_fixture(root):
     settings, _, rows = data.load(root); values = []
     for row in rows:
         policy = row[KEY]; forced = len(policy['transition_ids'])+len(policy['prefix_ids'])
-        outcome = dict(accuracy=1., ttft_seconds=1., gpu_uuids=GPUS[2*(row['ordinal'] % 4):2*(row['ordinal'] % 4)+2],
+        tp = settings['tp']; offset = tp*(row['ordinal'] % (8//tp))
+        outcome = dict(accuracy=1., ttft_seconds=1., gpu_uuids=GPUS[offset:offset+tp],
                        thinking_tokens=4, answer_tokens=forced+2, control_tokens=2, output_tokens=forced+8,
                        output_cap_reached=False, generated_answer_tokens=2, generated_thinking_open_tokens=0,
                        forced_tokens=forced, thinking_cap_reached=False, answer_cap_reached=False,
@@ -129,9 +130,9 @@ class ExtensionTests(unittest.TestCase):
             data.load(self.new)
 
     def test_reject_incomplete_parent_and_reused_paths(self):
-        marker = self.old/'ruler/complete.json'; saved = marker.read_bytes()
-        atomic_json(marker, dict(complete=False))
-        with self.assertRaisesRegex(ValueError, 'not complete'):
+        marker = self.old/'ruler/controls-complete.json'; saved = marker.read_bytes()
+        atomic_json(marker, dict(owned_engines_exited=False))
+        with self.assertRaisesRegex(ValueError, 'completion receipt is invalid'):
             self.configure()
         marker.write_bytes(saved)
         for key, bad in [('root', self.old), ('prepared', self.root/'old-inputs'),
@@ -189,12 +190,59 @@ class ExtensionTests(unittest.TestCase):
         config.write_text(f'PYTHON_BIN="{fake}"\nGPU_DEVICES=from-env\nSAMPLES_PER_TASK=30\n')
         env = dict(PATH=os.environ['PATH'], EXTEND_FROM=str(self.old), SAMPLES_PER_TASK='200',
                    EXPERIMENT_DIR=str(self.new), PREPARED_DIR=str(self.args.prepared), CACHE_ROOT=str(self.args.cache_root))
-        for cmd in ('configure', 'prepare', 'detach', 'resume', 'status'):
+        for cmd in ('configure', 'prepare', 'detach', 'resume', 'status', 'merge'):
             result = subprocess.run(['bash', str(launchers/'l40_ruler_thinking_data.sh'), cmd], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             args = json.loads(result.stdout)
             self.assertEqual(args[args.index('--extend-from')+1], str(self.old))
             self.assertEqual(args[args.index('--samples-per-task')+1], '200')
+
+    def test_tp4_parent_pending_probes_collects_delta_and_merges_later(self):
+        # Adapt only this synthetic fixture to the user's original TP4 profile.
+        old = data.read(self.old/'settings.json'); old.update(tp=4, hardware_profile='l40-tp4')
+        atomic_json(self.old/'settings.json', old)
+        plan = data.read(self.old/'plan.json'); plan['settings_sha256'] = file_hash(self.old/'settings.json')
+        atomic_json(self.old/'plan.json', plan)
+        groups = [GPUS[:4], GPUS[4:]]
+        atomic_json(self.old/'ruler/devices.json', dict(tp=4, groups=groups))
+        for role in ('ruler', 'features'):
+            atomic_json(self.old/role/'protocol.json', data.protocol_for(old, role, file_hash(self.old/'plan.json'), groups))
+        complete(self.old)
+        for name in ('ruler/complete.json', 'features/complete.json', 'ruler-data.json', 'ruler-data.json.sha256'):
+            (self.old/name).unlink()
+        partial = self.old/'features/partial-probe.json'
+        atomic_json(partial, dict(retained=True))
+        before = {p: (file_hash(p), p.stat().st_mtime_ns) for p in self.old.rglob('*') if p.is_file()}
+        self.args.tp = 4; self.args.hardware_profile = 'l40-tp4'
+        settings = self.configure()
+        self.assertEqual(settings['extension']['parent_scope'], 'controls-complete')
+        prepared_fixture(self.args.prepared, 200)
+        with patch('scripts.ruler.prepare'):
+            data.prepare(self.new)
+        _, _, rows = data.load(self.new)
+        self.assertEqual([sum(r['ordinal'] % 2 == g for r in rows) for g in range(2)], [1105,1105])
+        complete(self.new); delta = dataset_fixture(self.new)
+        self.assertIsNone(extension.combine_exports(self.new, delta, self.new/'ruler-data.json', allow_pending=True))
+        self.assertFalse((self.new/'ruler-data-200.json').exists())
+        with self.assertRaisesRegex(ValueError, 'Parent probes/final export pending'):
+            extension.merge_extension(self.new)
+        self.assertEqual(before, {p: (file_hash(p), p.stat().st_mtime_ns) for p in before})
+        # Later parent probe completion must not change the frozen delta settings.
+        complete(self.old); parent = dataset_fixture(self.old)
+        self.assertEqual(self.configure(), settings)
+        combined = extension.merge_extension(self.new)
+        self.assertEqual(len(combined['rows']), 2600)
+        self.assertEqual(combined['provenance']['tp'], 4)
+        combined_rows = {r['id']: r for r in combined['rows']}
+        for row in parent['rows']:
+            self.assertEqual(combined_rows[row['id']], row)
+        self.assertEqual(extension.merge_extension(self.new), combined)
+        # Previously configured complete-parent receipts remain readable.
+        legacy = copy.deepcopy(settings)
+        legacy['extension'].pop('parent_scope')
+        legacy['extension']['parent_files'] = {n: file_hash(self.old/n) for n in extension.PARENT_FILES}
+        extension.validate_extension(legacy)
+        extension.check_parent(legacy['extension'])
 
 
 if __name__ == '__main__':

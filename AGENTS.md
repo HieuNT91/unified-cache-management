@@ -35,13 +35,15 @@ These rules govern the primary workspace. Historical notes under
   Preserve worker identity, KV/result/lifecycle and owned-process checks.
   Portable export records actual TP/L40 provenance. Implementation only; user asked
   to perform checks themselves, so no tests or GPU run were performed here.
-- L40 thinking extension (2026-10-08): `EXTEND_FROM` names a completed30/task
-  run; `SAMPLES_PER_TASK=200` plus fresh result/prepared/cache paths schedules
+- L40 thinking extension (2026-10-08): `EXTEND_FROM` names a30/task
+  run with completed controls (parent probes may be pending); `SAMPLES_PER_TASK=200` plus fresh result/prepared/cache paths schedules
   only ordinal30..199 (170/task). CPU preparation regenerates200/task and requires
   an exact raw/token/layout/policy prefix match with the original30, with identical
   generator assets/versions and no duplicate prompts. Parent data/results are
   read-only; same TP/profile required. Export retains the170-row delta and a
-  portable200-row union with both source provenances. No real-data/GPU launch.
+  portable200-row union with both source provenances once parent probes/export
+  finish; `merge` performs the deferred CPU union. Actual noah parent isTP4 at
+  outputs/ruler-l40-tp4-thinking-30-v1; extension retainsTP4. No real-data/GPU launch.
 - TP2 A800/L20 collection and portable training live on
   `prophetkv/tp2-router-data`, based on `d0483b1`. Guide:
   `docs/deployment/A800_LONGBENCH_DATA.md`. This scope authorizes source edits,

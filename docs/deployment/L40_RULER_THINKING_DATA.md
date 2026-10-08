@@ -121,31 +121,36 @@ Portable export giữ TP2/L40 và hai UUID/action; importer vẫn hỗ trợ TP4
 
 Chưa chạy test hoặc GPU inference cho thay đổi này, theo yêu cầu người dùng.
 
-## Bổ sung 170 mẫu/task sau khi run 30 đã xong
+## Bổ sung 170 mẫu/task từ run TP4 đã xong answers
 
-`EXTEND_FROM` trỏ tới **thư mục outputs của run 30 đã hoàn tất**, có
-`ruler-data.json` và checksum. Giữ cùng TP/profile với run gốc. Seed42, thinking
-16K, token gốc và TP2 memory0.96 không đổi. Không sửa settings hoặc resume run30
-để đổi cohort.
+Run gốc trên `noah` là **TP4**. `EXTEND_FROM` chỉ cần đã hoàn tất controls
+(`ruler/controls-complete.json`:4.680 answers, engines đã exit); probes có thể
+đang thiếu hoặc đã lỗi. Không cần `ruler/complete.json`/`ruler-data.json` khi
+configure extension, không tự tạo các receipt này. Giữ cùng TP/profile với run
+cũ: `l40-tp4` dùng90% memory, fixed1.286 blocks/rank; không đổi thành profileTP2.
 
-Sau khi code mới đã có trên remote, tạo checkout riêng trên `noah` (đổi
-`OLD_PROJECT` nếu run30 nằm ở checkout khác):
+Sau khi code mới đã có trên remote, dùng checkout riêng để giữ code của run cũ:
 
 ```bash
-OLD_PROJECT=/home/zhufangzhou/jh/projects/ruler-l40-tp2
-cd "$OLD_PROJECT"
+cd /home/zhufangzhou/jh/projects/unified-cache-management
 git fetch origin
 git worktree add --detach /home/zhufangzhou/jh/projects/ruler-l40-extend170 \
   origin/prophetkv/tp2-router-data
 cd /home/zhufangzhou/jh/projects/ruler-l40-extend170
+```
 
-# Dùng Python/model/source và tám UUID của env cũ; ghi kết quả vào paths mới.
-export UCM_ENV_FILE="$OLD_PROJECT/.env.l40.thinking"
-export EXTEND_FROM="$OLD_PROJECT/outputs/ruler-l40-tp2-thinking-30-v1"
-export SAMPLES_PER_TASK=200 TP=2 SEED=42
-export EXPERIMENT_DIR="$PWD/outputs/ruler-l40-tp2-thinking-extra170-v1"
+Nếu checkout extension đã tồn tại và configure trước đó lỗi thiếu
+`ruler/complete.json`, cập nhật code trong checkout đó rồi chạy lại các bước dưới;
+không cần tạo lại worktree. Lỗi đó xảy ra trước khi ghi settings extension.
+Không cập nhật checkout đã configure/chạy thành công; giữ source pins của nó.
+
+```bash
+export UCM_ENV_FILE="/home/zhufangzhou/jh/projects/unified-cache-management/.env.l40.thinking"
+export EXTEND_FROM="/home/zhufangzhou/jh/projects/unified-cache-management/outputs/ruler-l40-tp4-thinking-30-v1"
+export SAMPLES_PER_TASK=200 TP=4 SEED=42
+export EXPERIMENT_DIR="$PWD/outputs/ruler-l40-tp4-thinking-extra170-v1"
 export PREPARED_DIR="$PWD/inputs/ruler-l40-thinking-200-v1"
-export CACHE_ROOT="$PWD/.cache/ruler-l40-tp2-thinking-extra170-v1"
+export CACHE_ROOT="$PWD/.cache/ruler-l40-tp4-thinking-extra170-v1"
 
 bash scripts/launcher/l40_ruler_thinking_data.sh configure
 bash scripts/launcher/l40_ruler_thinking_data.sh prepare
@@ -153,26 +158,35 @@ bash scripts/launcher/l40_ruler_thinking_data.sh detach
 bash scripts/launcher/l40_ruler_thinking_data.sh status
 ```
 
-`SAMPLES_PER_TASK=200` là tổng đích; settings của run bổ sung ghi170 và nguồn
-parent riêng. `prepare` sinh full200/task trên CPU tại path mới, đối chiếu toàn
-bộ30 mẫu đầu với raw/token/layout/policy cũ và từ chối prompt trùng. Nếu khác
-generator/assets/tokenizer/versions hoặc prefix, dừng trước khi có plan cho GPU;
-không tự đổi seed hay thay prompt. Chỉ hash batch-size được phép khác giữa hai
-prepared samples. Run cũ và các receipt cũ được đọc, không sửa hoặc copy sang
-protocol mới.
+`200` là tổng đích; settings extension ghi170 và nguồn parent riêng. `prepare`
+sinh full200/task trên CPU, đối chiếu30 mẫu đầu với raw/token/layout/policy cũ,
+giữ seed42/thinking16K và từ chối prompt trùng hoặc khác generator/assets/versions.
+Chỉ hash batch-size được phép khác giữa hai prepared samples. Run cũ và mọi
+probe/kết quả/receipt cũ chỉ được đọc.
 
 GPU chỉ chạy ordinal030–199: **2.210 prompts,26.520 answers,2.210 probes**;
-bốn cặp nhận546/546/559/559 prompts. `status`/`report` của run mới chỉ báo phần170.
-Khi xong, xuất tự động:
+hai nhómTP4 nhận1.105 prompts/nhóm. `status`/`report` chỉ báo phần170.
+Khi extension xong:
 
-- `$EXPERIMENT_DIR/ruler-data.json`: phần170 mới.
-- `$EXPERIMENT_DIR/ruler-data-200.json`: đủ2.600 prompts,31.200 answers và2.600
-  probes từ30+170; giữ nguyên row/hash/kết quả cũ, ghi provenance của cả hai run.
+- `ruler-data.json`: phần170 mới, luôn xuất khi extension hoàn tất.
+- `ruler-data-200.json`: tự xuất nếu run30 đã hoàn tất probes và export. Nếu
+  chưa, in thông báo chờ; extension170 vẫn hoàn tất, không xuất bộ200 thiếu probes.
 
-Trong terminal mới, export lại các biến trên trước `status`, `resume` hoặc
-`stop`; giữ nguyên checkout sau configure. `export_features.py` hỗ trợ riêng run
-170 với ordinal gốc; file NPZ không tự gộp hai run. File JSON tổng hợp dùng được
-cho portable trainer, không tự train. Không trộn TP2/TP4 trong một file tổng hợp.
+Sau khi run cũ đã xử lý xong lỗi probes và hoàn tất export, giữ env/path extension
+ở trên và chạy lệnh CPU này để gộp, không chạy lại answers/probes:
 
-Chế độ mở rộng đã kiểm tra bằng fixtures CPU; chưa sinh dữ liệu thật hoặc chạy
-GPU trên `noah`.
+```bash
+bash scripts/launcher/l40_ruler_thinking_data.sh merge
+```
+
+File tổng hợp giữ nguyên row/hash/kết quả cũ và provenance của hai run; đủ2.600
+prompts,31.200 answers và2.600 probes. Không tự resume/sửa lỗi/chạy probes của run
+cũ. Không chạy hai run dùng cùng GPU đồng thời; người dùng kiểm tra availability.
+Trong terminal mới, export lại các biến trước `status`, `resume`, `stop`, `merge`.
+
+TP2 vẫn được hỗ trợ khi parent làTP2 (bốn cặp nhận546/546/559/559 prompts,
+memory0.96); không trộn TP2/TP4 trong một file tổng hợp. Export NPZ hỗ trợ từng
+run, không tự gộp. JSON tổng hợp dùng được cho portable trainer, không tự train.
+
+Các thay đổi được kiểm tra bằng fixtures CPU; chưa chạy dữ liệu thật/GPU trên
+`noah`.

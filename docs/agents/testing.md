@@ -2,6 +2,14 @@
 
 ## L40 thinking 30 + 170 extension (2026-10-08)
 
+The follow-up for the actual TP4 parent with failed/incomplete probes passed all12
+extension/A800 CPU tests. A full synthetic TP4 controls-only parent configures
+without final/probe/export receipts, schedules1105 prompts per group, leaves
+partial probes unchanged, and completes the170-row delta while deferring the
+200-row union. After parent probes/export finish, the CPU `merge` command produces
+2600 rows and is idempotent; reconfiguring keeps the same source pins. Legacy
+complete-parent metadata and TP2 remain covered. No remote/GPU execution.
+
 49 focused CPU tests passed using the available local Python3.12/NumPy environment:
 `test_ruler_extension`, `test_tp2_collection`, `test_a800_longbench`,
 `test_export_features`, and the thinking preparation/launcher regression cases.

@@ -372,10 +372,10 @@ print(p.pid,flush=True)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('configure', 'prepare', 'detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'supervise', 'worker'))
+    parser.add_argument('command', choices=('configure', 'prepare', 'detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'merge', 'supervise', 'worker'))
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--thinking', action='store_true', help='Separate thinking RULER protocol')
-    parser.add_argument('--extend-from', type=Path, help='Completed L40 thinking 30/task run; collect only rows 30..199')
+    parser.add_argument('--extend-from', type=Path, help='L40 thinking 30/task run with completed controls; collect rows 30..199, parent probes may be pending')
     parser.add_argument('--hardware-profile', choices=('l40-tp2', 'l40-tp4'),
                         help='Eight explicit L40 UUIDs, thinking TP2/TP4; user checks GPU availability')
     parser.add_argument('--role', choices=('primary', 'extra', 'ruler'), required=True)
@@ -408,6 +408,9 @@ def main():
             prepare(args.root)
     elif args.command in ('detach', 'resume'):
         detach(args.root, args.role, args.command == 'resume')
+    elif args.command == 'merge':
+        from scripts.ruler_extension import merge_extension
+        merge_extension(args.root)
     elif args.command == 'stop':
         from scripts.launcher_stop import stop
         stop(args.root, Path(__file__).name, args.root/args.role)

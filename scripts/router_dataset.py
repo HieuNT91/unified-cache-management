@@ -198,7 +198,7 @@ def export_collection(base, output):
                 timing=f'TP{settings["tp"]} controls; independent feature probes collected after all control engines exited'))
     if 'extension' in settings:
         from scripts.ruler_extension import combine_exports
-        combine_exports(base, result, output)
+        combine_exports(base, result, output, allow_pending=True)
     return result
 
 

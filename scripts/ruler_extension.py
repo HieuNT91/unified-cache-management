@@ -10,6 +10,8 @@ SCHEMA = 'ruler-thinking-extension-30-to-200-v1'
 PARENT_FILES = ('settings.json', 'plan.json', 'rows.json', 'ruler-data.json',
                 'ruler-data.json.sha256', 'ruler/complete.json',
                 'ruler/controls-complete.json', 'features/complete.json')
+CONTROL_FILES = ('settings.json', 'plan.json', 'rows.json', 'ruler/controls-complete.json',
+                 'ruler/protocol.json', 'features/protocol.json', 'ruler/devices.json')
 
 
 def read(path):
@@ -18,6 +20,8 @@ def read(path):
 
 def validate_extension(settings):
     ext = settings.get('extension', {})
+    scope = ext.get('parent_scope', 'complete')
+    expected_files = CONTROL_FILES if scope == 'controls-complete' else PARENT_FILES
     if (settings.get('execution_profile') != 'ruler-thinking'
             or settings.get('hardware_profile') not in ('l40-tp2', 'l40-tp4')
             or settings.get('samples_per_task') != 170
@@ -25,7 +29,8 @@ def validate_extension(settings):
             or ext.get('target_samples_per_task') != 200
             or not Path(ext.get('parent_root', '')).is_absolute()
             or not Path(ext.get('parent_prepared', '')).is_absolute()
-            or set(ext.get('parent_files', {})) != set(PARENT_FILES)
+            or scope not in ('complete', 'controls-complete')
+            or set(ext.get('parent_files', {})) != set(expected_files)
             or not re.fullmatch('[0-9a-f]{64}', ext.get('parent_preparation_sha256', ''))
             or any(not re.fullmatch('[0-9a-f]{64}', v) for v in ext.get('parent_files', {}).values())):
         raise ValueError('Invalid L40 thinking 30-to-200 extension provenance')
@@ -42,13 +47,12 @@ def check_parent(ext):
 
 def configure_extension(args, settings):
     from scripts.longbench_a800_data import load, stage
-    from scripts.router_dataset import load as load_dataset
     root = Path(args.extend_from).resolve()
     old, plan, rows = load(root)
     if (old['dataset'] != 'ruler' or old.get('execution_profile') != 'ruler-thinking'
             or old.get('samples_per_task') != 30 or 'extension' in old
             or old.get('seed') != 42):
-        raise ValueError('Extension parent must be a completed 30/task thinking RULER run')
+        raise ValueError('Extension parent must be a 30/task thinking RULER run with completed controls')
     for key in ('tp', 'hardware_profile', 'evaluation_protocol', 'thinking_cap', 'answer_caps', 'engine_window', 'sampling'):
         if old.get(key) != settings.get(key):
             raise ValueError(f'Extension must preserve parent {key}')
@@ -62,13 +66,39 @@ def configure_extension(args, settings):
     for i, new in enumerate(new_paths):
         if any(new == other or new in other.parents or other in new.parents for other in new_paths[i+1:]):
             raise ValueError('Extension result/prepared/cache paths must be separate')
+    # Completed controls are sufficient to select new inputs. Probes and the
+    # parent's final export may still be pending; never invent their receipts.
+    for role in ('ruler', 'features'):
+        stage(root, role)
+    marker = root/'ruler/controls-complete.json'
+    if not marker.is_file():
+        raise ValueError('Parent controls are not complete: missing ruler/controls-complete.json')
+    done = read(marker)
+    if (done.get('owned_engines_exited') is not True or done.get('answers') != 390*12
+            or done.get('protocol_sha256') != file_hash(root/'ruler/protocol.json')):
+        raise ValueError('Parent controls completion receipt is invalid')
+    prepared = Path(old['prepared']).resolve()
+    if plan.get('preparation_sha256') != file_hash(prepared/'preparation.json'):
+        raise ValueError('Parent preparation changed since collection')
+    return dict(schema=SCHEMA, start=30, target_samples_per_task=200,
+                parent_root=str(root), parent_prepared=str(prepared),
+                parent_scope='controls-complete',
+                parent_files={n: file_hash(root/n) for n in CONTROL_FILES},
+                parent_preparation_sha256=file_hash(prepared/'preparation.json'))
+
+
+def completed_collection(root):
+    from scripts.longbench_a800_data import load, stage
+    from scripts.router_dataset import load as load_dataset
+    root = Path(root)
+    old, _, rows = load(root)
     completed = read(root/'ruler/complete.json')
     if (completed.get('complete') is not True or completed.get('owned_engines_exited') is not True
             or completed.get('plan_sha256') != file_hash(root/'plan.json')):
         raise ValueError('Parent experiment is not complete')
     for role, name, count_key, expected in (
-            ('ruler', 'controls-complete.json', 'answers', 390*12),
-            ('features', 'complete.json', 'probes', 390)):
+            ('ruler', 'controls-complete.json', 'answers', len(rows)*12),
+            ('features', 'complete.json', 'probes', len(rows))):
         stage(root, role)
         done = read(root/role/name)
         if (done.get('owned_engines_exited') is not True or done.get(count_key) != expected
@@ -80,13 +110,7 @@ def configure_extension(args, settings):
                    ('tp', 'seed', 'samples_per_task', 'hardware_profile', 'execution_profile', 'evaluation_protocol'))
             or {r['id']: r['input_sha256'] for r in dataset['rows']} != {r['id']: r['sha256'] for r in rows}):
         raise ValueError('Parent portable dataset does not match the completed plan')
-    prepared = Path(old['prepared']).resolve()
-    if plan.get('preparation_sha256') != file_hash(prepared/'preparation.json'):
-        raise ValueError('Parent preparation changed since collection')
-    return dict(schema=SCHEMA, start=30, target_samples_per_task=200,
-                parent_root=str(root), parent_prepared=str(prepared),
-                parent_files={n: file_hash(root/n) for n in PARENT_FILES},
-                parent_preparation_sha256=file_hash(prepared/'preparation.json'))
+    return dataset
 
 
 def checked_json(root, name, receipt):
@@ -158,14 +182,23 @@ def verify_prepared_extension(settings, receipt, manifest):
                 comparison='exact raw rows and prepared samples except generator batch-size hash')
 
 
-def combine_exports(base, delta, delta_path):
+def combine_exports(base, delta, delta_path, allow_pending=False):
     """Publish a portable union; each row keeps its original input/record hashes."""
-    from scripts.router_dataset import load, save
+    from scripts.router_dataset import save
     from scripts.longbench_a800_data import read as read_settings
     settings = read_settings(Path(base)/'settings.json'); ext = settings['extension']
     check_parent(ext)
     parent_path = Path(ext['parent_root'])/'ruler-data.json'
-    parent = load(parent_path)
+    required = ('ruler/complete.json', 'features/complete.json', 'ruler-data.json', 'ruler-data.json.sha256')
+    missing = [name for name in required if not (parent_path.parent/name).is_file()]
+    if missing:
+        message = ('Parent probes/final export pending; delta170 retained, no complete200 dataset yet. '
+                   'Finish the original run probes, then run launcher merge. Missing: '+', '.join(missing))
+        if allow_pending:
+            print(message, flush=True)
+            return None
+        raise ValueError(message)
+    parent = completed_collection(parent_path.parent)
     if set(r['id'] for r in parent['rows']) & set(r['id'] for r in delta['rows']):
         raise ValueError('Parent and extension exports overlap')
     provenance = {k: v for k, v in delta['provenance'].items() if k not in ('extension', 'plan_sha256')}
@@ -175,3 +208,16 @@ def combine_exports(base, delta, delta_path):
                     for path, value in ((parent_path, parent), (Path(delta_path), delta))])
     rows = sorted(parent['rows']+delta['rows'], key=lambda r: r['id'])
     return save(Path(base)/'ruler-data-200.json', 'ruler', delta['actions'], rows, provenance)
+
+
+def merge_extension(base):
+    """CPU-only union after both independent collections have finished."""
+    from scripts.longbench_a800_data import load
+    base = Path(base)
+    settings, _, _ = load(base)
+    if 'extension' not in settings:
+        raise ValueError('merge requires an extension run')
+    delta = completed_collection(base)
+    result = combine_exports(base, delta, base/'ruler-data.json')
+    print(f"Merged {len(result['rows'])} prompts: {base/'ruler-data-200.json'}", flush=True)
+    return result
