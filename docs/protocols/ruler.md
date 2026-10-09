@@ -73,6 +73,14 @@ arguments/seed/batch size, source commit/assets, tokenizer/model identity, YaRN,
 backend and hardware. Incompatible old cache/results/policies require a separate
 protocol and may not be silently accepted or refitted.
 
+## Non-thinking L20 extension
+
+The [L20 200+300 extension](../deployment/L20_RULER_EXTEND300.md) uses a new500-row
+seeded batch per task and verifies its first200 raw/prepared rows against the
+parent. Only ordinals200..499 receive new inference. Parent measurements/NPZ
+remain immutable; a portable500-row/task union retains both source provenances.
+The non-thinking evaluation identity, caps and five TP2 pairs are unchanged.
+
 ## Separate thinking TP2 protocol
 
 The [thinking RULER collection](../deployment/L20_RULER_THINKING_DATA.md) reuses

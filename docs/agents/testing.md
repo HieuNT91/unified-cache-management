@@ -176,3 +176,14 @@ execution metadata are allowed to differ. An actual worker checksum failure
 published no output and left no owned child processes. The1300-row RULER fixture,
 TP4 captures and prior integrity checks still passed. No real-data export, GPU
 job or64-worker performance benchmark was run for this update.
+
+## L20 non-thinking extension, 200 to 500 (2026-10-09)
+
+The two L20 extension tests and sixteen compact exporter tests passed, along
+with thirty-three existing L40 extension, TP2 collection and controller tests.
+CPU fixtures cover 3,900 new prompts (ordinal200–499), 46,800 answers,
+780 prompts per TP2 pair, the 6,500-row portable union, legacy adapter/export
+compatibility, exact prefix rejection and unchanged parent files/NPZ. A relocated
+launcher forwards the extension arguments without enabling thinking. Python
+syntax, shell syntax and diff checks passed. No real-data preparation, GPU job,
+remote deployment, commit or push was performed.

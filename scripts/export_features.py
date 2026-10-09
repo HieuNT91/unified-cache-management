@@ -669,20 +669,24 @@ class Collection:
                     'LongBench requires all 503 unique prompts and official length groups')
         else:
             count = settings.get('samples_per_task', 100)
-            allowed = (30, 200) if settings.get('execution_profile') == 'ruler-thinking' else (100, 200)
+            allowed = (30, 200) if settings.get('execution_profile') == 'ruler-thinking' else (100, 200, 500)
             start = 0
             if 'extension' in settings:
                 # Keep this exporter standalone: no imports from the source repo.
                 ext = settings['extension']
-                require(settings.get('execution_profile') == 'ruler-thinking'
+                thinking_extension = (settings.get('execution_profile') == 'ruler-thinking'
                         and settings.get('hardware_profile') in ('l40-tp2', 'l40-tp4')
                         and ext.get('schema') == 'ruler-thinking-extension-30-to-200-v1'
-                        and ext.get('start') == 30 and ext.get('target_samples_per_task') == 200,
-                        'Invalid RULER extension provenance')
+                        and ext.get('start') == 30 and ext.get('target_samples_per_task') == 200)
+                nonthinking_extension = (settings.get('execution_profile') in (None, 'ruler')
+                        and settings.get('hardware_profile') == 'l20-tp2' and self.tp == 2
+                        and ext.get('schema') == 'ruler-nonthinking-extension-200-to-500-v1'
+                        and ext.get('start') == 200 and ext.get('target_samples_per_task') == 500)
+                require(thinking_extension or nonthinking_extension, 'Invalid RULER extension provenance')
                 require(bool(plan.get('extension_sha256')), 'Missing extension receipt pin')
                 extension_receipt = self.read('extension.json', plan['extension_sha256'])
                 require(extension_receipt.get('extension') == ext, 'Extension receipt provenance differs')
-                start = 30; allowed = (170,)
+                start = ext['start']; allowed = (ext['target_samples_per_task']-start,)
             require(type(count) is int and count in allowed, 'Unsupported RULER samples_per_task')
             require(Counter(r['subtask'] for r in rows) == Counter({t: count for t in TASKS})
                     and all(sorted(r['ordinal'] for r in rows if r['subtask'] == t) == list(range(start, start+count)) for t in TASKS),

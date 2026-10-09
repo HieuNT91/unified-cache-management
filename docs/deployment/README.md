@@ -6,6 +6,10 @@ This documentation move does not authorize a launch, update, stop or resume.
 
 ## TP2 collection and portable training
 
+For a completed L20 non-thinking200/task run, use
+[the200+300 extension guide](L20_RULER_EXTEND300.md) to collect only the next300
+samples/task with the same five TP2 pairs and preserve the original results.
+
 For `noah` with eight L40 GPUs, use [thinking RULER on L40 TP2](L40_RULER_THINKING_DATA.md).
 It has a separate launcher/env and four TP2 groups at96% memory; GPU availability is user-managed.
 

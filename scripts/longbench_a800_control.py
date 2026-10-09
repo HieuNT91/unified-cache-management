@@ -55,8 +55,10 @@ def configure(args):
     if thinking and args.role != 'ruler':
         raise ValueError('Thinking RULER requires the ruler role')
     extend_from = getattr(args, 'extend_from', None)
-    if extend_from and (not l40 or not thinking or args.samples_per_task != 200):
-        raise ValueError('--extend-from requires L40 thinking and --samples-per-task 200')
+    if extend_from and not (args.role == 'ruler' and (
+            (l40 and thinking and args.samples_per_task == 200) or
+            (not l40 and not thinking and args.samples_per_task == 500))):
+        raise ValueError('--extend-from requires L40 thinking target200 or L20 non-thinking target500')
     count = ruler_samples(dict(samples_per_task=args.samples_per_task, execution_profile='ruler-thinking' if thinking else 'ruler'))
     dataset = 'ruler' if args.role == 'ruler' else 'longbench-v2'
     selected = (resolve_groups(args.devices, 8, tp=required_tp, query_inventory=False) if l40
@@ -74,8 +76,8 @@ def configure(args):
                         thinking_cap=THINKING_CAP, answer_caps=CAPS, engine_window=WINDOW, sampling=SAMPLING)
     if extend_from:
         from scripts.ruler_extension import configure_extension
-        settings['extension'] = configure_extension(args, settings)
-        settings['samples_per_task'] = 170
+        settings['extension'] = configure_extension(args, settings, selected)
+        settings['samples_per_task'] = settings['extension']['target_samples_per_task']-settings['extension']['start']
     args.root.mkdir(parents=True, exist_ok=True)
     with (args.root/'configure.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -375,7 +377,7 @@ def main():
     parser.add_argument('command', choices=('configure', 'prepare', 'detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'merge', 'supervise', 'worker'))
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--thinking', action='store_true', help='Separate thinking RULER protocol')
-    parser.add_argument('--extend-from', type=Path, help='L40 thinking 30/task run with completed controls; collect rows 30..199, parent probes may be pending')
+    parser.add_argument('--extend-from', type=Path, help='Parent RULER run: L40 thinking 30->200 or L20 non-thinking 200->500; collect only new ordinals')
     parser.add_argument('--hardware-profile', choices=('l40-tp2', 'l40-tp4'),
                         help='Eight explicit L40 UUIDs, thinking TP2/TP4; user checks GPU availability')
     parser.add_argument('--role', choices=('primary', 'extra', 'ruler'), required=True)

@@ -131,12 +131,13 @@ def prepare(base):
 
 def ruler_samples(settings):
     count = settings.get('samples_per_task', 100)
-    allowed = (30, 200) if settings.get('execution_profile') == 'ruler-thinking' else (100, 200)
+    allowed = (30, 200) if settings.get('execution_profile') == 'ruler-thinking' else (100, 200, 500)
     if 'extension' in settings:
         ruler_start(settings)
-        allowed = (170,)
+        ext = settings['extension']
+        allowed = (ext['target_samples_per_task']-ext['start'],)
     if type(count) is not int or count not in allowed:
-        raise ValueError('RULER collection requires 30/200 thinking, 170 with extension, or 100 or 200 non-thinking samples/task')
+        raise ValueError('RULER collection requires 30/200 thinking, 100 or 200 or 500 non-thinking, or an explicit extension delta')
     return count
 
 
@@ -145,7 +146,7 @@ def ruler_start(settings):
         return 0
     from scripts.ruler_extension import validate_extension
     validate_extension(settings)
-    return 30
+    return settings['extension']['start']
 
 
 def validate_rows(settings, rows):

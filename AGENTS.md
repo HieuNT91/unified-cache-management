@@ -53,6 +53,15 @@ These rules govern the primary workspace. Historical notes under
   keep all other spec and exact raw/token/layout/policy prefix checks. Unknown
   adapter changes remain rejected. Reuse the completed200 prepared directory
   with fresh code/result/cache paths; do not rewrite configured code pins/receipts.
+- L20 non-thinking extension (2026-10-09): parent
+  /data/jh/unified-cache-management/.results/ruler-l20-tp2-200-v2 is reported
+  complete (31200 answers,2600 probes, existing ruler-features.npz). Preserve it.
+  `EXTEND_FROM` plus target500 prepares a full500/task seeded batch, verifies
+  the200-row prefix, and runs only ordinal200..499:3900 prompts,46800 answers,
+  3900 probes,780 prompts per original TP2 pair. Keep BF16/non-thinking task caps,
+  seed42 and95% automatic KV. Delta300 and union500 portable exports are separate;
+  compact NPZ export supports the delta and leaves the parent NPZ unchanged.
+  No remote/GPU/training execution; provide commit/push and remote commands.
 - TP2 A800/L20 collection and portable training live on
   `prophetkv/tp2-router-data`, based on `d0483b1`. Guide:
   `docs/deployment/A800_LONGBENCH_DATA.md`. This scope authorizes source edits,

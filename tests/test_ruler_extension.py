@@ -16,16 +16,18 @@ from runner.longbench_features import FEATURES
 from runner.thinking_budget import KEY, PROFILE, PROTOCOL, make_policy
 from scripts import longbench_a800_data as data, longbench_a800_control as control
 from scripts import ruler_extension as extension, router_dataset as portable
-from scripts.ruler import TASKS, CAPS
+from scripts.ruler import TASKS, CAPS, EVALUATION_PROTOCOL
 from test_ruler_thinking import Tokenizer
 
 ROOT = Path(__file__).resolve().parents[1]
 GPUS = [f'GPU-00000000-0000-0000-0000-{i:012d}' for i in range(8)]
 
 
-def prepared_fixture(root, count):
-    spec = dict(samples=count, seed=42, execution_profile=PROFILE, protocol=PROTOCOL,
-                adapter=extension.ADAPTER_IMPORT_MOVE[0])
+def prepared_fixture(root, count, thinking=True, adapter=None):
+    spec = dict(samples=count, seed=42, protocol=PROTOCOL if thinking else EVALUATION_PROTOCOL,
+                adapter=adapter or extension.ADAPTER_IMPORT_MOVE[0])
+    if thinking:
+        spec['execution_profile'] = PROFILE
     files = {}; manifest = []
     for t, task in enumerate(TASKS):
         policy = make_policy(Tokenizer(), ' Answer:', CAPS[task])
@@ -36,6 +38,9 @@ def prepared_fixture(root, count):
                           evaluation_protocol=PROTOCOL, execution_profile=PROFILE,
                           max_output_tokens=policy['output_reserve'], **{KEY: policy},
                           generator_config_sha256=fingerprint(spec))
+            if not thinking:
+                sample.pop(KEY); sample.pop('execution_profile')
+                sample.update(thinking=False, evaluation_protocol=EVALUATION_PROTOCOL, max_output_tokens=CAPS[task])
             atomic_json(root/name, sample); files[name] = file_hash(root/name)
             manifest.append(dict(id=row_id, prepared=name, subtask=task, references=['A'], scoring='ruler_all'))
             raw.append(dict(input=f'{task} question {i}', outputs=['A']))
@@ -60,19 +65,23 @@ def complete(root):
 
 def dataset_fixture(root):
     settings, _, rows = data.load(root); values = []
+    groups = data.read(root/'ruler/devices.json')['groups']
     for row in rows:
-        policy = row[KEY]; forced = len(policy['transition_ids'])+len(policy['prefix_ids'])
-        tp = settings['tp']; offset = tp*(row['ordinal'] % (8//tp))
-        outcome = dict(accuracy=1., ttft_seconds=1., gpu_uuids=GPUS[offset:offset+tp],
+        policy = row.get(KEY)
+        forced = len(policy['transition_ids'])+len(policy['prefix_ids']) if policy else 0
+        outcome = dict(accuracy=1., ttft_seconds=1., gpu_uuids=groups[row['ordinal'] % len(groups)],
                        thinking_tokens=4, answer_tokens=forced+2, control_tokens=2, output_tokens=forced+8,
                        output_cap_reached=False, generated_answer_tokens=2, generated_thinking_open_tokens=0,
                        forced_tokens=forced, thinking_cap_reached=False, answer_cap_reached=False,
                        thinking_closure='natural', first_answer_content_seconds=2.)
         values.append(dict(id=row['id'], dataset='ruler', subtask=row['subtask'], input_sha256=row['sha256'],
                            source_pins={'record': fingerprint(row['id'])}, features=dict.fromkeys(FEATURES, .5),
-                           probe_overhead_seconds=.1, evaluation_protocol=PROTOCOL, **{KEY: policy},
+                           probe_overhead_seconds=.1, evaluation_protocol=row['evaluation_protocol'],
+                           **({KEY: policy} if policy else {}),
                            outcomes={a['id']: dict(outcome) for a in data.ACTIONS}))
-    provenance = {k: settings[k] for k in ('tp', 'seed', 'samples_per_task', 'execution_profile', 'evaluation_protocol', 'hardware_profile')}
+    provenance = {k: settings[k] for k in ('tp', 'seed', 'samples_per_task', 'execution_profile', 'evaluation_protocol', 'hardware_profile') if k in settings}
+    if settings['hardware_profile'] == 'l20-tp2' and 'extension' not in settings:
+        provenance.pop('hardware_profile')  # Original L20 export schema.
     provenance['plan_sha256'] = file_hash(root/'plan.json')
     if 'extension' in settings:
         provenance['extension'] = settings['extension']
