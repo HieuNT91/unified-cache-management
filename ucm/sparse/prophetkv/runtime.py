@@ -1,4 +1,5 @@
 """All-layer probing using the loaded Qwen3 model and once-aligned paged KV."""
+import os
 import time
 import torch
 from .selection import context_importance, select, select_units, LayerAlignment
@@ -73,13 +74,14 @@ def setup(worker):
     return {'installed':True,'layers':len(model.layers)}
 
 
-def set_request(worker,request_id,boundaries,question_positions,units=(),drafts=0):
+def set_request(worker,request_id,boundaries,question_positions,units=(),drafts=0,fix=False):
     from ucm.sparse.state import get_ucm_sparse
     from .selection import RequestMetadata
     sparse=get_ucm_sparse()
     if drafts and not hasattr(sparse,'lm'):
         sparse.lm=worker.model_runner.model   # Qwen3ForCausalLM: compute_logits for the greedy drafts
-    sparse.request_state.arm(RequestMetadata(request_id,tuple(boundaries),tuple(question_positions),tuple(units),int(drafts)))
+    sparse.request_state.arm(RequestMetadata(request_id,tuple(boundaries),tuple(question_positions),tuple(units),int(drafts),
+                                            fix=bool(fix)))
 
 
 @torch.inference_mode()
@@ -151,6 +153,9 @@ def probe(sparse,positions,embeddings,query_budget=16384):
         raise RuntimeError('Fresh suffix positions changed')
     hidden=embeddings[-suffix_tokens:].clone();residual=None
     scores=torch.zeros(b[-2],device=device,dtype=torch.float32)
+    # The drafts are decoded from the LAST prompt token, so that row -- not whichever tokens the probe reads -- is
+    # the one that stands one step before draft_1 in the trajectory. One extra query row per scoring layer.
+    last_scores=torch.zeros_like(scores) if (meta.fix and meta.drafts) else None
     blocks=sparse.attn_metadata.block_table[0].long()
     cp=torch.arange(b[-2],device=device)
     slots=blocks[cp//64]*64+cp%64
@@ -182,6 +187,8 @@ def probe(sparse,positions,embeddings,query_budget=16384):
                 indices = qp[a:a+query_budget]
                 layer_scores.add_(context_importance(q[indices],ck), alpha=len(indices)/len(qp))
             scores.add_(layer_scores)
+            if last_scores is not None:
+                last_scores.add_(context_importance(q[suffix_tokens-1:suffix_tokens],ck))
             if capture:
                 captured.append(layer_scores.detach().clone())
             del layer_scores
@@ -212,6 +219,8 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     # Each rank owns an equal number of Q heads. Average local head means
     # across the TP group before ranking, so every rank repairs the same tokens.
     scores.div_(len(scoring_layers))
+    if last_scores is not None:
+        last_scores.div_(len(scoring_layers))
     local_mean = scores.detach().clone() if capture else None
     extra = {}
     if drafts:
@@ -220,11 +229,21 @@ def probe(sparse,positions,embeddings,query_budget=16384):
         from vllm.distributed import tensor_model_parallel_all_reduce, get_tp_group
         rows = tensor_model_parallel_all_reduce(rows) / get_tp_group().world_size
         scores = tensor_model_parallel_all_reduce(scores) / get_tp_group().world_size
+        if last_scores is not None:
+            last_scores = tensor_model_parallel_all_reduce(last_scores) / get_tp_group().world_size
         from .trajectory import gated_selection
-        selected, z, copying = gated_selection(torch.cat((scores[None], rows)), b[1], sparse.ratio)
+        # fix: the true last-token row heads the trajectory and the probe ranks the non-copy branch; the null is
+        # length-unbiased and the chain price is relative to the unary mass (UCM_TRAJ_LAMREL, default 1.0).
+        head = scores if last_scores is None else last_scores
+        pr = None if last_scores is None else scores
+        lamrel = float(os.environ.get('UCM_TRAJ_LAMREL', '1.0')) if meta.fix else 0.0
+        selected, z, copying = gated_selection(torch.cat((head[None], rows)), b[1], sparse.ratio,
+                                               probe=pr, unbiased=bool(meta.fix), lam_rel=lamrel)
         eligible = scores[b[1]:]
         extra = dict(selection_method='copy_gated_trajectory', drafts=drafts, draft_tokens=tokens,
-                     copy_z=float(z), copying=bool(copying), trajectory_lambda=16384.0, copy_z_threshold=2.0)
+                     copy_z=float(z), copying=bool(copying), copy_z_threshold=2.0,
+                     trajectory_lambda=(16384.0 if not lamrel else None), trajectory_lam_rel=lamrel,
+                     traj_true_last=last_scores is not None, traj_unbiased=bool(meta.fix))
     else:
         eligible, selected = global_selection(scores, b[1], sparse.ratio, *((meta.units,) if meta.units else ()))
     sparse.selection_diagnostics.append(dict(kind='prophetkv_selection',request_id=meta.request_id,

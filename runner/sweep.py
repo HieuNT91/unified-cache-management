@@ -69,19 +69,22 @@ def sweep_configs(args):
             c['name'] = c['name'].replace('prophetkv-', f'prophetkv_{variant}-').replace('selective-', f'selective_{variant}-')
     if getattr(args, 'variants', None):
         # Several probe/selection variants share one baseline phase and one cached engine: 'question' (ProphetKV),
-        # 'last' (last-token probe, top-k), 'last:trajD' (copy-gated trajectory selection with D draft readers).
+        # 'last' (last-token probe, top-k), '<probe>:trajD' (copy-gated trajectory selection with D draft readers).
+        # A trailing 'f' (e.g. 'question:traj4f') selects the corrected trajectory selection: the true last-prompt-
+        # token row heads the trajectory, the null is length-unbiased, the chain price is relative to the unary mass
+        # (UCM_TRAJ_LAMREL), and the non-copy branch ranks the probe. See scripts/TRAJ4F.md.
         out = configs[:1]
         for spec in args.variants:
             probe, _, extra = spec.partition(':')
-            if probe not in ('question', 'last') or (extra and not (extra.startswith('traj') and extra[4:].isdigit())):
+            fix = extra.startswith('traj') and extra.endswith('f')
+            core = extra[:-1] if fix else extra
+            if probe not in ('question', 'last') or (core and not (core.startswith('traj') and core[4:].isdigit())):
                 raise ValueError(f'Unknown variant {spec}')
-            drafts = int(extra[4:]) if extra else 0
-            if drafts and probe != 'last':
-                raise ValueError('Draft readers need the last-token probe')
+            drafts = int(core[4:]) if core else 0
             tag = '_'.join(x for x in ('last' if probe == 'last' else '', extra) if x)
             for c in configs[1:]:
                 out.append(dict(c, name=c['name'].replace('prophetkv', 'prophetkv' + (f'_{tag}' if tag else ''), 1),
-                                probe=probe, drafts=drafts))
+                                probe=probe, drafts=drafts, fix=fix))
         configs = out
     return configs
 
@@ -286,7 +289,7 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                     if cached:
                         llm.collective_rpc(arm, kwargs=dict(request_id=rid, boundaries=bounds,
                                                           question_positions=probe_positions, units=units,
-                                                          drafts=drafts))
+                                                          drafts=drafts, fix=config.get('fix', False)))
                     return rid, generate(llm.llm_engine, ids, budget, rid, thinking)
 
                 timings = {}
@@ -458,7 +461,7 @@ def main():
     parser.add_argument('--drafts',type=int,default=0,
                         help='copy-gated trajectory selection with this many greedy draft readers (needs --probe-query last)')
     parser.add_argument('--variants',nargs='+',
-                        help="probe/selection variants sharing one baseline: question, last, last:trajD")
+                        help="probe/selection variants sharing one baseline: question, last, <probe>:trajD, <probe>:trajDf")
     parser.add_argument('--skip-baseline',action='store_true',
                         help='do not run the dense baseline phase (it was measured by an earlier run)')
     parser.add_argument('--no-selective',action='store_true',

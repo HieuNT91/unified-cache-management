@@ -25,18 +25,33 @@ def _h(p, q):
 
 
 @torch.inference_mode()
-def trajectory_stats(E):
+def trajectory_stats(E, unbiased=False):
+    """z of the offset +1 trajectory mass against the same mass at 31 other offsets, plus its per-token breakdown.
+
+    `unbiased` divides every mass by the number of terms it sums over. Offset k only has N - |k| overlapping
+    positions, so without it the null offsets are mechanically smaller than offset +1 and the null mean is pulled
+    down: measured on a context of 60736 with NO copying at all, z sat at exactly 1.70 against a threshold of 2.0,
+    leaving 0.30 of real margin and firing the gate on 142 of 145 prompts."""
     E = E.float()
     kap = (E ** 2).sum(1) / E.sum(1) ** 2
     w = torch.sqrt(kap[:-1] * kap[1:])[:, None]
     a, b = E[:-1], E[1:]
+    n = a.shape[1]
     def mass(k):
         if k > 0:
-            return float((w * _h(a[:, :-k], b[:, k:])).sum())
-        return float((w * _h(a[:, -k:], b[:, :k])).sum())
+            v = float((w * _h(a[:, :-k], b[:, k:])).sum())
+        else:
+            v = float((w * _h(a[:, -k:], b[:, :k])).sum())
+        return v / max(n - abs(k), 1) if unbiased else v
     edge = (w * _h(a[:, :-1], b[:, 1:])).sum(0)
+    m1 = float(edge.sum())
+    if unbiased:
+        m1 /= max(n - 1, 1)
     null = np.array([mass(k) for k in NULL_OFFSETS])
-    z = (float(edge.sum()) - null.mean()) / max(null.std(ddof=1), 1e-30)
+    # Once the mechanical k-dependence is divided out, a reader set with no structure at all makes every offset
+    # numerically identical and the sample sd collapses to float32 rounding noise, so z becomes 0/0 and reports
+    # whatever the last bit did. Floor the denominator relative to the mass scale: no spread means no evidence.
+    z = (m1 - null.mean()) / max(null.std(ddof=1), 1e-6 * abs(float(null.mean())), 1e-30)
     return z, edge
 
 
@@ -89,14 +104,32 @@ def chain_cut(u, c, budget, iters=40):
     return x
 
 
-def gated_selection(rows, prefix, ratio, lam=16384.0, z0=2.0):
-    """rows: [1 + D, context] reader attention. Returns (selected positions, z, copying)."""
+def gated_selection(rows, prefix, ratio, lam=16384.0, z0=2.0, probe=None, unbiased=False, lam_rel=0.0):
+    """rows: [1 + D, context] reader attention, in trajectory order. Returns (selected positions, z, copying).
+
+    `rows[0]` must be the LAST PROMPT TOKEN's row: the drafts are decoded from it, so that is the only row that
+    stands one step before draft_1. Splicing an arbitrary probe there (the question probe sits 48 tokens earlier,
+    behind the chat template) counts a pair that is not a trajectory step and puts a non-trajectory row into the
+    chain's unary. `probe` is the row the NON-copying branch ranks, which is where the probe belongs.
+    """
     from .selection import select
     E = rows[:, prefix:]
     budget = math.floor(E.shape[1] * ratio)
-    z, edge = trajectory_stats(E)
+    z, edge = trajectory_stats(E, unbiased=unbiased)
     if z < z0:
-        return select(E[0].float().contiguous(), prefix, ratio), z, False
-    x = chain_cut(E.sum(0).double().cpu().numpy(), (lam * edge).double().cpu().numpy(), budget)
+        p = E[0] if probe is None else probe[prefix:]
+        return select(p.float().contiguous(), prefix, ratio), z, False
+    u = E.sum(0).double().cpu().numpy()
+    c = edge.double().cpu().numpy()
+    if lam_rel > 0:
+        # lam=16384 is a bare constant with no relation to the scale of u, and at that price the DP essentially
+        # never pays for a cut: measured run lengths reach 1320 tokens at 10% and 3815 at 20%, against the ~20
+        # tokens a copied uuid actually spans. Scale the total cut capacity to the total unary mass instead, the
+        # same convention couple uses for its A-edges, so run length follows the copy evidence and not a constant.
+        ctot = float(c.sum())
+        c = c * (lam_rel * float(u.sum()) / ctot) if ctot > 0 else c * 0.0
+    else:
+        c = lam * c
+    x = chain_cut(u, c, budget)
     selected = torch.from_numpy(np.nonzero(x)[0]).to(rows.device) + prefix
     return selected.sort().values, z, True

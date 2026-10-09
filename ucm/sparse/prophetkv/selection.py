@@ -10,6 +10,9 @@ class RequestMetadata:
     question_positions: tuple
     units: tuple = ()
     drafts: int = 0
+    # traj<D>f: the true last-prompt-token row heads the draft trajectory, the trajectory null is length-unbiased,
+    # the chain price is relative to the unary mass (UCM_TRAJ_LAMREL), and the non-copy branch ranks the probe.
+    fix: bool = False
 
     def __post_init__(self):
         b=self.boundaries
@@ -23,8 +26,10 @@ class RequestMetadata:
         u=self.units
         if u and (u[0]!=b[1] or list(u)!=sorted(set(u)) or u[-1]>=b[-2]):
             raise ValueError('Units must be sorted starts partitioning the reusable context')
-        if self.drafts < 0 or (self.drafts and (self.units or list(q) != [b[-1] - 1])):
-            raise ValueError('Draft readers require the last-token probe and token-level selection')
+        # Draft readers decode from the end of the prompt regardless of which tokens the probe reads, so the probe
+        # may be the question as well as the last prompt token; only unit-level selection is incompatible.
+        if self.drafts < 0 or (self.drafts and self.units):
+            raise ValueError('Draft readers require token-level selection')
 
 
 def context_importance(q,k,key_tile=2048,query_tile=16):
