@@ -82,7 +82,8 @@ def accepted(root,case,row,protocol,prepared=None,full=False):
         from runner.corpus import load_attention,match_answer
         sample=json.loads(relative(prepared or protocol['prepared'],row['prepared']).read_text())
         ds=json.loads((folder/'diagnostics.json').read_text())
-        definition=dict(method='prophetkv',ratio=.01) if case=='probe' else actions(protocol['actions'])[case]
+        from runner.naive_reuse import inventory
+        definition=dict(method='prophetkv',ratio=.01) if case=='probe' else inventory(protocol)[case]
         verify_diagnostics(ds,sample,definition['method'],definition['ratio'],tp,range(64))
         if case=='probe':
             heads=protocol.get('feature_profile',{}).get('head_layers')

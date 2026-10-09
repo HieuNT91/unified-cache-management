@@ -1,5 +1,25 @@
 # Testing and evidence limits
 
+## L20/A800 naive reuse controls (2026-10-09)
+
+The subsequent A800 restriction to GPU0,1,2,3 passed all7 naive-reuse CPU
+tests. The full503 inputs shard252/251 across two TP2 pairs; the launcher
+does not append GPU_EXTRA from older environments. L20 retains five TP2 pairs.
+The env template and guide now use this four-GPU A800 scope. No GPU launch ran.
+
+48 focused CPU tests passed across the naive-reuse, TP2 collection, A800
+controller, L20/L40 extension and native-answer suites. Full synthetic6500-row
+RULER and503-row LongBench cohorts are adopted without calling preparation
+generators or modifying prepared files. Tests cover five/four TP2 shards,
+single-action/no-probe plans, no extra-stage wait, changed-input rejection,
+launcher arguments, zero-ratio RPC preservation, bypassing scoring/embeddings,
+all-layer alignment and suffix-only diagnostic validation/publication. Existing
+router inventories still reject the new control action. Runtime/worker tests
+use CPU mocks; one existing reporter test used a tokenizer import stub because
+transformers is absent locally, and asserts tokenization is never invoked.
+No actual GPU runtime, model inference, remote launch or real-data regeneration
+was run. Shell/Python syntax and diff checks also passed.
+
 ## L40 thinking 30 + 170 extension (2026-10-08)
 
 The 2026-10-09 adapter import compatibility fix passed all6 extension CPU tests

@@ -8,12 +8,12 @@ from runner.corpus_records import protocol_identity
 from runner.matched_status import committed_records, match_records
 from runner.reporting import aggregate, metrics
 from runner.router_process import alive
-from scripts.longbench_a800_data import ACTIONS, SCHEDULE, LENGTHS, load, stage, read, roles, scheduled
+from scripts.longbench_a800_data import ACTIONS, SCHEDULE, LENGTHS, load, stage, read, roles, scheduled, actions_for
 
 
 def records(base):
     settings, _, rows = load(base)
-    result = {a['id']: [] for a in ACTIONS}
+    result = {a['id']: [] for a in actions_for(settings)}
     for role in roles(settings):
         if role == 'features' or not (Path(base)/role/'protocol.json').exists():
             continue
@@ -44,7 +44,7 @@ def summarize(by_action, rows, same_count=False):
         report = aggregate(values, expected, {}, 'running')
         report['lengths'] = {label: metrics([r for r in values if categories[r['prompt_id']] == label],
                                           sum(r.get('length') == label for r in rows)) for label in LENGTHS}
-        baseline = {r['prompt_id']: r for r in by_action['nocache']}
+        baseline = {r['prompt_id']: r for r in by_action.get('nocache', [])}
         for label, value in [('overall', report['overall']), *report['lengths'].items(), *report['subtasks'].items()]:
             paired = [r for r in values if r['prompt_id'] in baseline
                       and (label == 'overall' or categories[r['prompt_id']] == label or r['subtask'] == label)]
@@ -65,7 +65,7 @@ def report(base, same_count=False, final=False, emit=True):
         raise ValueError('Cannot finalize incomplete controls')
     result = summarize(data, rows, same_count)
     result['all_methods_matched'] = summarize(data, rows, True)
-    if settings['dataset'] == 'longbench-v2':
+    if settings['dataset'] == 'longbench-v2' and not settings.get('naive_reuse'):
         result['primary_matched'] = summarize({c: data[c] for c in SCHEDULE['primary']}, rows, True)
     result['waiting'] = {role: dict(configured=(base/role/'devices.json').exists(),
         missing_answers=len(rows)*len(scheduled(settings, role))-sum(len(data[c]) for c in scheduled(settings, role)))
@@ -89,7 +89,7 @@ def report(base, same_count=False, final=False, emit=True):
     lines = [f"{settings['dataset']}: {result['available_answers']}/{plan['answers']} accepted answers; feature probes {result['feature_probes']}/{plan['probes']}",
              result['timing'], result['length_definition']]
     if result['matching']:
-        lines.append(f"Same-count: {result['matching']['matched_samples']} exact shared prompt IDs across all 12 methods.")
+        lines.append(f"Same-count: {result['matching']['matched_samples']} exact shared prompt IDs across {len(data)} methods.")
     lines += [f'{role}: configured={item["configured"]}, waiting for {item["missing_answers"]} answers'
               for role, item in result['waiting'].items()]
     if thinking:
@@ -115,7 +115,7 @@ def report(base, same_count=False, final=False, emit=True):
             lines.append('| '+' | '.join([case,fmt(v['mean_generated_answer_tokens']),fmt(v['mean_forced_tokens']),
                 fmt(v['mean_first_answer_content_seconds']),str(v['thinking_cap_reached']),str(v['answer_cap_reached']),
                 f"{v['natural_thinking_closures']} / {v['forced_thinking_closures']}"] )+' |')
-    comparisons = [('ALL 12 METHODS MATCHED', result['all_methods_matched'])]
+    comparisons = [(f'ALL {len(data)} METHODS MATCHED', result['all_methods_matched'])]
     if 'primary_matched' in result:
         comparisons.insert(0, ('PRIMARY MATCHED (seven methods)', result['primary_matched']))
     for title, matched in comparisons:

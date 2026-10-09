@@ -44,6 +44,7 @@ def resolve_groups(devices, expected, tp=2, query_inventory=True):
 
 
 def configure(args):
+    naive = getattr(args, 'naive_reuse', False)
     thinking = getattr(args,'thinking',False)
     requested_hardware = getattr(args, 'hardware_profile', None)
     l40 = requested_hardware in ('l40-tp2', 'l40-tp4')
@@ -55,6 +56,11 @@ def configure(args):
     if thinking and args.role != 'ruler':
         raise ValueError('Thinking RULER requires the ruler role')
     extend_from = getattr(args, 'extend_from', None)
+    if naive:
+        if thinking or l40 or extend_from or args.role not in ('ruler', 'primary'):
+            raise ValueError('Naive reuse supports full L20 non-thinking or A800 LongBench only')
+        from scripts.naive_reuse_inputs import protect_paths
+        protect_paths(args.root, args.prepared, args.cache_root, args.model)
     if extend_from and not (args.role == 'ruler' and (
             (l40 and thinking and args.samples_per_task == 200) or
             (not l40 and not thinking and args.samples_per_task == 500))):
@@ -69,6 +75,8 @@ def configure(args):
                     samples_per_task=count if dataset == 'ruler' else 100, seed=42, hardware_profile=hardware_profile, code=code_hashes(), watchdog_seconds=7200, automatic_training=False)
     if l40:
         settings['hardware_preflight'] = 'user-managed'
+    if naive:
+        settings['naive_reuse'] = True
     if thinking:
         from runner.thinking_budget import PROTOCOL, THINKING_CAP, WINDOW, SAMPLING
         from scripts.ruler import CAPS
@@ -109,6 +117,8 @@ def worker(base, role, phase, attempt, group=0):
     from runner.setups import check_environment
     target = 'features' if phase == 'features' else role
     protocol, rows = stage(base, target, check_code=True)
+    if protocol.get('naive_reuse') and phase != 'cached':
+        raise ValueError('Naive reuse runs only its cached answer phase')
     root = Path(base)/target
     cases = (['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline'
              else [c for c in protocol['scheduled_actions'] if c != 'nocache'])
@@ -121,7 +131,11 @@ def worker(base, role, phase, attempt, group=0):
     with (root/f'group{group}.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         engine = Engine(root, protocol, group, 'baseline' if phase == 'baseline' else 'cached', attempt, remaining)
-        definitions = {a['id']: a for a in ACTIONS}
+        if protocol.get('naive_reuse'):
+            from runner.naive_reuse import inventory
+            definitions = inventory(protocol)
+        else:
+            definitions = {a['id']: a for a in ACTIONS}
         failure = None
         case = None
         try:
@@ -218,6 +232,8 @@ def worker_failure(receipt, code, reason=None):
 
 def execute_phase(base, role, phase, state):
     settings, _, _ = load(base, check_code=True)
+    if settings.get('naive_reuse') and phase != 'cached':
+        raise ValueError('Naive reuse runs only its cached answer phase')
     target = 'features' if phase == 'features' else role
     protocol, rows = stage(base, target)
     cases = ['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline' else [c for c in scheduled(settings, role) if c != 'nocache']
@@ -301,13 +317,18 @@ def supervise(base, role):
         state = dict(pid=os.getpid(), identity=identity(os.getpid()), state='running', role=role, started_at=time.time())
         atomic_json(state_root/'supervisor.json', state)
         try:
+            settings, _, _ = load(base)
+            naive = settings.get('naive_reuse', False)
             # Do not ask idle() to lock our own run.lock during execute_phase.
-            for phase in (('baseline', 'cached') if role != 'extra' else ('cached',)):
+            for phase in (('cached',) if naive or role == 'extra' else ('baseline', 'cached')):
                 execute_phase(base, role, phase, state)
             protocol, rows = stage(base, role)
             freeze(state_root/'controls-complete.json', dict(answers=len(rows)*len(protocol['scheduled_actions']),
                    protocol_sha256=file_hash(state_root/'protocol.json'), owned_engines_exited=True))
-            if role != 'extra':
+            if naive:
+                from scripts.longbench_a800_report import report
+                report(base, final=True, emit=False)
+            elif role != 'extra':
                 state.update(state='waiting-for-extra', phase='waiting'); atomic_json(state_root/'supervisor.json', state)
                 if role == 'primary':
                     wait_extra(base)
@@ -320,7 +341,7 @@ def supervise(base, role):
                 from scripts.router_dataset import export_collection
                 export_collection(base, base/('ruler-data.json' if role == 'ruler' else 'longbench-data.json'))
             freeze(state_root/'complete.json', dict(complete=True, owned_engines_exited=True,
-                   plan_sha256=file_hash(base/'plan.json'), feature_collection=role != 'extra'))
+                   plan_sha256=file_hash(base/'plan.json'), feature_collection=not naive and role != 'extra'))
             state.update(state='complete', finished_at=time.time())
         except BaseException as error:
             state.update(state='failed', error=str(error), finished_at=time.time()); raise
@@ -377,6 +398,7 @@ def main():
     parser.add_argument('command', choices=('configure', 'prepare', 'detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'merge', 'supervise', 'worker'))
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--thinking', action='store_true', help='Separate thinking RULER protocol')
+    parser.add_argument('--naive-reuse', action='store_true', help='Only zero-repair control on existing complete prepared inputs; no generation/probes')
     parser.add_argument('--extend-from', type=Path, help='Parent RULER run: L40 thinking 30->200 or L20 non-thinking 200->500; collect only new ordinals')
     parser.add_argument('--hardware-profile', choices=('l40-tp2', 'l40-tp4'),
                         help='Eight explicit L40 UUIDs, thinking TP2/TP4; user checks GPU availability')

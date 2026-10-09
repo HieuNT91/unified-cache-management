@@ -77,22 +77,35 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers):
             if len(events) != len(steps) or any(e['scheduled_tokens'] != e['recomputed_tokens'] for e in steps):
                 raise RuntimeError('Baseline used a sparse method')
             continue
-        selections = [e for e in events if e['kind'] == 'prophetkv_selection']
-        if len(selections) != 1 or any(e['kind'] == 'cache_miss' for e in events):
-            raise RuntimeError('Expected exactly one successful cache selection')
-        event = selections[0]
-        scores = event['scores']
-        prefix, end = sample['boundaries'][1], sample['boundaries'][-2]
-        if len(scores) != end - prefix or not all(math.isfinite(s) for s in scores):
-            raise RuntimeError('Invalid selection scores')
-        if common_scores is not None and scores != common_scores:
-            raise RuntimeError('TP ranks disagree on native attention scores')
-        common_scores = scores
-        count = math.floor(len(scores) * ratio)
-        reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
-        if (event['selected_positions'] != reference or event['scoring_layers'] != list(expected_layers)
-                or event['fusion'] != 'mean_layers_fp32' or event['alignment_count'] != 64):
-            raise RuntimeError('Selection replay, mean or cache alignment mismatch')
+        if method == 'naive_reuse':
+            selections = [e for e in events if e['kind'] == 'naive_reuse_selection']
+            if ratio != 0 or len(selections) != 1 or any(
+                    e['kind'] not in ('naive_reuse_selection', 'prefill_step', 'layer_counts') for e in events):
+                raise RuntimeError('Naive reuse performed scoring or had a cache miss')
+            event = selections[0]
+            if (event.get('selected_positions') != [] or event.get('ratio') != 0
+                    or event.get('scoring_layers') != [] or event.get('probe_layers') != 0
+                    or event.get('suffix_forward_layers') != 0 or event.get('alignment_count') != 64):
+                raise RuntimeError('Naive reuse repaired context or missed alignment')
+            end = sample['boundaries'][-2]
+            reference = []
+        else:
+            selections = [e for e in events if e['kind'] == 'prophetkv_selection']
+            if len(selections) != 1 or any(e['kind'] == 'cache_miss' for e in events):
+                raise RuntimeError('Expected exactly one successful cache selection')
+            event = selections[0]
+            scores = event['scores']
+            prefix, end = sample['boundaries'][1], sample['boundaries'][-2]
+            if len(scores) != end - prefix or not all(math.isfinite(s) for s in scores):
+                raise RuntimeError('Invalid selection scores')
+            if common_scores is not None and scores != common_scores:
+                raise RuntimeError('TP ranks disagree on native attention scores')
+            common_scores = scores
+            count = math.floor(len(scores) * ratio)
+            reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
+            if (event['selected_positions'] != reference or event['scoring_layers'] != list(expected_layers)
+                    or event['fusion'] != 'mean_layers_fp32' or event['alignment_count'] != 64):
+                raise RuntimeError('Selection replay, mean or cache alignment mismatch')
         if common is not None and common != reference:
             raise RuntimeError('TP ranks disagree on selected positions')
         common = reference

@@ -6,6 +6,10 @@ This documentation move does not authorize a launch, update, stop or resume.
 
 ## TP2 collection and portable training
 
+For a single 0% control using existing prepared inputs, see
+[L20 RULER / A800 LongBench naive reuse](NAIVE_REUSE_L20_A800.md).
+The separate launchers run the full cohort with no scoring/repair or feature probes.
+
 For a completed L20 non-thinking200/task run, use
 [the200+300 extension guide](L20_RULER_EXTEND300.md) to collect only the next300
 samples/task with the same five TP2 pairs and preserve the original results.

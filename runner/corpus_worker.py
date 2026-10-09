@@ -86,9 +86,14 @@ def tree_mode(worker,request_id,definition,capture=False,head_layers=()):
     from ucm.sparse.state import get_ucm_sparse
     from vllm.distributed import get_tensor_model_parallel_rank, get_tp_group
     dense=definition['method']=='baseline'
+    from runner.naive_reuse import ACTION
+    naive=definition['method']=='naive_reuse'
+    if naive and (definition != ACTION or capture or head_layers):
+        raise ValueError('Invalid naive reuse action')
     if is_dense_request(request_id)!=dense or (capture and definition['ratio']!=.01):raise ValueError('Invalid tree request tag/probe')
-    configure(worker,'prophetkv',definition['ratio'] or .01)
+    configure(worker,'prophetkv',.01 if definition['ratio'] is None else definition['ratio'])
     sparse=get_ucm_sparse()
+    sparse.naive_reuse=naive
     if sparse.router_arrays is not None or sparse.router_capture:raise RuntimeError('Capture leaked')
     if head_layers:
         from runner.longbench_features import HEAD_LAYERS

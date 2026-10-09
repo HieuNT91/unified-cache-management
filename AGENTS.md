@@ -24,6 +24,14 @@
 These rules govern the primary workspace. Historical notes under
 `docs/studies/` describe earlier scopes and do not override these rules.
 
+- Naive reuse controls: `l20_ruler_naive_reuse.sh` runs full prepared500/task
+  non-thinking (6500 answers, five TP2 pairs); `a800_longbench_naive_reuse.sh`
+  runs all503 prepared thinking inputs (two TP2 pairs, GPU0/1 and2/3). Both retain
+  95% automatic KV, read-only prepared inputs and fresh result/cache/checkouts.
+  Only `naive-reuse` runs: zero context repair, no attention scoring or independent
+  probes; all-layer alignment, suffix computation, lifecycle and result checks
+  remain required. Existing router action inventories are unchanged. Guide:
+  `docs/deployment/NAIVE_REUSE_L20_A800.md`. No remote/GPU launch authorized here.
 - L40 thinking RULER on `noah`: `scripts/launcher/l40_ruler_thinking_data.sh`
   and `docs/deployment/L40_RULER_THINKING_DATA.md`. Latest user preference: eight
   supplied UUIDs form four TP2 pairs (0/1,2/3,4/5,6/7), with104/104/91/91 prompts

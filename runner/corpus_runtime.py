@@ -69,6 +69,9 @@ class Engine:
         cfg=config(protocol['model'],self.profile,self.cached,self.cache,None,
                    protocol.get('hardware_profile','server'),tp=self.tp)
         if self.cached:
+            if protocol.get('naive_reuse'):
+                for value in cfg['kv_transfer_config']['kv_connector_extra_config']['ucm_sparse_config'].values():
+                    value['ratio'] = 0.0
             cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts']={
                 r['id']:json.loads((Path(protocol['prepared'])/r['prepared']).read_text())['boundaries'] for r in rows}
         start=time.perf_counter();self.llm=start_engine(cfg)
@@ -110,7 +113,9 @@ class Engine:
             self.construction['readiness']=self.pc.ready()
             self.construction['readiness_seconds']=time.perf_counter()-start
         rid=self.rid('read:prime');start=time.perf_counter()
-        if self.cached:arm_tree(self.llm,self.sample,rid,PROBE,tp=self.tp)
+        if self.cached:
+            from runner.naive_reuse import ACTION
+            arm_tree(self.llm,self.sample,rid,ACTION if self.protocol.get('naive_reuse') else PROBE,tp=self.tp)
         generate(self.llm.llm_engine,self.sample['token_ids'],1,rid,self.sample['thinking'],sample=self.sample)
         self.llm.collective_rpc(drain);verify_retired(self.llm,self.tp,rid,self.scheduler if self.cached else None)
         if self.pc:self.pc.unchanged();clean_capture(self.llm,self.tp)
