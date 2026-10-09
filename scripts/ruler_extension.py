@@ -12,6 +12,14 @@ PARENT_FILES = ('settings.json', 'plan.json', 'rows.json', 'ruler-data.json',
                 'ruler/controls-complete.json', 'features/complete.json')
 CONTROL_FILES = ('settings.json', 'plan.json', 'rows.json', 'ruler/controls-complete.json',
                  'ruler/protocol.json', 'features/protocol.json', 'ruler/devices.json')
+# cd5a3c0 -> 498e9dd changes only the check_model import in scripts/ruler.py
+# from run to runner.preparation. The moved check_model function has identical
+# AST; generator/formatting logic is byte-for-byte unchanged. This is a specific
+# source mapping, not permission to ignore arbitrary adapter changes.
+ADAPTER_IMPORT_MOVE = (
+    '65d47398285cc6ab322dec3901cb938d03013eb08b79a665cc9c7711a14865a5',
+    'd616631cfa085110bfed5cf41f559b5951a71701bbc2c347d3238ac0e402eebc',
+)
 
 
 def read(path):
@@ -127,10 +135,15 @@ def verify_prepared_extension(settings, receipt, manifest):
     prior = Path(ext['parent_prepared']); prepared = Path(settings['prepared'])
     old_receipt = read(prior/'preparation.json')
     before, after = old_receipt['spec'], receipt['spec']
+    import_move = (before.get('adapter'), after.get('adapter')) == ADAPTER_IMPORT_MOVE
+    excluded = {'samples', 'adapter'} if import_move else {'samples'}
+    differences = sorted(k for k in before.keys() | after.keys() if k not in excluded
+                         and (k not in before or k not in after or before[k] != after[k]))
     if (before.get('samples') != 30 or after.get('samples') != 200
-            or {k: v for k, v in before.items() if k != 'samples'} !=
-               {k: v for k, v in after.items() if k != 'samples'}):
-        raise ValueError('Parent/new generator, tokenizer, assets, versions or policy differ; prefix reuse refused')
+            or differences):
+        raise ValueError('Parent/new generator, tokenizer, assets, versions or policy differ; '
+                         f'prefix reuse refused (fields: {differences}; '
+                         f'samples: {before.get("samples")} -> {after.get("samples")})')
     if file_hash(prior/'manifest.jsonl') != old_receipt['files']['manifest.jsonl']:
         raise ValueError('Parent manifest changed')
     old_manifest = [json.loads(line) for line in (prior/'manifest.jsonl').read_text().splitlines() if line.strip()]
@@ -168,7 +181,8 @@ def verify_prepared_extension(settings, receipt, manifest):
             if old_row != row:
                 raise ValueError(f'Parent manifest prefix differs: {row["id"]}')
             old_sample = checked_json(prior, old_row['prepared'], old_receipt)
-            # Only the declared generator batch-size hash is expected to differ.
+            # This hash includes batch size and the specifically mapped adapter.
+            # Every actual sample field (including tokens/layout/policy) must match.
             canonical = lambda s: {k: v for k, v in s.items() if k != 'generator_config_sha256'}
             if canonical(sample) != canonical(old_sample):
                 raise ValueError(f'Parent token/layout/policy prefix differs: {row["id"]}')
@@ -177,9 +191,15 @@ def verify_prepared_extension(settings, receipt, manifest):
     if task_counts != {t: 200 for t in TASKS}:
         raise ValueError('Expected full 13x200 prepared batch')
     check_parent(ext)
-    return dict(schema=SCHEMA, extension=ext, prepared_manifest_sha256=receipt['files']['manifest.jsonl'],
+    result = dict(schema=SCHEMA, extension=ext, prepared_manifest_sha256=receipt['files']['manifest.jsonl'],
                 prefix_prompts_checked=390, new_prompts=2210, selected_ids_sha256=fingerprint(selected),
                 comparison='exact raw rows and prepared samples except generator batch-size hash')
+    if import_move:
+        result['comparison'] = 'exact raw rows and prepared samples except generator configuration hash; verified adapter import move'
+        result['adapter_compatibility'] = dict(parent_sha256=before['adapter'], new_sha256=after['adapter'],
+            reason='check_model import moved from run to runner.preparation; function AST unchanged',
+            source_commits=['cd5a3c0060555b6849ad48aaf1fbf14ed0c5fe48', '498e9ddceed742cf0ff82801806606c9be1cd414'])
+    return result
 
 
 def combine_exports(base, delta, delta_path, allow_pending=False):

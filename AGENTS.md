@@ -42,8 +42,17 @@ These rules govern the primary workspace. Historical notes under
   generator assets/versions and no duplicate prompts. Parent data/results are
   read-only; same TP/profile required. Export retains the170-row delta and a
   portable200-row union with both source provenances once parent probes/export
-  finish; `merge` performs the deferred CPU union. Actual noah parent isTP4 at
-  outputs/ruler-l40-tp4-thinking-30-v1; extension retainsTP4. No real-data/GPU launch.
+  finish; `merge` performs the deferred CPU union. Confirmed noah parent isTP2 at
+  /home/zhufangzhou/jh/projects/unified-cache-management/outputs/ruler-l40-tp2-thinking-30-v1,
+  with4680/4680 answers and13/390 probes reported by the user; extension retainsTP2
+  and96% memory. Both remote checkouts live under unified-cache-management/.worktrees/. No real-data/GPU launch.
+- Adapter compatibility (2026-10-09): the exact scripts/ruler.py SHA256 pair
+  65d47398285cc6ab322dec3901cb938d03013eb08b79a665cc9c7711a14865a5 ->
+  d616631cfa085110bfed5cf41f559b5951a71701bbc2c347d3238ac0e402eebc only moves
+  the check_model import (identical function AST). Record this source mapping;
+  keep all other spec and exact raw/token/layout/policy prefix checks. Unknown
+  adapter changes remain rejected. Reuse the completed200 prepared directory
+  with fresh code/result/cache paths; do not rewrite configured code pins/receipts.
 - TP2 A800/L20 collection and portable training live on
   `prophetkv/tp2-router-data`, based on `d0483b1`. Guide:
   `docs/deployment/A800_LONGBENCH_DATA.md`. This scope authorizes source edits,

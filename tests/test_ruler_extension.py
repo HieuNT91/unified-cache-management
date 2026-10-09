@@ -24,7 +24,8 @@ GPUS = [f'GPU-00000000-0000-0000-0000-{i:012d}' for i in range(8)]
 
 
 def prepared_fixture(root, count):
-    spec = dict(samples=count, seed=42, execution_profile=PROFILE, protocol=PROTOCOL, adapter='fixture')
+    spec = dict(samples=count, seed=42, execution_profile=PROFILE, protocol=PROTOCOL,
+                adapter=extension.ADAPTER_IMPORT_MOVE[0])
     files = {}; manifest = []
     for t, task in enumerate(TASKS):
         policy = make_policy(Tokenizer(), ' Answer:', CAPS[task])
@@ -196,6 +197,36 @@ class ExtensionTests(unittest.TestCase):
             args = json.loads(result.stdout)
             self.assertEqual(args[args.index('--extend-from')+1], str(self.old))
             self.assertEqual(args[args.index('--samples-per-task')+1], '200')
+
+    def test_known_adapter_import_move_preserves_prefix_checks_and_existing_inputs(self):
+        settings = self.configure(); manifest = prepared_fixture(self.args.prepared, 200)
+        receipt = data.read(self.args.prepared/'preparation.json')
+        receipt['spec']['adapter'] = extension.ADAPTER_IMPORT_MOVE[1]
+        # Model the new generator configuration hash without changing any tokens.
+        for row in manifest:
+            path = self.args.prepared/row['prepared']; sample = data.read(path)
+            sample['generator_config_sha256'] = fingerprint(receipt['spec'])
+            atomic_json(path, sample); receipt['files'][row['prepared']] = file_hash(path)
+        atomic_json(self.args.prepared/'preparation.json', receipt)
+        pins = {p: (file_hash(p), p.stat().st_mtime_ns) for directory in
+                (self.root/'old-inputs', self.args.prepared) for p in directory.rglob('*') if p.is_file()}
+        with patch('scripts.ruler.prepare'):
+            plan = data.prepare(self.new)
+        self.assertEqual(plan['samples'], 2210)
+        evidence = data.read(self.new/'extension.json')
+        self.assertEqual(evidence['prefix_prompts_checked'], 390)
+        self.assertEqual(evidence['adapter_compatibility']['parent_sha256'], extension.ADAPTER_IMPORT_MOVE[0])
+        self.assertEqual(evidence['adapter_compatibility']['new_sha256'], extension.ADAPTER_IMPORT_MOVE[1])
+        self.assertEqual(pins, {p: (file_hash(p), p.stat().st_mtime_ns) for p in pins})
+        for key in ('versions', 'tokenizer_hashes', 'assets', 'source_hashes', 'thinking_adapter', 'chunker', 'adapter'):
+            bad = copy.deepcopy(receipt); bad['spec'][key] = 'unapproved-change'
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, key):
+                extension.verify_prepared_extension(settings, bad, manifest)
+        path = self.args.prepared/manifest[0]['prepared']; sample = data.read(path)
+        sample['token_ids'] = [999]; atomic_json(path, sample)
+        receipt['files'][manifest[0]['prepared']] = file_hash(path)
+        with self.assertRaisesRegex(ValueError, 'token/layout/policy prefix differs'):
+            extension.verify_prepared_extension(settings, receipt, manifest)
 
     def test_tp4_parent_pending_probes_collects_delta_and_merges_later(self):
         # Adapt only this synthetic fixture to the user's original TP4 profile.

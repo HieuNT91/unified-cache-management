@@ -2,6 +2,14 @@
 
 ## L40 thinking 30 + 170 extension (2026-10-08)
 
+The 2026-10-09 adapter import compatibility fix passed all6 extension CPU tests
+on local Python3.12. Git blobs confirmed the exact old/new SHA256 pair differs
+only in the check_model import; the moved function has identical AST. Fixtures
+accept this pair, preserve existing prepared bytes/mtimes, publish the source
+mapping and2210-row plan, and reject unknown adapters, other spec differences
+and token mismatches. Real noah prefix equivalence remains to be checked by its
+prepare command; no remote/GPU execution or real-data regeneration was performed.
+
 The follow-up for the actual TP4 parent with failed/incomplete probes passed all12
 extension/A800 CPU tests. A full synthetic TP4 controls-only parent configures
 without final/probe/export receipts, schedules1105 prompts per group, leaves
