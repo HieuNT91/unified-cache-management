@@ -179,6 +179,15 @@ job or64-worker performance benchmark was run for this update.
 
 ## L20 non-thinking extension, 200 to 500 (2026-10-09)
 
+The chunker compatibility follow-up passed all8 L20/L40 extension CPU tests.
+Git blobs at d0483b1 and cd5a3c0 differ only in sample_provenance; removing that
+function leaves identical module AST, and non-thinking provenance output is
+equal. Fixtures exercise the exact old/new chunker hashes alongside the legacy
+adapter mapping, unchanged prepared bytes/mtimes, the 2,600-prompt prefix audit
+and compatibility receipt. Unknown chunker/adapter/assets/version changes and
+token/layout/raw-prefix mismatches remain rejected. Python syntax and diff checks
+passed. No real-data preparation, GPU run, remote action, commit or push ran.
+
 The two L20 extension tests and sixteen compact exporter tests passed, along
 with thirty-three existing L40 extension, TP2 collection and controller tests.
 CPU fixtures cover 3,900 new prompts (ordinal200–499), 46,800 answers,

@@ -62,6 +62,11 @@ These rules govern the primary workspace. Historical notes under
   seed42 and95% automatic KV. Delta300 and union500 portable exports are separate;
   compact NPZ export supports the delta and leaves the parent NPZ unchanged.
   No remote/GPU/training execution; provide commit/push and remote commands.
+- L20 chunker compatibility (2026-10-09): allow only the exact layout SHA256
+  mapping recorded as `NONTHINKING_CHUNKER_MOVE` in `scripts/ruler_extension.py`,
+  for non-thinking200+300. Git d0483b1 -> cd5a3c0 changes only optional thinking
+  provenance fields; retain all exact prefix checks. Reuse prepared500 unchanged
+  with fresh checkout/result/cache paths after the failed prepare; preserve pins.
 - TP2 A800/L20 collection and portable training live on
   `prophetkv/tp2-router-data`, based on `d0483b1`. Guide:
   `docs/deployment/A800_LONGBENCH_DATA.md`. This scope authorizes source edits,

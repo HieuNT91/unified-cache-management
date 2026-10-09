@@ -33,7 +33,8 @@ class L20ExtensionTests(unittest.TestCase):
                       samples_per_task=200, devices=','.join(map(str, range(10))), thinking=False)
             with patch.object(control, 'code_hashes', return_value={}), patch.object(control.subprocess, 'check_output', return_value=INVENTORY):
                 control.configure(args)
-            prepared_fixture(args.prepared, 200, thinking=False, adapter=extension.LEGACY_NONTHINKING_ADAPTER)
+            prepared_fixture(args.prepared, 200, thinking=False, adapter=extension.LEGACY_NONTHINKING_ADAPTER,
+                             chunker=extension.NONTHINKING_CHUNKER_MOVE[0])
             with patch('scripts.ruler.prepare'):
                 data.prepare(parent)
             complete(parent); parent_data = dataset_fixture(parent)
@@ -63,9 +64,17 @@ class L20ExtensionTests(unittest.TestCase):
                             lambda s: s.update(samples_per_task=500)):
                 bad = copy.deepcopy(settings); mutator(bad)
                 with self.assertRaises(ValueError): data.ruler_samples(bad)
-            manifest = prepared_fixture(args.prepared, 500, thinking=False, adapter=extension.ADAPTER_IMPORT_MOVE[1])
+            manifest = prepared_fixture(args.prepared, 500, thinking=False, adapter=extension.ADAPTER_IMPORT_MOVE[1],
+                                        chunker=extension.NONTHINKING_CHUNKER_MOVE[1])
+            prepared_pins = {p: (file_hash(p), p.stat().st_mtime_ns)
+                             for p in args.prepared.rglob('*') if p.is_file()}
             with patch('scripts.ruler.prepare') as generate:
                 plan = data.prepare(delta)
+            self.assertEqual(prepared_pins, {p: (file_hash(p), p.stat().st_mtime_ns) for p in prepared_pins})
+            evidence = data.read(delta/'extension.json')
+            self.assertEqual(evidence['prefix_prompts_checked'], 2600)
+            self.assertEqual(evidence['chunker_compatibility']['parent_sha256'], extension.NONTHINKING_CHUNKER_MOVE[0])
+            self.assertEqual(evidence['chunker_compatibility']['new_sha256'], extension.NONTHINKING_CHUNKER_MOVE[1])
             self.assertEqual(generate.call_args.args[0].samples, 500)
             self.assertFalse(generate.call_args.args[0].thinking)
             self.assertEqual((plan['samples'], plan['answers'], plan['probes']), (3900,46800,3900))
@@ -88,6 +97,20 @@ class L20ExtensionTests(unittest.TestCase):
             for row in parent_data['rows']:
                 self.assertEqual(combined_by_id[row['id']], row)
             self.assertEqual(pins, {p: (file_hash(p), p.stat().st_mtime_ns) for p in pins})
+            receipt = data.read(args.prepared/'preparation.json')
+            for key in ('chunker', 'adapter', 'versions', 'assets'):
+                changed = copy.deepcopy(receipt); changed['spec'][key] = 'unapproved-change'
+                with self.subTest(key=key), self.assertRaisesRegex(ValueError, key):
+                    extension.verify_prepared_extension(settings, changed, manifest)
+            # Known file mappings must still reject changes to tokens/layout.
+            path = args.prepared/manifest[0]['prepared']; original = path.read_bytes()
+            for key, value in (('token_ids', [999]), ('boundaries', [0, 1, 2])):
+                changed = copy.deepcopy(receipt); sample = json.loads(original)
+                sample[key] = value; atomic_json(path, sample)
+                changed['files'][manifest[0]['prepared']] = file_hash(path)
+                with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'token/layout/policy prefix differs'):
+                    extension.verify_prepared_extension(settings, changed, manifest)
+            path.write_bytes(original)
             # A shifted/reordered prefix cannot be accepted, even under a known adapter mapping.
             receipt = data.read(args.prepared/'preparation.json')
             name = 'raw/qa_1/validation.jsonl'; path = args.prepared/name

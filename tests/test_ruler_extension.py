@@ -23,11 +23,13 @@ ROOT = Path(__file__).resolve().parents[1]
 GPUS = [f'GPU-00000000-0000-0000-0000-{i:012d}' for i in range(8)]
 
 
-def prepared_fixture(root, count, thinking=True, adapter=None):
+def prepared_fixture(root, count, thinking=True, adapter=None, chunker=None):
     spec = dict(samples=count, seed=42, protocol=PROTOCOL if thinking else EVALUATION_PROTOCOL,
                 adapter=adapter or extension.ADAPTER_IMPORT_MOVE[0])
     if thinking:
         spec['execution_profile'] = PROFILE
+    if chunker is not None:
+        spec['chunker'] = chunker
     files = {}; manifest = []
     for t, task in enumerate(TASKS):
         policy = make_policy(Tokenizer(), ' Answer:', CAPS[task])

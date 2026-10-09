@@ -24,6 +24,13 @@ ADAPTER_IMPORT_MOVE = (
     '65d47398285cc6ab322dec3901cb938d03013eb08b79a665cc9c7711a14865a5',
     'd616631cfa085110bfed5cf41f559b5951a71701bbc2c347d3238ac0e402eebc',
 )
+# d0483b1 -> cd5a3c0 changes only sample_provenance: optional thinking
+# metadata is retained when present. Every chunking/token/layout function is
+# unchanged, and non-thinking samples have neither optional field.
+NONTHINKING_CHUNKER_MOVE = (
+    '54d1ad351fcd3aed2dc0be3dc58e8e2e0ecc9d581472cb1c0ce05d0d7cc51cf0',
+    '7b6f3af413cf8ac4eb43384a0519be5bf461677ec1c5703d7d01ed2fb32fe940',
+)
 
 
 def read(path):
@@ -155,7 +162,11 @@ def verify_prepared_extension(settings, receipt, manifest):
     nonthinking_move = (ext['schema'] == L20_SCHEMA
                         and (before.get('adapter'), after.get('adapter')) ==
                         (LEGACY_NONTHINKING_ADAPTER, ADAPTER_IMPORT_MOVE[1]))
+    chunker_move = (ext['schema'] == L20_SCHEMA
+                    and (before.get('chunker'), after.get('chunker')) == NONTHINKING_CHUNKER_MOVE)
     excluded = {'samples', 'adapter'} if import_move or nonthinking_move else {'samples'}
+    if chunker_move:
+        excluded.add('chunker')
     differences = sorted(k for k in before.keys() | after.keys() if k not in excluded
                          and (k not in before or k not in after or before[k] != after[k]))
     if (before.get('samples') != start or after.get('samples') != target
@@ -223,6 +234,10 @@ def verify_prepared_extension(settings, receipt, manifest):
         result['adapter_compatibility'] = dict(parent_sha256=before['adapter'], new_sha256=after['adapter'],
             reason='non-thinking formatter/generator/template/query unchanged; optional thinking branch added and check_model import moved',
             source_commits=['d0483b1', '498e9ddceed742cf0ff82801806606c9be1cd414'])
+    if chunker_move:
+        result['chunker_compatibility'] = dict(parent_sha256=before['chunker'], new_sha256=after['chunker'],
+            reason='only optional thinking fields added to sample_provenance; non-thinking provenance and all token/layout functions unchanged',
+            source_commits=['d0483b1', 'cd5a3c0060555b6849ad48aaf1fbf14ed0c5fe48'])
     return result
 
 
