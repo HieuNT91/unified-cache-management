@@ -98,16 +98,37 @@ class PromptCache:
 
     def ready(self):
         from runner.cache import wait_for_cache
+        started = time.monotonic()
+        self.before = None
         result = wait_for_cache(self.args, self.chunks)
-        self.before = self.snapshot()
-        actual = {str(p.relative_to(self.cache)) for p in (self.cache/'kv').rglob('*') if p.is_file()}
-        if actual != self.files:
+        # PcStore 0.3.0 completes dump tasks after device-to-host transfer;
+        # the file queue may still be writing/renaming repeated prefix blocks.
+        # Wait only for staging files belonging to this prompt, never ignore
+        # or remove them, and take the immutable snapshot after publication.
+        staging = {f'kv/.temp/{Path(name).name}' for name in self.files}
+        while True:
+            paths = list((self.cache/'kv').rglob('*'))
+            if any(p.is_symlink() for p in paths):
+                raise RuntimeError('Symlink in temporary cache')
+            actual = {str(p.relative_to(self.cache)) for p in paths if p.is_file()}
             extra, missing = sorted(actual-self.files), sorted(self.files-actual)
-            raise RuntimeError('Unexpected files in temporary prompt cache: '
+            if not extra and not missing:
+                # Recheck sizes after the last rename, including replacements.
+                from runner.cache import verify_cache
+                result.update(verify_cache(self.args, self.chunks))
+                self.before = self.snapshot()
+                result['readiness_wait_seconds'] = time.monotonic() - started
+                return result
+            detail = (
                 f'cache={self.cache}, expected={len(self.files)}, actual={len(actual)}, '
                 f'extra={len(extra)}, missing={len(missing)}, '
                 f'extra_examples={extra[:10]}, missing_examples={missing[:10]}')
-        return result
+            if missing or not set(extra).issubset(staging):
+                raise RuntimeError('Unexpected files in temporary prompt cache: ' + detail)
+            remaining = self.args.cache_ready_timeout_seconds - (time.monotonic() - started)
+            if remaining <= 0:
+                raise RuntimeError('Cache staging did not drain before readiness timeout: ' + detail)
+            time.sleep(min(0.25, remaining))
 
     def snapshot(self):
         result = {}

@@ -88,6 +88,51 @@ class SweepTests(unittest.TestCase):
         self.assertEqual(extra.read_bytes(),b'evidence')
         self.assertTrue(all((self.cache/name).exists() for name in cache.files))
 
+    def test_readiness_waits_for_owned_staging_rename_before_snapshot(self):
+        cache=self.populated()
+        final=self.cache/next(iter(cache.files))
+        staged=self.cache/'kv'/'.temp'/final.name
+        staged.parent.mkdir()
+        staged.write_bytes(final.read_bytes())
+        def publish(_):
+            self.assertIsNone(cache.before)
+            staged.replace(final)
+        with patch.object(sweep.time,'sleep',side_effect=publish) as sleep:
+            self.assertEqual(cache.ready()['verified_shards'],4)
+        sleep.assert_called_once()
+        cache.unchanged()
+        self.assertEqual(cache.delete()['deleted_shards'],4)
+
+    def test_readiness_retains_stuck_staging_and_rejects_unknown_staging(self):
+        cache=self.populated()
+        staged=self.cache/'kv'/'.temp'/Path(next(iter(cache.files))).name
+        staged.parent.mkdir()
+        staged.write_bytes(b'evidence')
+        cache.args.cache_ready_timeout_seconds=0
+        with self.assertRaisesRegex(RuntimeError,'Cache staging did not drain'):
+            cache.ready()
+        self.assertIsNone(cache.before)
+        self.assertEqual(staged.read_bytes(),b'evidence')
+        unknown=staged.with_name('unknown');staged.rename(unknown)
+        with self.assertRaisesRegex(RuntimeError,'Unexpected files'):
+            cache.ready()
+        self.assertEqual(unknown.read_bytes(),b'evidence')
+
+    def test_readiness_rechecks_replacement_size_and_rejects_staging_symlinks(self):
+        cache=self.populated()
+        final=self.cache/next(iter(cache.files))
+        staged=self.cache/'kv'/'.temp'/final.name
+        staged.parent.mkdir()
+        staged.write_bytes(b'bad replacement')
+        with patch.object(sweep.time,'sleep',side_effect=lambda _: staged.replace(final)):
+            with self.assertRaisesRegex(RuntimeError,'Cache incomplete'):
+                cache.ready()
+        self.assertIsNone(cache.before)
+        self.populated()
+        staged.symlink_to(final)
+        with self.assertRaisesRegex(RuntimeError,'Symlink'):
+            cache.ready()
+
     def test_prompt_cache_accepts_relocated_root_but_preserves_hdd_backup(self):
         original=self.populated();original.ready()
         backup=self.root/'hdd-backup'

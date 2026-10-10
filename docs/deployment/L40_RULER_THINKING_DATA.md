@@ -224,3 +224,71 @@ bash scripts/launcher/l40_ruler_thinking_data.sh prepare && \
 
 `prepare` đọc lại receipt/hash của bộ200 hiện có rồi tạo plan170. Nếu kiểm tra
 raw/token/layout/policy tiếp theo phát hiện khác biệt, vẫn dừng trước GPU launch.
+
+### Worker lỗi `Unexpected files ... kv/.temp`
+
+Đọc **Worker log** và **Worker failure receipt** của attempt mới nhất; supervisor
+có thể giữ cả lỗi của attempt cũ. Ví dụ group3 của extension v2:
+
+```bash
+RUN=/home/zhufangzhou/jh/projects/unified-cache-management/.worktrees/ruler-l40-extend170/outputs/ruler-l40-tp2-thinking-extra170-v2
+ATTEMPT=53012fcd32e34ec3a988b20e043db457
+LOG="$RUN/ruler/cached-$ATTEMPT-group3.log"
+rg -n -i 'traceback|error|failed|timeout|no space|permission|rename' "$LOG" | tail -n 60
+less -R "$LOG"
+```
+
+Receipt ở `$RUN/ruler/sessions/cached-group3-$ATTEMPT/failure.json`; trường
+`inventory` chứa metadata file lúc lỗi, không chứng minh backend đã ngừng ghi.
+`missing=0` chỉ cho biết đủ tên shard, chưa chứng minh mọi dump đã kết thúc.
+PcStore0.3.0 báo xong tác vụ dump sau device-to-host, trước file write/rename
+([source](https://github.com/ModelEngine-Group/unified-cache-management/blob/v0.3.0/ucm/store/pcstore/cc/domain/trans/trans_queue.cc)).
+
+Readiness hiện chờ tối đa600 giây cho `.temp` có tên thuộc shard mong đợi,
+rồi kiểm tra lại kích thước và chụp snapshot. File lạ/symlink vẫn bị từ chối;
+staging không biến mất sẽ timeout và được giữ làm bằng chứng. Không xóa/ignore
+`.temp` để ép pass. Bản sửa chỉ được kiểm tra bằng CPU fixtures, chưa xác nhận
+trên noah; file kẹt hoặc lỗi I/O cần chẩn đoán riêng từ log/receipt.
+
+Run đã configure pin toàn bộ source: không `git pull` rồi sửa `settings.json`
+hay `plan.json` để ép resume. Giữ checkout/results/prepared cũ; áp dụng source
+mới bằng recovery bên dưới. Resume code cũ có thể tái hiện lỗi này.
+
+Sau khi bản sửa được commit/push, lấy tool vào checkout riêng (không pull vào
+checkout run cũ):
+
+```bash
+REPO=/home/zhufangzhou/jh/projects/unified-cache-management
+OLD="$REPO/.worktrees/ruler-l40-extend170"
+TOOLS="$REPO/.worktrees/l40-staging-tools"
+RECOVERED="$REPO/.worktrees/ruler-l40-staging-recovery"
+RUN="$OLD/outputs/ruler-l40-tp2-thinking-extra170-v2"
+PY=/home/zhufangzhou/jh/envs/ucm/bin/python
+
+git -C "$OLD" fetch origin
+git -C "$OLD" worktree add --detach "$TOOLS" origin/prophetkv/tp2-router-data
+CUDA_VISIBLE_DEVICES='' "$PY" "$TOOLS/scripts/cache_staging_recovery.py" \
+  --source-checkout "$OLD" --destination "$RECOVERED" --root "$RUN" \
+  --failure "$RUN/ruler/sessions/cached-group3-53012fcd32e34ec3a988b20e043db457/failure.json"
+```
+
+Tool chỉ tạo bản sao source, không launch/kill process. Nó yêu cầu run đã idle,
+source cũ khớp pins và receipt chỉ có staging thuộc block mong đợi. Bản sao
+không phải Git worktree; chỉ chứa source đã pin cộng hotfix. Không pull vào đó.
+Ba thay đổi giới hạn: readiness, kiểm tra source recovery, và provenance trong
+initialization mới. Code khác vẫn phải khớp từng hash gốc; sửa ngoài phạm vi bị
+từ chối. Receipt nằm ở `runtime-recoveries/<id>/receipt.json` trong run; settings,
+plan, prepared, accepted results và source cũ giữ nguyên. Không bỏ kiểm tra
+ownership, protocol, lifecycle hay cache immutability.
+
+Sau khi tool thành công, resume **cùng root cũ** bằng controller trong bản sao:
+
+```bash
+CUDA_VISIBLE_DEVICES='' "$PY" "$RECOVERED/scripts/longbench_a800_control.py" \
+  resume --root "$RUN" --role ruler
+```
+
+Không configure/prepare lại. Controller bỏ qua accepted answers, dùng namespace
+cache mới và dọn cache thất bại theo ownership sau khi engine cũ đã thoát. Nếu
+readiness mới timeout thì giữ log/receipt để chẩn đoán backend I/O; không xóa
+`.temp` để tiếp tục. Bản sửa và recovery chỉ được kiểm tra CPU, chưa chạy noah.
