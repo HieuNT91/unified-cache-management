@@ -21,6 +21,9 @@ SCHEMA = 'attention-router-dataset-v2'
 
 
 def validate(data):
+    if data.get('schema') == 'attention-router-dataset-v3':
+        from scripts.collection_v3_export import validate_portable
+        return validate_portable(data)
     if (data.get('schema') != SCHEMA or data.get('dataset') not in ('ruler', 'longbench-v2')
             or data.get('feature_names') != list(FEATURES) or data.get('feature_definitions') != DEFINITIONS
             or data.get('prompt_protocol') != PROMPT_PROTOCOL):
@@ -117,7 +120,8 @@ def load(path):
 
 
 def save(path, dataset, inventory, rows, provenance):
-    value = dict(schema=SCHEMA, dataset=dataset, prompt_protocol=PROMPT_PROTOCOL,
+    from scripts.collection_v3 import enabled
+    value = dict(schema='attention-router-dataset-v3' if enabled(provenance) else SCHEMA, dataset=dataset, prompt_protocol=PROMPT_PROTOCOL,
                  feature_names=list(FEATURES), feature_definitions=DEFINITIONS,
                  actions=inventory, rows=rows, provenance=provenance)
     value['payload_sha256'] = fingerprint(value); validate(value)
@@ -156,6 +160,8 @@ def example(row, probe, outcomes, source_pins, dataset):
             gpu_uuids=record['gpu_uuids'], thinking_tokens=record['thinking_tokens'], answer_tokens=record['answer_tokens'],
             output_tokens=record['output_tokens'], control_tokens=record['control_tokens'],
             output_cap_reached=record['output_cap_reached'])
+        if 'seed' in record:
+            result['outcomes'][case].update({k:record[k] for k in ('seed', 'forced_tokens', 'thinking_cap_reached', 'answer_cap_reached')})
         if KEY in row:
             result['outcomes'][case].update({k:record[k] for k in ('generated_answer_tokens','generated_thinking_open_tokens','forced_tokens',
                 'thinking_cap_reached','answer_cap_reached','thinking_closure')})
@@ -166,6 +172,10 @@ def example(row, probe, outcomes, source_pins, dataset):
 def export_collection(base, output):
     from scripts.longbench_a800_data import load as load_plan, stage, read, roles, scheduled, ACTIONS
     base = Path(base); settings, plan, rows = load_plan(base)
+    from scripts.collection_v3 import enabled
+    if enabled(settings):
+        from scripts.collection_v3_export import export_portable
+        return export_portable(base, output)
     stages = roles(settings)
     for role in stages:
         filename = 'complete.json' if role == 'features' else 'controls-complete.json'
@@ -213,7 +223,7 @@ def export_ruler(root, output):
     from scripts.corpus_inputs import prepared_rows
     from scripts.corpus_control import idle
     root = Path(root)
-    if (root/'settings.json').exists() and json.loads((root/'settings.json').read_text()).get('schema') == 'tp2-data-config-v2':
+    if (root/'settings.json').exists() and json.loads((root/'settings.json').read_text()).get('schema') in ('tp2-data-config-v2', 'tp2-data-config-v3'):
         return export_collection(root, output)
     protocol = json.loads((root/'protocol.json').read_text())
     if protocol.get('dataset') != 'ruler' or protocol.get('kind') != 'collection' or protocol.get('feature_profile') != DEFINITIONS:

@@ -85,7 +85,8 @@ def validate_sample(sample, kv_chunk_size=4096, context_length=WINDOW):
         raise ValueError('Formatted prompt exceeds context-length; truncation is forbidden')
     budget = sample['max_output_tokens']
     from runner.thinking_budget import PROTOCOL as THINKING_PROTOCOL, validate_sample_policy
-    thinking_ruler = sample.get('evaluation_protocol') == THINKING_PROTOCOL
+    from runner.output_budget import RULER_PROTOCOL, LONGBENCH_PROTOCOL
+    thinking_ruler = sample.get('evaluation_protocol') in (THINKING_PROTOCOL, RULER_PROTOCOL, LONGBENCH_PROTOCOL)
     if thinking_ruler:
         validate_sample_policy(sample)
     if type(budget) is not int or not 1 <= budget <= (WINDOW if thinking_ruler else 16384) or len(ids) + budget > WINDOW:

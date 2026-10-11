@@ -4,6 +4,13 @@ Run shell commands from the worktree root. Read [AGENTS.md](../../AGENTS.md) and
 [experiment protection](../agents/experiment-rules.md) before process operations.
 This documentation move does not authorize a launch, update, stop or resume.
 
+## New nine-action collection v3
+
+Use [collection v3](COLLECTION_V3.md) for new A800 four-seed LongBench and
+L20/L40 500/task RULER runs. Server commands: [A800](A800_COLLECTION_V3.md),
+[L20](L20_COLLECTION_V3.md), [L40](L40_COLLECTION_V3.md). The three data launchers
+default to this protocol; the guides below retain their historical run scopes.
+
 ## TP2 collection and portable training
 
 For a single 0% control using existing prepared inputs, see

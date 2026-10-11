@@ -25,6 +25,9 @@ def make_policy(tokenizer, prefix, answer_cap, opening_in_prompt=False):
 
 
 def validate_policy(p):
+    from runner.output_budget import PROTOCOL as TOTAL, validate_policy as validate_total
+    if isinstance(p, dict) and p.get('protocol') == TOTAL:
+        return validate_total(p)
     from scripts.ruler import CAPS
     if not isinstance(p,dict):
         raise ValueError('Missing thinking budget policy')
@@ -46,6 +49,9 @@ def validate_policy(p):
 
 
 def validate_sample_policy(sample):
+    from runner.output_budget import PROTOCOL as TOTAL, validate_sample_policy as validate_total
+    if sample.get(KEY, {}).get('protocol') == TOTAL:
+        return validate_total(sample)
     from scripts.ruler import CAPS
     p = validate_policy(sample.get(KEY))
     if (sample.get('evaluation_protocol') != PROTOCOL or sample.get('execution_profile') != PROFILE or sample['thinking'] is not True
@@ -58,6 +64,12 @@ def validate_sample_policy(sample):
 
 class BudgetState:
     """Incrementally consumes emitted IDs. Attached to the request, freed with it."""
+    def __new__(cls, policy):
+        from runner.output_budget import PROTOCOL as TOTAL, TotalBudgetState
+        if isinstance(policy, dict) and policy.get('protocol') == TOTAL:
+            return TotalBudgetState(policy)
+        return super().__new__(cls)
+
     def __init__(self, policy):
         from copy import deepcopy
         self.policy = deepcopy(validate_policy(policy))
@@ -185,6 +197,9 @@ def install_scheduler_hook():
 
 def validate_thinking_outcome(value, policy):
     """Validate committed and portable phase counts without attention replay."""
+    from runner.output_budget import PROTOCOL as TOTAL, validate_outcome
+    if policy.get('protocol') == TOTAL:
+        return validate_outcome(value, policy)
     import math
     for key in ('generated_answer_tokens', 'generated_thinking_open_tokens', 'forced_tokens', 'thinking_tokens', 'answer_tokens', 'control_tokens', 'output_tokens'):
         if type(value.get(key)) is not int or value[key] < 0:

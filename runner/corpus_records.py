@@ -18,10 +18,15 @@ def answer_validation(protocol):
     return mode
 
 
-def record_dir(root,case,prompt_id):
+def record_dir(root,case,prompt_id,seed=None):
     if any(not isinstance(s,str) or not re.fullmatch('[a-zA-Z0-9_-]+',s) for s in (case,prompt_id)):
         raise ValueError('Invalid record identity')
-    return Path(root)/'records'/case/prompt_id
+    folder = Path(root)/'records'/case/prompt_id
+    if seed is not None:
+        if type(seed) is not int or seed < 0 or case == 'probe':
+            raise ValueError('Invalid answer seed identity')
+        folder = folder/f'seed-{seed}'
+    return folder
 
 
 def protocol_identity(protocol):
@@ -29,13 +34,16 @@ def protocol_identity(protocol):
     return fingerprint({k:v for k,v in protocol.items() if k not in ('prepared','model','cache_root')})
 
 
-def accepted(root,case,row,protocol,prepared=None,full=False):
+def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
     from runner.tensor_parallel import protocol_tp
     tp=protocol_tp(protocol)
     mode=answer_validation(protocol)
     if mode==NATIVE_ANSWER_VALIDATION and case in ('probe','router'):
         raise ValueError('Native answer controls do not use independent probes or routers')
-    folder=record_dir(root,case,row['id']);path=folder/'validated.json'
+    from scripts.collection_v3 import enabled, seeds
+    if seed not in seeds(protocol, case):
+        raise ValueError('Answer seed differs from frozen schedule')
+    folder=record_dir(root,case,row['id'],seed);path=folder/'validated.json'
     if not path.exists():return None
     saved=json.loads(path.read_text())
     if saved.get('complete') is not True or saved['protocol_sha256']!=protocol_identity(protocol):
@@ -45,12 +53,32 @@ def accepted(root,case,row,protocol,prepared=None,full=False):
         artifact=relative(folder,name)
         if not artifact.is_file() or ((full or name=='result.json') and file_hash(artifact)!=expected):raise ValueError('Corrupt accepted artifact: '+name)
     result=json.loads((folder/'result.json').read_text())
+    if enabled(protocol) and case != 'probe' and (type(result.get('seed')) is not int or result['seed'] != seed or result.get('sequence_id') != row['id']):
+        raise ValueError('Accepted answer seed/sequence changed')
     if result.get('answer_validation',PROBE_ANSWER_VALIDATION)!=mode:
         raise ValueError('Accepted answer validation mode changed')
     group=row['ordinal']%len(protocol['groups'])
     if (result['prompt_id']!=row['id'] or result['method']!=case or result['input_sha256']!=row['sha256'] or
             result['group']!=group or result['gpu_uuids']!=protocol['groups'][group] or not result['cache_immutable']):
         raise ValueError('Accepted identity mismatch')
+    if enabled(protocol):
+        from runner.layout import PROMPT_PROTOCOL
+        if (result.get('prompt_protocol') != PROMPT_PROTOCOL
+                or result.get('evaluation_protocol') != row.get('evaluation_protocol')
+                or not re.fullmatch('[0-9a-f]{64}', result.get('token_sha256', ''))):
+            raise ValueError('Accepted prompt/generation provenance mismatch')
+        if case != 'probe':
+            if (result.get('subtask') != row['subtask'] or type(result.get('output_cap_reached')) is not bool
+                    or any(type(result.get(k)) is not int or result[k] < 0 for k in
+                           ('thinking_tokens', 'answer_tokens', 'control_tokens', 'output_tokens', 'forced_tokens'))
+                    or result['output_tokens'] != sum(result[k] for k in ('thinking_tokens', 'answer_tokens', 'control_tokens'))):
+                raise ValueError('Invalid committed answer metrics')
+            from runner.output_budget import OUTPUT_CAP
+            from scripts.ruler import CAPS
+            cap = CAPS.get(row['subtask']) if protocol['generation_protocol'] == 'ruler-nonthinking-v1' else OUTPUT_CAP
+            if (result.get('max_output_tokens') != cap or result['output_tokens'] > cap
+                    or len(result.get('output_token_ids', [])) != result['output_tokens']):
+                raise ValueError('Invalid committed answer output budget')
     retired=result['retirement']
     if sorted(r['rank'] for r in retired)!=list(range(tp)) or any(not r['quiescent'] or r['transfers']['pending'] or r['request_bookkeeping'] for r in retired):
         raise ValueError('Missing retirement evidence')
@@ -70,9 +98,10 @@ def accepted(root,case,row,protocol,prepared=None,full=False):
            for k,t in result['timings'].items()
            if not (k=='first_answer_content_seconds' and t is None and result.get('generated_answer_tokens')==0)):
         raise ValueError('Invalid timing')
-    if protocol.get('execution_profile')=='ruler-thinking' and case!='probe':
+    if (protocol.get('execution_profile')=='ruler-thinking' or (enabled(protocol) and protocol['dataset']=='longbench-v2')) and case!='probe':
         from runner.thinking_budget import KEY, PROTOCOL, validate_thinking_outcome
-        if result.get(KEY)!=row[KEY] or result.get('evaluation_protocol')!=PROTOCOL:
+        expected_protocol = row.get('evaluation_protocol') if enabled(protocol) else PROTOCOL
+        if result.get(KEY)!=row[KEY] or result.get('evaluation_protocol')!=expected_protocol:
             raise ValueError('Thinking result policy/provenance changed')
         validate_thinking_outcome(dict(result,ttft_seconds=result['timings']['ttft_seconds'],
             first_answer_content_seconds=result['timings'].get('first_answer_content_seconds')),row[KEY])
@@ -96,10 +125,15 @@ def accepted(root,case,row,protocol,prepared=None,full=False):
     return result
 
 
-def publish(root,case,row,protocol,result,diagnostics):
+def publish(root,case,row,protocol,result,diagnostics,*,seed=None):
     import fcntl
     root=Path(root);root.mkdir(parents=True,exist_ok=True)
-    folder=record_dir(root,case,row['id'])
+    from scripts.collection_v3 import enabled, seeds
+    if seed not in seeds(protocol, case):
+        raise ValueError('Answer seed differs from frozen schedule')
+    if enabled(protocol) and case != 'probe' and (result.get('seed') != seed or result.get('sequence_id') != row['id']):
+        raise ValueError('Answer seed/sequence mismatch')
+    folder=record_dir(root,case,row['id'],seed)
     # Serialize duplicate checking, body publication and the atomic commit marker.
     with (root/'publication.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)

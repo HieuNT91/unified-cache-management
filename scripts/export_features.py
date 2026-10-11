@@ -812,7 +812,7 @@ def reduction_matches(means, scores, prefix):
     return False
 
 
-def load_attention(folder, record, row, tp):
+def load_attention(folder, record, row, tp, ratios=RATIOS):
     """Verify every used rank archive; no external prepared/model paths needed."""
     require(sorted(a['rank'] for a in record['artifacts']) == list(range(tp))
             and len({a['path'] for a in record['artifacts']}) == tp,
@@ -858,7 +858,7 @@ def load_attention(folder, record, row, tp):
             else:
                 scores = native
             order = ranked(native)
-            for bpercent in RATIOS:
+            for bpercent in ratios:
                 require(np.array_equal(data[f'prophetkv-{bpercent}'], mask(order, bpercent)+prefix),
                         f'Native selection floor/tie mismatch: {path}, budget {bpercent}')
             head = data['heads']
@@ -933,7 +933,7 @@ def verify_npz(path):
         require(len(saved.files) == len(set(saved.files)), 'Duplicate NPZ member')
         metadata = json.loads(str(saved['metadata_json'].item()))
         arrays = {name: saved[name] for name in saved.files if name != 'metadata_json'}
-    require(metadata.get('schema') == 'attention-router-compact-v1', 'Unknown compact schema')
+    require(metadata.get('schema') in ('attention-router-compact-v1', 'attention-router-compact-v2'), 'Unknown compact schema')
     expected = metadata.pop('payload_sha256')
     require(metadata['arrays_sha256'] == array_digest(arrays)
             and digest(metadata) == expected, 'Compact payload checksum mismatch')
@@ -964,10 +964,11 @@ def publish_npz(output, arrays, metadata):
 
 def extract_prompt(job):
     """A worker reads one capture and returns scalars, never attention arrays."""
-    index, folder, probe, row, tp = job
+    index, folder, probe, row, tp, *inventory = job
+    ratios = inventory[0] if inventory else RATIOS
     try:
         started = time.perf_counter()
-        layers, heads, scores, prefix = load_attention(Path(folder), probe, row, tp)
+        layers, heads, scores, prefix = load_attention(Path(folder), probe, row, tp, ratios)
         values = compute_features(layers, heads, scores, prefix)
         seconds = time.perf_counter()-started
         for name in OLD_FEATURES:
@@ -1041,6 +1042,9 @@ def extracted_prompts(jobs, workers):
 def export(root, output=None, quiet=False, workers=DEFAULT_WORKERS):
     require(type(workers) is int and workers > 0, 'workers must be a positive integer')
     root = Path(root).resolve()
+    if json.loads((root/'settings.json').read_text()).get('collection_protocol') == 'tp2-data-v3':
+        from scripts.collection_v3_export import export_compact
+        return export_compact(root, output, quiet, workers)
     with source_read_lock(root):
         source = Collection(root)
         output = Path(output).resolve() if output else root/f'{source.dataset}-features.npz'

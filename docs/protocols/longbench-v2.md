@@ -1,5 +1,11 @@
 # LongBench v2 protocol
 
+New data launchers use [collection v3](../deployment/COLLECTION_V3.md): nine
+actions, seeded answer records, baseline → probes → ProphetKV, and a versioned
+15,000-thinking-content / 16,384-total-output policy for thinking inputs. The
+legacy protocol descriptions below keep their original meanings. Non-thinking
+RULER source generation, task caps and scoring are unchanged.
+
 LongBench v2 retains its own protocol; RULER's non-thinking template, task output
 caps and substring scorer do not apply. Common [invariants](../agents/invariants.md)
 remove chunk markers/EOT padding without deleting genuine source/chat tokens.

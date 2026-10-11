@@ -60,6 +60,10 @@ def summarize(by_action, rows, same_count=False):
 
 def report(base, same_count=False, final=False, emit=True):
     base = Path(base); settings, plan, rows = load(base)
+    from scripts.collection_v3 import enabled
+    if enabled(settings):
+        from scripts.collection_v3_report import report as report_v3
+        return report_v3(base, same_count, final, emit)
     data = records(base)
     if final and any(len(values) != len(rows) for values in data.values()):
         raise ValueError('Cannot finalize incomplete controls')

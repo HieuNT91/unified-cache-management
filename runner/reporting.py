@@ -138,7 +138,7 @@ def metrics(records, expected):
                   unfinished_thinking=sum(r['unfinished_thinking'] for r in records))
     ruler = [r for r in records if r.get('scoring') in ('ruler_all', 'ruler_any')]
     result['ruler_score'] = round(sum(r['accuracy'] for r in ruler)/len(ruler)*100, 2) if ruler else None
-    result['ruler_nulls'] = f"{sum(not ruler_preprocess(r.get('scored_text',r['prediction'])) for r in ruler)}/{len(ruler)}" if ruler else None
+    result['ruler_nulls'] = f"{sum(r['null_prediction'] if 'null_prediction' in r else not ruler_preprocess(r.get('scored_text',r['prediction'])) for r in ruler)}/{len(ruler)}" if ruler else None
     for name in ('thinking_tokens', 'answer_tokens', 'control_tokens', 'output_tokens'):
         values = [r[name] for r in records]
         result['mean_'+name] = statistics.mean(values) if values else None

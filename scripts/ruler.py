@@ -192,7 +192,7 @@ def format_sample(tokenizer, row, task, *, template=None):
     return sample
 
 
-def format_thinking_sample(tokenizer, row, task, *, template=None):
+def format_thinking_sample(tokenizer, row, task, *, template=None, collection_v3=False):
     """Keep the upstream row intact; replace only validated chat boundaries."""
     from runner.layout import boundaries_for, stamp_sample
     from runner.thinking_budget import KEY, PROTOCOL, WINDOW, make_policy
@@ -222,7 +222,11 @@ def format_thinking_sample(tokenizer, row, task, *, template=None):
     positions = [i for i, (a, b) in enumerate(encoded['offset_mapping']) if b > begin and a < end]
     if not positions:
         raise ValueError('Missing complete question span')
-    policy = make_policy(tokenizer, row['answer_prefix'], CAPS[task], thinking_tail.endswith('<think>\n'))
+    if collection_v3:
+        from runner.output_budget import make_policy, RULER_PROTOCOL as PROTOCOL
+        policy = make_policy(tokenizer, row['answer_prefix'], thinking_tail.endswith('<think>\n'))
+    else:
+        policy = make_policy(tokenizer, row['answer_prefix'], CAPS[task], thinking_tail.endswith('<think>\n'))
     sample = dict(token_ids=ids, boundaries=boundaries_for(len(ids), positions[0]),
         question_positions=positions, thinking=True, max_output_tokens=policy['output_reserve'],
         task=task, question=question, formatted_text=text, answer_prefix=row['answer_prefix'],
@@ -286,6 +290,12 @@ def prepare(args):
         spec.update(execution_profile='ruler-thinking', thinking_cap=THINKING_CAP, engine_window=WINDOW,
                     sampling=SAMPLING, phase_policies='per-sample ruler_thinking_budget; prefixes expanded by upstream',
                     thinking_adapter=file_hash(ROOT/'runner/thinking_budget.py'))
+    if getattr(args, 'collection_v3', False):
+        from runner.output_budget import RULER_PROTOCOL, THINKING_CAP as TOTAL_THINKING_CAP, OUTPUT_CAP
+        spec['collection_protocol'] = 'tp2-data-v3'
+        if thinking:
+            spec.update(protocol=RULER_PROTOCOL, thinking_cap=TOTAL_THINKING_CAP, output_caps=None, output_limit=OUTPUT_CAP,
+                        thinking_adapter=file_hash(ROOT/'runner/output_budget.py'))
     spec = json.loads(json.dumps(spec))
     with setup_lock(args.output,build=True):
         sp = args.output/'spec.json'
@@ -323,7 +333,8 @@ def prepare(args):
             # Sharding occurs only downstream, after a complete task batch.
             for ordinal,row in enumerate(rows):
                 try:
-                    sample=(format_thinking_sample if thinking else format_sample)(tokenizer,row,task,template=templates[task])
+                    sample=(format_thinking_sample if thinking else format_sample)(tokenizer,row,task,template=templates[task],
+                        **({'collection_v3': True} if thinking and getattr(args, 'collection_v3', False) else {}))
                 except Exception as error:
                     atomic_json(args.output/'validation-error.json',dict(task=task,row=ordinal,
                         raw=str(raw),raw_sha256=file_hash(raw),error=str(error)))
@@ -342,6 +353,10 @@ def prepare(args):
         summary=dict(prompts=len(manifest),subtasks=dict(Counter(r['subtask'] for r in manifest)),
             min_input_tokens=min(lengths),max_input_tokens=max(lengths),output_caps=CAPS,
             max_seq_length=INPUT,thinking=thinking,protocol=spec['protocol'])
+        if getattr(args, 'collection_v3', False):
+            summary.update(answers=len(manifest)*9, probes=len(manifest))
+            if thinking:
+                summary.update(output_caps=None, output_limit=16384, thinking_cap=15000)
         atomic_json(complete,dict(spec=spec,files=files,summary=summary))
         print(json.dumps(summary,indent=2))
 

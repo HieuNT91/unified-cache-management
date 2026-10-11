@@ -98,6 +98,12 @@ def prepare(args):
                                  p.suffix in ('.json','.txt','.jinja','.model','.tiktoken')},
                 template_sha256=file_hash(template_path), adapter_sha256=file_hash(Path(__file__)),
                 chunker_sha256=file_hash(ROOT/'runner/cache.py'), input_limit=INPUT, output_limit=16384)
+    if getattr(args, 'collection_v3', False):
+        from runner.output_budget import PROTOCOL
+        from scripts.collection_v3 import declaration
+        spec.update(declaration('longbench-v2', getattr(args, 'answers_per_question', 4)))
+        spec.update(collection_protocol='tp2-data-v3', generation_protocol=PROTOCOL,
+                    budget_adapter_sha256=file_hash(ROOT/'runner/output_budget.py'))
     args.output = args.output.resolve()
     with setup_lock(args.output, build=True):
         receipt_path = args.output/'preparation.json'
@@ -119,6 +125,11 @@ def prepare(args):
                           model_config_sha256=spec['model_config_sha256'], source_row=index,
                           source_id=row['_id'], source_row_sha256=fingerprint(row),
                           source_metadata={k:row[k] for k in ('domain','sub_domain','difficulty','length')})
+            if getattr(args, 'collection_v3', False):
+                from runner.output_budget import make_policy, LONGBENCH_PROTOCOL
+                from runner.thinking_budget import KEY
+                sample[KEY] = make_policy(tokenizer, opening_in_prompt=sample['formatted_text'].endswith('<think>\n'))
+                sample['evaluation_protocol'] = LONGBENCH_PROTOCOL
             validate_sample(sample)
             path = args.output/'samples'/f'{index:03d}.json'
             if path.exists() and json.loads(path.read_text()) != sample:
@@ -145,6 +156,9 @@ def prepare(args):
                      max_temporary_kv_bytes_per_group=kv_bytes,
                      max_temporary_kv_GiB_two_groups=2*kv_bytes/2**30,
                      subtasks=dict(Counter(row['subtask'] for row in manifest)))
+        if getattr(args, 'collection_v3', False):
+            summary.update(answers=503*9*spec['answers_per_question'], probes=503,
+                           measurements=503*(9*spec['answers_per_question']+1))
         atomic_json(receipt_path,dict(spec=spec,files=files,summary=summary))
         print(json.dumps(summary,indent=2))
 

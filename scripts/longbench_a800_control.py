@@ -22,6 +22,8 @@ from scripts.router_control import code_hashes, environment, terminate_owned, cl
 from scripts.corpus_control import idle, check_hardware
 from scripts.longbench_a800_data import read, freeze, load, stage, SCHEDULE, ACTIONS, publish_protocols, scheduled, ruler_samples
 
+from scripts.collection_v3 import enabled, seeds, declaration, ordered_rows, PHASES
+
 
 def resolve_groups(devices, expected, tp=2, query_inventory=True):
     tokens = [v.strip() for v in devices.split(',')]
@@ -45,6 +47,9 @@ def resolve_groups(devices, expected, tp=2, query_inventory=True):
 
 def configure(args):
     naive = getattr(args, 'naive_reuse', False)
+    v3 = getattr(args, 'collection_version', 'legacy') == 'v3'
+    if v3 and (naive or getattr(args, 'extend_from', None) or args.role == 'extra' or args.tp != 2):
+        raise ValueError('Collection v3 requires a fresh TP2 primary/RULER run')
     thinking = getattr(args,'thinking',False)
     requested_hardware = getattr(args, 'hardware_profile', None)
     l40 = requested_hardware in ('l40-tp2', 'l40-tp4')
@@ -65,8 +70,9 @@ def configure(args):
             (l40 and thinking and args.samples_per_task == 200) or
             (not l40 and not thinking and args.samples_per_task == 500))):
         raise ValueError('--extend-from requires L40 thinking target200 or L20 non-thinking target500')
-    count = ruler_samples(dict(samples_per_task=args.samples_per_task, execution_profile='ruler-thinking' if thinking else 'ruler'))
     dataset = 'ruler' if args.role == 'ruler' else 'longbench-v2'
+    count = ruler_samples(dict(samples_per_task=args.samples_per_task, execution_profile='ruler-thinking' if thinking else 'ruler',
+        **({'collection_protocol': 'tp2-data-v3'} if v3 else {}))) if dataset == 'ruler' else 100
     selected = (resolve_groups(args.devices, 8, tp=required_tp, query_inventory=False) if l40
                 else resolve_groups(args.devices, 10 if dataset == 'ruler' else 4))
     hardware_profile = requested_hardware if l40 else 'l20-tp2' if dataset == 'ruler' else 'server'
@@ -82,10 +88,25 @@ def configure(args):
         from scripts.ruler import CAPS
         settings.update(execution_profile='ruler-thinking', evaluation_protocol=PROTOCOL,
                         thinking_cap=THINKING_CAP, answer_caps=CAPS, engine_window=WINDOW, sampling=SAMPLING)
+    if v3:
+        answers = getattr(args, 'answers_per_question', None)
+        settings.update(declaration(dataset, answers if answers is not None else (4 if dataset == 'longbench-v2' else 1), thinking),
+                        schema='tp2-data-config-v3', groups=selected)
+        if thinking:
+            from runner.output_budget import RULER_PROTOCOL, THINKING_CAP, OUTPUT_CAP
+            settings.update(evaluation_protocol=RULER_PROTOCOL, thinking_cap=THINKING_CAP, output_cap=OUTPUT_CAP)
+            del settings['answer_caps']
     if extend_from:
         from scripts.ruler_extension import configure_extension
         settings['extension'] = configure_extension(args, settings, selected)
         settings['samples_per_task'] = settings['extension']['target_samples_per_task']-settings['extension']['start']
+    if v3 and not (args.root/'settings.json').exists():
+        paths = [args.root.resolve(), args.prepared.resolve(), args.cache_root.resolve()]
+        if any(a == b or a in b.parents or b in a.parents for i, a in enumerate(paths) for b in paths[i+1:]):
+            raise ValueError('Collection v3 requires separate fresh result/prepared/cache paths')
+        for path in (args.prepared, args.cache_root):
+            if path.exists() and any(path.iterdir()):
+                raise ValueError('Collection v3 requires empty new prepared/cache paths')
     args.root.mkdir(parents=True, exist_ok=True)
     with (args.root/'configure.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -109,7 +130,8 @@ def progress(base, role, message, group=0):
 
 
 def pending(protocol, rows, root, cases):
-    return [r for r in rows if any(accepted(root, c, r, protocol) is None for c in cases)]
+    return [r for r in rows if any(accepted(root, c, r, protocol, **({'seed': seed} if seed is not None else {})) is None
+                                  for c in cases for seed in seeds(protocol, c))]
 
 
 def worker(base, role, phase, attempt, group=0):
@@ -122,7 +144,7 @@ def worker(base, role, phase, attempt, group=0):
     root = Path(base)/target
     cases = (['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline'
              else [c for c in protocol['scheduled_actions'] if c != 'nocache'])
-    rows = [r for r in rows if r['ordinal'] % len(protocol['groups']) == group]
+    rows = ordered_rows(rows, protocol, group)
     remaining = pending(protocol, rows, root, cases)
     if not remaining:
         return
@@ -135,7 +157,7 @@ def worker(base, role, phase, attempt, group=0):
             from runner.naive_reuse import inventory
             definitions = inventory(protocol)
         else:
-            definitions = {a['id']: a for a in ACTIONS}
+            definitions = {a['id']: a for a in protocol.get('actions', ACTIONS)}
         failure = None
         case = None
         try:
@@ -144,18 +166,20 @@ def worker(base, role, phase, attempt, group=0):
                 progress(base, role, f"{phase}: starting {row['id']}", group)
                 engine.begin(row)
                 for case in cases:
-                    if accepted(root, case, row, protocol) is not None:
-                        continue
-                    folder = record_dir(root, case, row['id'])
-                    if folder.exists():
-                        history = root/'incomplete'/f'{case}-{row["id"]}-{uuid.uuid4().hex}'
-                        history.parent.mkdir(exist_ok=True); folder.rename(history)
-                    if case == 'probe':
-                        result, diagnostics, _ = engine.probe(folder)
-                    else:
-                        result, diagnostics = engine.answer(definitions[case], case)
-                    publish(root, case, row, protocol, result, diagnostics)
-                    progress(base, role, f"{case}: accepted {row['id']}", group)
+                    for seed in seeds(protocol, case):
+                        kwargs = {'seed': seed} if seed is not None else {}
+                        if accepted(root, case, row, protocol, **kwargs) is not None:
+                            continue
+                        folder = record_dir(root, case, row['id'], **kwargs)
+                        if folder.exists():
+                            history = root/'incomplete'/f'{case}-{row["id"]}-{seed}-{uuid.uuid4().hex}'
+                            history.parent.mkdir(exist_ok=True); folder.rename(history)
+                        if case == 'probe':
+                            result, diagnostics, _ = engine.probe(folder)
+                        else:
+                            result, diagnostics = engine.answer(definitions[case], case, **kwargs)
+                        publish(root, case, row, protocol, result, diagnostics, **kwargs)
+                        progress(base, role, f"{case}: accepted {row['id']} seed={seed}", group)
                 deletion = engine.end()
                 atomic_json(root/'deletions'/f'{phase}-{row["id"]}.json', deletion)
         except BaseException as error:
@@ -320,12 +344,21 @@ def supervise(base, role):
             settings, _, _ = load(base)
             naive = settings.get('naive_reuse', False)
             # Do not ask idle() to lock our own run.lock during execute_phase.
-            for phase in (('cached',) if naive or role == 'extra' else ('baseline', 'cached')):
+            for phase in (PHASES if enabled(settings) else ('cached',) if naive or role == 'extra' else ('baseline', 'cached')):
                 execute_phase(base, role, phase, state)
+                if enabled(settings) and phase == 'features':
+                    _, _, feature_rows = load(base)
+                    freeze(base/'features/complete.json', dict(probes=len(feature_rows), owned_engines_exited=True,
+                           protocol_sha256=file_hash(base/'features/protocol.json')))
             protocol, rows = stage(base, role)
-            freeze(state_root/'controls-complete.json', dict(answers=len(rows)*len(protocol['scheduled_actions']),
+            freeze(state_root/'controls-complete.json', dict(answers=len(rows)*len(protocol['scheduled_actions'])*len(seeds(protocol)),
                    protocol_sha256=file_hash(state_root/'protocol.json'), owned_engines_exited=True))
-            if naive:
+            if enabled(settings):
+                from scripts.longbench_a800_report import report
+                report(base, final=True, emit=False)
+                from scripts.router_dataset import export_collection
+                export_collection(base, base/('ruler-data.json' if role == 'ruler' else 'longbench-data.json'))
+            elif naive:
                 from scripts.longbench_a800_report import report
                 report(base, final=True, emit=False)
             elif role != 'extra':
@@ -395,8 +428,10 @@ print(p.pid,flush=True)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('configure', 'prepare', 'detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'merge', 'supervise', 'worker'))
+    parser.add_argument('command', choices=('configure', 'prepare', 'detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'merge', 'compute-feature', 'supervise', 'worker'))
     parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--collection-version', choices=('legacy', 'v3'), default='legacy')
+    parser.add_argument('--answers-per-question', type=int)
     parser.add_argument('--thinking', action='store_true', help='Separate thinking RULER protocol')
     parser.add_argument('--naive-reuse', action='store_true', help='Only zero-repair control on existing complete prepared inputs; no generation/probes')
     parser.add_argument('--extend-from', type=Path, help='Parent RULER run: L40 thinking 30->200 or L20 non-thinking 200->500; collect only new ordinals')
@@ -407,7 +442,7 @@ def main():
         parser.add_argument('--'+name, type=Path)
     parser.add_argument('--devices', default='')
     parser.add_argument('--tp', type=int, default=2)
-    parser.add_argument('--samples-per-task', type=int, default=100)
+    parser.add_argument('--samples-per-task', type=int)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--group', type=int, default=0)
     parser.add_argument('--phase', choices=('baseline', 'cached', 'features'))
@@ -418,7 +453,16 @@ def main():
             setattr(args, name, value.resolve())
     if args.command != 'worker' and os.environ.get('CUDA_VISIBLE_DEVICES', ''):
         raise ValueError('Coordinator must be CPU-only')
+    if args.command in ('prepare', 'detach', 'resume'):
+        saved = read(args.root/'settings.json')
+        if enabled(saved) and (
+                (args.answers_per_question is not None and args.answers_per_question != saved['answers_per_question'])
+                or args.seed != saved['seed']
+                or (args.role == 'ruler' and args.samples_per_task is not None and args.samples_per_task != saved['samples_per_task'])):
+            raise ValueError('Collection arguments differ from frozen metadata; use a new run')
     if args.command == 'configure':
+        if args.samples_per_task is None:
+            args.samples_per_task = 500 if args.collection_version == 'v3' else 100
         if any(getattr(args, k) is None for k in ('model', 'data', 'prepared', 'cache_root')):
             parser.error('configure requires model/data/prepared/cache-root paths')
         configure(args)
@@ -432,6 +476,9 @@ def main():
             prepare(args.root)
     elif args.command in ('detach', 'resume'):
         detach(args.root, args.role, args.command == 'resume')
+    elif args.command == 'compute-feature':
+        from scripts.export_features import export
+        export(args.root)
     elif args.command == 'merge':
         from scripts.ruler_extension import merge_extension
         merge_extension(args.root)

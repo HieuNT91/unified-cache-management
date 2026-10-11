@@ -11,6 +11,8 @@ ACTIONS = [dict(id='nocache', method='baseline', ratio=None)] + [
     dict(id=f'prophetkv-{p}', method='prophetkv', ratio=p/100) for p in RATIOS]
 SCHEDULE = dict(primary=['nocache', *[f'prophetkv-{p}' for p in (1, 5, 20, 40, 70, 90)]],
                 extra=[f'prophetkv-{p}' for p in (10, 30, 50, 60, 80)], features=['probe'])
+from scripts.collection_v3 import enabled, seeds, validate_declaration
+
 LENGTHS = ('short', 'medium', 'long')
 
 
@@ -41,12 +43,18 @@ def assign_folds(rows, seed=42):
 
 
 def roles(settings):
+    if enabled(settings):
+        return ('ruler', 'features') if settings['dataset'] == 'ruler' else ('primary', 'features')
     if settings.get('naive_reuse'):
         return ('ruler',) if settings['dataset'] == 'ruler' else ('primary',)
     return ('ruler', 'features') if settings['dataset'] == 'ruler' else ('primary', 'extra', 'features')
 
 
 def scheduled(settings, role):
+    if enabled(settings):
+        if role not in roles(settings):
+            raise ValueError('Collection v3 has no extra launcher')
+        return ['probe'] if role == 'features' else [a['id'] for a in actions_for(settings)]
     if settings.get('naive_reuse'):
         if role not in roles(settings):
             raise ValueError('Naive reuse has no extra or features stage')
@@ -55,6 +63,9 @@ def scheduled(settings, role):
 
 
 def actions_for(settings):
+    if enabled(settings):
+        from scripts.collection_v3 import ACTIONS as V3_ACTIONS
+        return V3_ACTIONS
     if settings.get('naive_reuse'):
         from runner.naive_reuse import ACTION
         return [dict(ACTION)]
@@ -80,6 +91,10 @@ def protocol_for(settings, role, plan_sha, groups):
         protocol['naive_reuse'] = True
     if role == 'features':
         protocol['feature_profile'] = DEFINITIONS
+    if enabled(settings):
+        if groups != settings['groups']:
+            raise ValueError('TP2 shard assignment changed; use a new run')
+        protocol.update(validate_declaration(settings), schema='tp2-data-stage-v3')
     return protocol
 
 
@@ -99,12 +114,13 @@ def prepare(base):
         validate_existing(settings)
     elif dataset == 'longbench-v2':
         from scripts.longbench_v2 import prepare as prepare_inputs
-        prepare_inputs(SimpleNamespace(model=Path(settings['model']), data=Path(settings['data']), output=prepared))
+        prepare_inputs(SimpleNamespace(model=Path(settings['model']), data=Path(settings['data']), output=prepared, collection_v3=enabled(settings),
+                                       answers_per_question=settings.get('answers_per_question', 1)))
     else:
         from scripts.ruler import prepare as prepare_inputs
         prepare_inputs(SimpleNamespace(model=Path(settings['model']), ruler=Path(settings['data']), output=prepared,
                                        samples=settings.get('extension', {}).get('target_samples_per_task', settings['samples_per_task']), seed=settings['seed'],
-                                       thinking=settings.get('execution_profile') == 'ruler-thinking'))
+                                       thinking=settings.get('execution_profile') == 'ruler-thinking', collection_v3=enabled(settings)))
     receipt = read(prepared/'preparation.json')
     if file_hash(prepared/'manifest.jsonl') != receipt['files']['manifest.jsonl']:
         raise ValueError('Prepared manifest changed')
@@ -127,7 +143,9 @@ def prepare(base):
             if length not in LENGTHS:
                 raise ValueError('Expected official LongBench short/medium/long labels')
             value.update(length=length, source_id=sample['source_id'])
-        if settings.get('execution_profile') == 'ruler-thinking':
+            if enabled(settings):
+                value.update(domain=sample['source_metadata']['domain'], sub_domain=sample['source_metadata']['sub_domain'])
+        if settings.get('execution_profile') == 'ruler-thinking' or (enabled(settings) and dataset == 'longbench-v2'):
             from runner.thinking_budget import KEY, validate_sample_policy
             validate_sample_policy(sample)
             value[KEY] = sample[KEY]
@@ -136,11 +154,13 @@ def prepare(base):
     freeze(base/'rows.json', rows)
     plan = dict(schema='tp2-data-plan-v2', settings_sha256=file_hash(base/'settings.json'),
                 rows_sha256=file_hash(base/'rows.json'), preparation_sha256=file_hash(prepared/'preparation.json'),
-                samples=len(rows), answers=len(rows)*len(actions_for(settings)),
+                samples=len(rows), answers=len(rows)*len(actions_for(settings))*len(seeds(settings)),
                 probes=0 if settings.get('naive_reuse') else len(rows), actions=actions_for(settings),
                 schedule={role: scheduled(settings, role) for role in roles(settings)},
                 feature_profile=None if settings.get('naive_reuse') else DEFINITIONS, evaluation='training', training_overlap=True,
                 train_ids=[r['id'] for r in rows], heldout_ids=[], folds=assign_folds(rows), seed=42)
+    if enabled(settings):
+        plan.update(validate_declaration(settings), schema='tp2-data-plan-v3')
     if settings.get('naive_reuse'):
         plan.update(evaluation='fixed-control', training_overlap=False, train_ids=[], folds={})
     if 'extension' in settings:
@@ -152,7 +172,7 @@ def prepare(base):
 
 def ruler_samples(settings):
     count = settings.get('samples_per_task', 100)
-    allowed = (30, 200) if settings.get('execution_profile') == 'ruler-thinking' else (100, 200, 500)
+    allowed = (500,) if enabled(settings) else (30, 200) if settings.get('execution_profile') == 'ruler-thinking' else (100, 200, 500)
     if 'extension' in settings:
         ruler_start(settings)
         ext = settings['extension']
@@ -175,6 +195,17 @@ def validate_rows(settings, rows):
     expected = 503 if count is None else 13*count
     if len(rows) != expected or len({r['id'] for r in rows}) != expected:
         raise ValueError('Incomplete/duplicate dataset membership')
+    if enabled(settings):
+        from runner.output_budget import validate_policy as validate_total, RULER_PROTOCOL, LONGBENCH_PROTOCOL
+        from runner.thinking_budget import KEY
+        expected_protocol = RULER_PROTOCOL if settings.get('execution_profile') == 'ruler-thinking' else LONGBENCH_PROTOCOL if settings['dataset'] == 'longbench-v2' else None
+        if expected_protocol:
+            for row in rows:
+                if row.get('evaluation_protocol') != expected_protocol:
+                    raise ValueError('Collection generation protocol mismatch')
+                validate_total(row.get(KEY, {}))
+        if settings['dataset'] == 'longbench-v2' and any(not r.get('domain') or not r.get('sub_domain') for r in rows):
+            raise ValueError('Missing LongBench domain/sub_domain')
     if settings['dataset'] == 'longbench-v2':
         if len({r['source_id'] for r in rows}) != 503 or {r['ordinal'] for r in rows} != set(range(503)):
             raise ValueError('Expected 503 unique source rows')
@@ -183,12 +214,14 @@ def validate_rows(settings, rows):
         start = ruler_start(settings)
         if settings.get('execution_profile') == 'ruler-thinking':
             from runner.thinking_budget import PROTOCOL, KEY, validate_policy
+            if enabled(settings):
+                from runner.output_budget import RULER_PROTOCOL as PROTOCOL
             if any(r.get('evaluation_protocol') != PROTOCOL for r in rows):
                 raise ValueError('Thinking RULER evaluation identity mismatch')
             for row in rows:
                 from scripts.ruler import CAPS
                 policy = validate_policy(row[KEY])
-                if policy['answer_cap'] != CAPS.get(row['subtask']) or row['input_tokens']+policy['output_reserve'] > 82304:
+                if (not enabled(settings) and policy['answer_cap'] != CAPS.get(row['subtask'])) or row['input_tokens']+policy['output_reserve'] > 82304:
                     raise ValueError('Thinking row task cap or capacity mismatch')
         if (set(r['subtask'] for r in rows) != set(TASKS) or
                 any(sorted(r['ordinal'] for r in rows if r['subtask'] == t) != list(range(start, start+count)) for t in TASKS)):
@@ -209,6 +242,12 @@ def load(base, check_code=False):
     if settings.get('naive_reuse') and (plan['probes'] != 0 or plan['answers'] != len(rows)
             or file_hash(Path(settings['prepared'])/'preparation.json') != plan['preparation_sha256']):
         raise ValueError('Naive reuse scope or prepared receipt changed')
+    if enabled(settings):
+        declaration = validate_declaration(settings)
+        if (settings.get('schema') != 'tp2-data-config-v3' or plan.get('schema') != 'tp2-data-plan-v3'
+                or any(plan.get(k) != v for k, v in declaration.items())
+                or plan['answers'] != len(rows)*9*len(seeds(settings)) or plan['probes'] != len(rows)):
+            raise ValueError('Collection v3 plan mismatch')
     if check_code:
         from scripts.router_control import code_hashes
         if settings['code'] != code_hashes():

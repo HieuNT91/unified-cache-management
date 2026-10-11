@@ -1,5 +1,45 @@
 # Testing and evidence limits
 
+## Nine-action collection v3 (2026-10-11)
+
+124 distinct CPU tests passed across the v3 and retained regression suites. The
+combined run completed 123 tests with two additional tests explicitly skipped
+because vLLM 0.9.2 is absent from the local CPU environment. The final v3 suite
+passed all 16 tests, including one additional runtime integration test. Tests use
+Python 3.12.14, NumPy 2.5.4, CPU PyTorch 2.7.0 and transformers 4.53.2; this is not
+the recorded Python 3.10/vLLM GPU deployment environment.
+
+Coverage includes the 503 × 9 × 4 and 6,500 × 9 plans; stable TP2 assignment and
+round-robin tasks; phase barriers; per-seed generation/metrics, immutable accepted
+receipts and partial resume; native cache/retirement calls; natural/forced thinking
+closure, total output limits and deferred RULER prefix scoring; paired status
+means, seed intersections and category tables; snapshot export during collection,
+missing seeds/probes, independent exporter locks, atomic replacement/failure,
+protected outputs, 100-feature/nine-outcome shape and full portable seed membership.
+Legacy TP2, twelve-action compact/portable readers, L20/L40 extensions, naive reuse,
+no-probe controls, ownership/stop, non-thinking RULER/LongBench preparation and fast
+loading/resume tests passed. Legacy standalone compact export retains its 16 tests.
+Shell syntax, Python compilation and `git diff --check` also passed.
+
+The unavailable tests are `test_generate_wire_serialization_latency_and_probe_exclusion`
+and `test_real_scheduler_request_and_idempotent_hook_installation` in
+`tests/test_ruler_thinking.py`. The new policy's logits/scheduler and generation
+submission paths were exercised with CPU mocks; actual vLLM wire serialization,
+GPU inference and remote runtime compatibility are not established by these tests.
+No SSH, GPU job, real dataset regeneration, real-data fit, commit or push ran.
+
+Reproduce focused tests with a CPU-capable environment (the complete thinking suite
+also needs the pinned vLLM runtime):
+
+```bash
+CUDA_VISIBLE_DEVICES='' OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  "$PYTHON_BIN" -m unittest discover -s tests -p test_collection_v3.py -v
+CUDA_VISIBLE_DEVICES='' OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  "$PYTHON_BIN" -m unittest discover -s tests -p test_export_features.py -v
+```
+
+See [protocol and handoff](../deployment/COLLECTION_V3.md).
+
 ## L20/A800 naive reuse controls (2026-10-09)
 
 The subsequent A800 restriction to GPU0,1,2,3 passed all7 naive-reuse CPU

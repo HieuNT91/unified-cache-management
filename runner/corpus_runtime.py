@@ -193,7 +193,7 @@ class Engine:
         result.update(artifacts=artifacts,features=features,internal_tokens=1)
         return result,ds,attention
 
-    def answer(self,definition,case,attention=None,overhead=0.,route_started=None):
+    def answer(self,definition,case,attention=None,overhead=0.,route_started=None, *, seed=None):
         from runner.generation import generate, verify_diagnostics
         from runner.worker import drain,router_dense_receipt
         from runner.reporting import evaluation_metadata,score_answer
@@ -209,7 +209,7 @@ class Engine:
         else:sync=[]
         sync_seconds=time.perf_counter()-start
         routing_time=time.perf_counter()-route_started if route_started is not None else overhead+sync_seconds
-        output,ttft,elapsed=generate(self.llm.llm_engine,self.sample['token_ids'],self.sample['max_output_tokens'],rid,self.sample['thinking'],sample=self.sample)
+        output,ttft,elapsed=generate(self.llm.llm_engine,self.sample['token_ids'],self.sample['max_output_tokens'],rid,self.sample['thinking'],sample=self.sample, **({'seed': seed} if seed is not None else {}))
         ds=self.llm.collective_rpc(drain)
         verify_diagnostics(ds,self.sample,definition['method'],definition['ratio'],self.tp,range(64))
         if dense and output.num_cached_tokens!=0:raise ValueError('Dense request reused KV')
@@ -232,10 +232,17 @@ class Engine:
         if 'scored_text' in metrics:
             record['timings']['first_answer_content_seconds']=(routing_time+output.first_answer_content_seconds
                 if output.first_answer_content_seconds is not None else None)
-            record['output_cap_reached']=metrics['thinking_cap_reached'] or metrics['answer_cap_reached']
+            from runner.output_budget import PROTOCOL as TOTAL
+            record['output_cap_reached']=(metrics['answer_cap_reached'] if self.sample['ruler_thinking_budget']['protocol'] == TOTAL
+                else metrics['thinking_cap_reached'] or metrics['answer_cap_reached'])
             from runner.thinking_budget import KEY, validate_thinking_outcome
             validate_thinking_outcome(dict(record,ttft_seconds=record['timings']['ttft_seconds'],
                 first_answer_content_seconds=record['timings']['first_answer_content_seconds']),self.sample[KEY])
+        if seed is not None:
+            record.update(seed=seed, sequence_id=self.row['id'])
+            record.setdefault('thinking_cap_reached', False)
+            record.setdefault('answer_cap_reached', record['output_cap_reached'])
+            record.setdefault('forced_tokens', 0)
         return record,ds
 
     def end(self):

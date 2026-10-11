@@ -2,7 +2,7 @@
 import time
 
 
-def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None, phase=None):
+def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None, phase=None, seed=0):
     from vllm import SamplingParams
     from vllm.inputs import TokensPrompt
     if engine.has_unfinished_requests():
@@ -22,7 +22,7 @@ def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None,
     state = BudgetState(policy) if policy is not None else None
     answer_first = None
     params = SamplingParams(temperature=.6 if thinking else 0., top_p=.95 if thinking else 1.,
-                            top_k=20 if thinking else 32, min_p=0., seed=0, max_tokens=budget,
+                            top_k=20 if thinking else 32, min_p=0., seed=seed, max_tokens=budget,
                             extra_args=extra or None, ignore_eos=policy is not None)
     # vLLM normalizes greedy top_k to zero in __post_init__. Preserve the
     # requested RULER parameter on the wire; temperature zero remains greedy.
