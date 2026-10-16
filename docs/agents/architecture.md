@@ -86,10 +86,11 @@ YaRN4 from 32768 to 131072 positions, and vLLM 0.9.2. A run's allocation, hardwa
 and version receipts determine its actual configuration; the YaRN table size
 does not guarantee that the full window fits available GPU memory.
 
-Cache construction, committed-shard readiness and ordinary priming are separate
-stages. Priming exercises the prepared execution path before the measured answer;
-it is not the independent diagnostic probe removed from current fixed controls.
-New fixed controls validate scores/masks recorded by the answer itself. Sparse
+Collection engines proceed from cache construction and committed-shard readiness
+directly to the scheduled probe or answer; there is no per-prompt `read:prime` or
+switch to re-enable it. Initial engine warmup is separate. Standalone setup/sweep
+workflows still have their own priming stages. New fixed controls validate
+scores/masks recorded by the answer itself. Sparse
 attention scoring inside that answer remains part of its algorithm and TTFT.
 Router decision probes remain necessary when a selected policy needs attention
 features; their online overhead belongs to router timing.

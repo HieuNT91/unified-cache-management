@@ -15,12 +15,16 @@ def delta_rotation_table(table):
     return (table.float() / amplitude).to(table.dtype)
 
 
-def global_selection(scores, prefix, ratio):
+def global_selection(scores, prefix, ratio, *, sparse=None, layers=(), heads=()):
     from vllm.distributed import tensor_model_parallel_all_reduce, get_tp_group
     group = get_tp_group()
     scores = tensor_model_parallel_all_reduce(scores) / group.world_size
     eligible = scores[prefix:]
-    selected = select(eligible, prefix, ratio)
+    if sparse is not None and getattr(sparse, 'gpu_router', None) is not None:
+        from .gpu_router import route
+        selected = route(sparse, layers, heads, eligible, prefix)
+    else:
+        selected = select(eligible, prefix, ratio)
     if group.world_size > 1 and selected.numel():
         selected = group.broadcast(selected, src=0)
     return eligible, selected
@@ -50,6 +54,7 @@ def setup(worker):
     if model.__class__.__name__!='Qwen3Model' or len(model.layers)!=64:
         raise RuntimeError('Model must be an unpartitioned Qwen3 decoder (TP supported; PP unsupported)')
     sparse.model=model
+    sparse.lm=worker.model_runner.model
     group=get_kv_transfer_group()
     connector=getattr(group,"connector",group)
     sparse.connector=connector
@@ -84,13 +89,16 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     if not 0 < query_budget <= 16384:
         raise ValueError('Probe query batches must be at most 16384 tokens')
     from vllm.forward_context import get_forward_context
-    from torch.nn.attention.bias import causal_lower_right
+    from .attention import suffix_attention
     context=get_forward_context()
     meta=sparse.request
     b=meta.boundaries
     suffix_tokens=b[-1]-b[-2]
     device=positions.device
-    qp=torch.tensor(meta.question_positions,device=device)-b[-2]
+    trajectory = sparse.method in ('last_traj_4', 'last_traj_4f', 'query_traj_4f')
+    query_trajectory = sparse.method == 'query_traj_4f'
+    probe_positions = (b[-1] - 1,) if trajectory and not query_trajectory else meta.question_positions
+    qp=torch.tensor(probe_positions,device=device)-b[-2]
     suffix_positions=positions[-suffix_tokens:]
     if not torch.equal(suffix_positions,torch.arange(b[-2],b[-1],device=device)):
         raise RuntimeError('Fresh suffix positions changed')
@@ -102,8 +110,17 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     started=time.perf_counter()
     scoring_layers = sparse.scoring_layers
     capture = getattr(sparse, 'router_capture', False)
+    gpu_router = getattr(sparse, 'gpu_router', None)
+    if trajectory and (capture or gpu_router is not None or list(scoring_layers) != list(range(64))):
+        raise RuntimeError('last_traj_4 requires all layers without router capture')
+    suffix_kv = []
+    capture_layers = capture or (gpu_router is not None and any(
+        name != 'head_top1_global_jaccard_mean' for name in gpu_router['names']))
     captured = []
     head_layers = getattr(sparse, 'router_head_layers', ()) if capture else ()
+    if gpu_router is not None and 'head_top1_global_jaccard_mean' in gpu_router['names']:
+        from .gpu_router import HEAD_LAYERS
+        head_layers = HEAD_LAYERS
     captured_heads = []
     for i,layer in enumerate(sparse.model.layers):
         name=f'model.layers.{i}.self_attn.attn'
@@ -132,21 +149,21 @@ def probe(sparse,positions,embeddings,query_budget=16384):
                 indices = qp[a:a+query_budget]
                 layer_scores.add_(context_importance(q[indices],ck), alpha=len(indices)/len(qp))
             scores.add_(layer_scores)
-            if capture:
+            if capture_layers:
                 captured.append(layer_scores.detach().clone())
             del layer_scores
         if sparse.method == "selective_prophetkv" and i == scoring_layers[-1]:
             del ck,cv,q,k,v
             break
+        if trajectory:
+            suffix_kv.append((k, v))
         full_k=torch.cat((ck,k));full_v=torch.cat((cv,v))
         next_hidden, next_residual = [], []
         for a in range(0, suffix_tokens, query_budget):
             z = min(a + query_budget, suffix_tokens)
             key_end = len(ck) + z
-            output=torch.nn.functional.scaled_dot_product_attention(q[a:z].transpose(0,1)[None],
-                full_k[:key_end].transpose(0,1)[None],full_v[:key_end].transpose(0,1)[None],
-                attn_mask=causal_lower_right(z-a,key_end),enable_gqa=True,dropout_p=0.)
-            h,_=layer.self_attn.o_proj(output[0].transpose(0,1).reshape(z-a,-1))
+            output=suffix_attention(sparse,q[a:z],full_k[:key_end],full_v[:key_end],suffix_positions[a:z])
+            h,_=layer.self_attn.o_proj(output.reshape(z-a,-1))
             h,r=layer.post_attention_layernorm(h,residual[a:z])
             next_hidden.append(layer.mlp(h));next_residual.append(r)
         hidden=torch.cat(next_hidden);residual=torch.cat(next_residual)
@@ -159,14 +176,48 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     # across the TP group before ranking, so every rank repairs the same tokens.
     scores.div_(len(scoring_layers))
     local_mean = scores.detach().clone() if capture else None
-    eligible, selected = global_selection(scores, b[1], sparse.ratio)
+    native_probe_seconds = time.perf_counter()-started
+    extra = {}
+    if trajectory:
+        from .draft_readers import draft_readers
+        from .trajectory import gated_selection
+        from vllm.distributed import tensor_model_parallel_all_reduce, get_tp_group
+        rows, tokens = draft_readers(sparse, context, slots, hidden, residual, suffix_kv, b, 4)
+        del suffix_kv
+        group = get_tp_group()
+        rows = tensor_model_parallel_all_reduce(rows) / group.world_size
+        scores = tensor_model_parallel_all_reduce(scores) / group.world_size
+        fixed = sparse.method in ('last_traj_4f', 'query_traj_4f')
+        # query_traj_4f replaces row 0 with the question-query mean for both
+        # the copy gate/chain and non-copy top-k; draft generation is unchanged.
+        selected, z, copying = gated_selection(torch.cat((scores[None], rows)), b[1], sparse.ratio,
+            unbiased=fixed, lam_rel=1.0 if fixed else 0.0)
+        # Every rank consumes one identical original-position repair set.
+        if group.world_size > 1 and selected.numel():
+            selected = group.broadcast(selected, src=0)
+        eligible = scores[b[1]:]
+        extra = dict(selection_method=sparse.method, drafts=4, draft_tokens=tokens,
+            copy_z=float(z), copying=bool(copying), copy_z_threshold=2.0,
+            trajectory_lambda=16384.0, trajectory_lam_rel=1.0 if fixed else 0.0, traj_unbiased=fixed,
+            probe_question_positions=list(probe_positions),
+            selection_validation='budget-gate-range-tp-and-all-layer-coverage-v1')
+        if query_trajectory:
+            extra['trajectory_head_positions'] = list(meta.question_positions)
+            extra['trajectory_head_fusion'] = 'mean_query_tokens'
+    elif gpu_router is None:
+        eligible, selected = global_selection(scores, b[1], sparse.ratio)
+    else:
+        eligible, selected = global_selection(scores, b[1], sparse.ratio,
+            sparse=sparse, layers=captured, heads=captured_heads)
     sparse.selection_diagnostics.append(dict(kind='prophetkv_selection',request_id=meta.request_id,
         scores=eligible,selected_positions=selected,eligible_count=len(eligible),selected_count=len(selected),
         question_positions=list(meta.question_positions),prefix_tokens=b[1],suffix_tokens=suffix_tokens,
         probe_layers=len(scoring_layers),scoring_layers=list(scoring_layers),sequential_project_layers=scoring_layers[-1]+1,
         suffix_forward_layers=scoring_layers[-1] if sparse.method == "selective_prophetkv" else len(sparse.model.layers),probe_tokens_per_layer=suffix_tokens,probe_query_budget=query_budget,probe_seconds=time.perf_counter()-started,
         normalization='all_context_keys',fusion='mean_layers_fp32',ratio=sparse.ratio,
-        selection_stage='before_layer_0_qkv',alignment_count=len(sparse.connector.prophet_aligned)))
+        selection_stage='before_layer_0_qkv',alignment_count=len(sparse.connector.prophet_aligned),**extra))
+    if gpu_router is not None:
+        sparse.selection_diagnostics[-1]['native_probe_seconds'] = native_probe_seconds
     if capture:
         sparse.router_arrays = (torch.stack(captured), eligible.detach().clone(), local_mean)
         sparse.router_head_arrays = torch.stack(captured_heads) if head_layers else None

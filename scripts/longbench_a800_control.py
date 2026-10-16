@@ -137,11 +137,11 @@ def pending(protocol, rows, root, cases):
                                   for c in cases for seed in seeds(protocol, c))]
 
 
-def worker(base, role, phase, attempt, group=0):
+def worker(base, role, phase, attempt, group=0, *, stage_loader=None):
     from runner.corpus_runtime import Engine
     from runner.setups import check_environment
     target = 'features' if phase == 'features' else role
-    protocol, rows = stage(base, target)
+    protocol, rows = (stage_loader or stage)(base, target)
     if protocol.get('naive_reuse') and phase != 'cached':
         raise ValueError('Naive reuse runs only its cached answer phase')
     root = Path(base)/target
@@ -257,13 +257,13 @@ def worker_failure(receipt, code, reason=None):
                         'Inspect the worker error before resuming; the exit code alone does not identify the cause.')
 
 
-def execute_phase(base, role, phase, state):
-    settings, _, _ = load(base)
+def execute_phase(base, role, phase, state, *, run_loader=None, stage_loader=None, entrypoint=None):
+    settings, _, _ = (run_loader or load)(base)
     if settings.get('naive_reuse') and phase != 'cached':
         raise ValueError('Naive reuse runs only its cached answer phase')
     target = 'features' if phase == 'features' else role
-    protocol, rows = stage(base, target)
-    cases = ['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline' else [c for c in scheduled(settings, role) if c != 'nocache']
+    protocol, rows = (stage_loader or stage)(base, target)
+    cases = ['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline' else [c for c in protocol['scheduled_actions'] if c != 'nocache']
     if not pending(protocol, rows, base/target, cases):
         engines_idle(base/target)
         return
@@ -276,7 +276,7 @@ def execute_phase(base, role, phase, state):
             subset = [r for r in rows if r['ordinal'] % len(protocol['groups']) == group]
             if not pending(protocol, subset, base/target, cases):
                 continue
-            command = [sys.executable, '-u', str(Path(__file__).resolve()), 'worker', '--root', str(base),
+            command = [sys.executable, '-u', str(Path(entrypoint or __file__).resolve()), 'worker', '--root', str(base),
                        '--role', role, '--phase', phase, '--attempt', attempt, '--group', str(group)]
             log_path = base/role/f'{phase}-{attempt}-group{group}.log'
             with log_path.open('a') as log:
@@ -400,8 +400,8 @@ def supervise(base, role, cached_only=False):
             atomic_json(state_root/'supervisor.json', state)
 
 
-def detach(base, role, resume=False, cached_only=False):
-    stage(base, role)
+def detach(base, role, resume=False, cached_only=False, *, stage_loader=None, entrypoint=None):
+    (stage_loader or stage)(base, role)
     target = base/role
     with (target/'launch.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -412,7 +412,7 @@ def detach(base, role, resume=False, cached_only=False):
             raise ValueError('Completed launcher scope cannot be restarted')
         if (target/'supervisor.json').exists() and not resume:
             raise ValueError('Existing attempt; use resume for missing work')
-        command = ['nohup', sys.executable, '-u', str(Path(__file__).resolve()), 'supervise', '--root', str(base), '--role', role]
+        command = ['nohup', sys.executable, '-u', str(Path(entrypoint or __file__).resolve()), 'supervise', '--root', str(base), '--role', role]
         if cached_only:
             command.append('--cached-only')
         helper = '''import json,subprocess,sys

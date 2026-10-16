@@ -6,12 +6,15 @@ from .prefill import PrefillProgress, prefill_step
 from ucm.sparse.blend.blend import ReqMeta
 from .runtime import probe
 from .layers import resolve_layers
+from .attention import DEFAULT_POSITION_ATTENTION_KERNEL
 
 class ProphetKV(Blend):
     def __init__(self,config,role):
         cfg=config.kv_transfer_config.kv_connector_extra_config['ucm_sparse_config']
         cfg.setdefault('Blend',cfg['ProphetKV'])  # connector compatibility with UCM 0.3
         super().__init__(config,role)
+        self.position_attention_kernel=config.kv_transfer_config.kv_connector_extra_config.get(
+            'position_attention_kernel', DEFAULT_POSITION_ATTENTION_KERNEL)
         self.method=self.blend_config.get('method','prophetkv')
         self.ratio=self.blend_config.get('ratio',.2)
         self.scoring_layers=resolve_layers(self.method, self.blend_config.get('scoring_layers'), self.blend_config.get('num_scoring_layers'))
@@ -22,7 +25,7 @@ class ProphetKV(Blend):
         self.pending_audit=None
         self.layer_index=0
         self.prefill_state=None
-        if self.method in ('prophetkv','selective_prophetkv'):self.compute_meta={}
+        if self.method in ('prophetkv','selective_prophetkv','last_traj_4','last_traj_4f','query_traj_4f'):self.compute_meta={}
 
     def build_sparse_meta(self, scheduler_output, requests, input_batch, attn_metadata):
         self.active=False;self.pending_audit=None;self.layer_index=0

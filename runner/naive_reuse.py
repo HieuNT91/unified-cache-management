@@ -3,6 +3,9 @@ ACTION = dict(id='naive-reuse', method='naive_reuse', ratio=0.0)
 
 
 def inventory(protocol):
+    if protocol.get('schema') in ('last-traj-4-comparison-v1', 'last-traj-4f-comparison-v1', 'query-traj-4f-mean-query-comparison-v2', 'l20-ruler-thinking-traj4f-v1'):
+        from runner.last_traj_4 import inventory as trajectory_inventory
+        return trajectory_inventory(protocol)
     if protocol.get('naive_reuse') is True:
         if (protocol.get('actions') != [ACTION] or protocol.get('scheduled_actions') != [ACTION['id']]
                 or protocol.get('answer_validation') != 'native-answer-diagnostics-v1'):

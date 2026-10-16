@@ -1,10 +1,19 @@
-"""Private positional causal fusion using the pinned authors' Triton kernel.
+"""Positional causal fusion with FA2-style softmax for ragged queries.
 
 No installed vLLM code is changed. Cache writes use vLLM's existing operator;
 both ProphetKV and CacheBlend prefill attention are replaced. Decode retains
 the installed backend. Paged K/V gathers and kernel work are inside TTFT.
 """
 import torch
+
+DEFAULT_POSITION_ATTENTION_KERNEL = 'fa2-ragged-v1'
+
+
+def _tuned_ragged_attention(query, *args, **kwargs):
+    """Use the fixed tile heuristic evaluated in the October 14 inference run."""
+    from .causal_fa2_kernel import ragged_positions_attention_fwd
+    config = (32, 64, 4, 2) if len(query) <= 256 else (128, 64, 8, 3)
+    return ragged_positions_attention_fwd(query, *args, config=config, **kwargs)
 
 
 def dense_reference(q, k, v, positions):
@@ -19,6 +28,37 @@ def dense_reference(q, k, v, positions):
 
 def is_contiguous_suffix(positions,length):
     return torch.equal(positions,torch.arange(length-len(positions),length,device=positions.device))
+
+
+def positional_kernel(sparse):
+    name = getattr(sparse, 'position_attention_kernel', DEFAULT_POSITION_ATTENTION_KERNEL)
+    if name == DEFAULT_POSITION_ATTENTION_KERNEL:
+        return _tuned_ragged_attention
+    elif name == '_ragged_positions_fa2_kernel':
+        from .causal_fa2_kernel import ragged_positions_attention_fwd
+    elif name == 'original':
+        from .causal_kernel import ragged_positions_attention_fwd
+    else:
+        raise ValueError('Unknown original-position attention kernel: ' + name)
+    return ragged_positions_attention_fwd
+
+
+def suffix_attention(sparse, query, key, value, positions):
+    """Keep native suffix scoring; retain the trajectory full-FA2 opt-in."""
+    if getattr(sparse, 'position_attention_kernel', DEFAULT_POSITION_ATTENTION_KERNEL) in (
+            'original', DEFAULT_POSITION_ATTENTION_KERNEL):
+        from torch.nn.attention.bias import causal_lower_right
+        output = torch.nn.functional.scaled_dot_product_attention(
+            query.transpose(0, 1)[None], key.transpose(0, 1)[None], value.transpose(0, 1)[None],
+            attn_mask=causal_lower_right(len(query), len(key)), enable_gqa=True, dropout_p=0.)
+        return output[0].transpose(0, 1)
+    output = torch.empty_like(query)
+    zero = torch.zeros(1, device=query.device, dtype=torch.int32)
+    q_len = torch.tensor([len(query)], device=query.device, dtype=torch.int32)
+    k_len = torch.tensor([len(key)], device=query.device, dtype=torch.int32)
+    positional_kernel(sparse)(query, key, value, output, zero, q_len, zero, k_len,
+                              positions.contiguous(), len(query), is_causal=True)
+    return output
 
 def install(layer, sparse):
     """Install once per attention instance; active request state is never captured."""
@@ -35,14 +75,16 @@ def install(layer, sparse):
                 sparse.router_native_layers.add(layer.layer_name)
             return original(layer,query,key,value,kv_cache,attn_metadata,output,output_scale)
         from vllm.v1.attention.backends.flash_attn import reshape_and_cache_flash
-        from .causal_kernel import ragged_positions_attention_fwd
+        ragged_positions_attention_fwd = positional_kernel(sparse)
         if (output is None or output_scale is not None or impl.kv_cache_dtype!='auto'
             or impl.kv_sharing_target_layer_name is not None or attn_metadata.use_cascade
             or impl.sliding_window!=(-1,-1) or impl.logits_soft_cap!=0):
             raise RuntimeError('Unsupported positional fusion configuration')
         contiguous=is_contiguous_suffix(sparse.fusion_positions,len(sparse.fusion_slots))
         k_cache,v_cache=kv_cache.unbind(0)
-        if contiguous:
+        kernel_name = getattr(sparse, 'position_attention_kernel', DEFAULT_POSITION_ATTENTION_KERNEL)
+        use_fa2 = kernel_name == '_ragged_positions_fa2_kernel'
+        if contiguous and not use_fa2:
             # Native bottom-right causality is correct only for an actual,
             # contiguous suffix in original positions. This includes 0/100%
             # controls and CacheBlend's dense first layer, never arbitrary
@@ -51,11 +93,11 @@ def install(layer, sparse):
         else:
             reshape_and_cache_flash(key,value,k_cache,v_cache,attn_metadata.slot_mapping,
                 impl.kv_cache_dtype,layer._k_scale,layer._v_scale)
-        if not contiguous or sparse.audit:
+        if not contiguous or use_fa2 or sparse.audit:
             slots=sparse.fusion_slots
             k=k_cache[slots//sparse.block_size,slots%sparse.block_size]
             v=v_cache[slots//sparse.block_size,slots%sparse.block_size]
-        if not contiguous:
+        if not contiguous or use_fa2:
             ragged_positions_attention_fwd(query,k,v,output,sparse.fusion_zero,
                 sparse.fusion_q_len,sparse.fusion_zero,sparse.fusion_k_len,
                 sparse.fusion_positions,len(query),is_causal=True,sm_scale=impl.scale)
@@ -68,7 +110,9 @@ def install(layer, sparse):
             event=sparse.pending_audit[-1]
             event.update(causal_attention_verified=passed,causal_audit_queries=len(indices),
                 causal_audit_heads=query.shape[1],causal_attention_max_abs_error=error.max(),
-                attention_backend='native_verified_contiguous_suffix' if contiguous else 'authors_position_causal_triton')
+                attention_backend='ragged_positions_fa2' if (use_fa2 or
+                    (not contiguous and kernel_name == DEFAULT_POSITION_ATTENTION_KERNEL))
+                    else 'native_verified_contiguous_suffix' if contiguous else 'authors_position_causal_triton')
             if not passed:
                 raise RuntimeError('Original-position causal attention numerical audit failed')
         return output

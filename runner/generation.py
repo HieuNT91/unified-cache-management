@@ -52,13 +52,16 @@ def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None,
     return result, first, time.perf_counter() - started
 
 
-def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers):
+def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, *, gpu_scores=False):
     """Independent CPU replay of each TP rank's global scores and layer sets."""
     import math
+    if method in ('last_traj_4', 'last_traj_4f', 'query_traj_4f') and gpu_scores:
+        raise ValueError('Trajectory controls require their native trajectory evidence')
     if sorted(w['rank'] for w in workers) != list(range(tp)):
         raise RuntimeError('Missing tensor-parallel rank')
     common = None
     common_scores = None
+    common_trajectory = None
     for worker in workers:
         events = worker['diagnostics']
         steps = [e for e in events if e['kind'] == 'prefill_step']
@@ -94,15 +97,34 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers):
             if len(selections) != 1 or any(e['kind'] == 'cache_miss' for e in events):
                 raise RuntimeError('Expected exactly one successful cache selection')
             event = selections[0]
-            scores = event['scores']
             prefix, end = sample['boundaries'][1], sample['boundaries'][-2]
-            if len(scores) != end - prefix or not all(math.isfinite(s) for s in scores):
-                raise RuntimeError('Invalid selection scores')
-            if common_scores is not None and scores != common_scores:
-                raise RuntimeError('TP ranks disagree on native attention scores')
-            common_scores = scores
-            count = math.floor(len(scores) * ratio)
-            reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
+            if gpu_scores:
+                reference = event['selected_positions']
+                if ('scores' in event or event.get('gpu_score_verification') != 'finite-stable-selection-tp-equal-v1'
+                        or event['ratio'] != ratio or event['eligible_count'] != end-prefix
+                        or len(reference) != math.floor((end-prefix)*ratio)
+                        or reference != sorted(set(reference))
+                        or any(p < prefix or p >= end for p in reference)):
+                    raise RuntimeError('Invalid GPU score validation evidence')
+            else:
+                scores = event['scores']
+                if len(scores) != end - prefix or not all(math.isfinite(s) for s in scores):
+                    raise RuntimeError('Invalid selection scores')
+                if common_scores is not None and scores != common_scores:
+                    raise RuntimeError('TP ranks disagree on native attention scores')
+                common_scores = scores
+                count = math.floor(len(scores) * ratio)
+                if method in ('last_traj_4', 'last_traj_4f', 'query_traj_4f'):
+                    from runner.last_traj_4 import validate_selection
+                    reference = validate_selection(event, sample, ratio, method)
+                    trajectory = (event['draft_tokens'], event['copy_z'], event['copying'])
+                    if common_trajectory is not None and trajectory != common_trajectory:
+                        raise RuntimeError('TP ranks disagree on trajectory evidence')
+                    common_trajectory = trajectory
+                else:
+                    if event.get('selection_method') in ('last_traj_4', 'last_traj_4f', 'query_traj_4f'):
+                        raise RuntimeError('Unexpected trajectory selection for another method')
+                    reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
             if (event['selected_positions'] != reference or event['scoring_layers'] != list(expected_layers)
                     or event['fusion'] != 'mean_layers_fp32' or event['alignment_count'] != 64):
                 raise RuntimeError('Selection replay, mean or cache alignment mismatch')

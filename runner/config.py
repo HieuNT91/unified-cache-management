@@ -1,7 +1,7 @@
 """Shared clean method configuration; importable without CUDA."""
 from ucm.sparse.prophetkv.layers import resolve_layers
 
-METHODS = ('baseline', 'prophetkv', 'selective_prophetkv', 'router')
+METHODS = ('baseline', 'prophetkv', 'selective_prophetkv', 'router', 'last_traj_4', 'last_traj_4f', 'query_traj_4f')
 WINDOW = 131072
 PREFILL_BUDGET = 16384
 ROPE = dict(rope_type='yarn', factor=4.0, original_max_position_embeddings=32768)

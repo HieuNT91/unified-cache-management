@@ -69,6 +69,8 @@ class Engine:
         cfg=config(protocol['model'],self.profile,self.cached,self.cache,None,
                    protocol.get('hardware_profile','server'),tp=self.tp)
         if self.cached:
+            if 'position_attention_kernel' in protocol:
+                cfg['kv_transfer_config']['kv_connector_extra_config']['position_attention_kernel']=protocol['position_attention_kernel']
             if protocol.get('naive_reuse'):
                 for value in cfg['kv_transfer_config']['kv_connector_extra_config']['ucm_sparse_config'].values():
                     value['ratio'] = 0.0
@@ -96,9 +98,9 @@ class Engine:
             self.llm.llm_engine.engine_core.shutdown();raise
 
     def begin(self,row):
+        """Construct and commit context KV; the next read is the requested work."""
         from runner.sweep import PromptCache
         from runner.generation import generate
-        from runner.worker import drain
         self.row=row;self.sample=json.loads((Path(self.protocol['prepared'])/row['prepared']).read_text())
         validate(self.sample,self.protocol.get('execution_profile',self.protocol['dataset']));self.namespace=uuid.uuid4().hex;self.construction={}
         if file_hash(Path(self.protocol['prepared'])/row['prepared'])!=row['sha256']:raise ValueError('Input changed')
@@ -113,14 +115,8 @@ class Engine:
             self.construction['construction_seconds']=time.perf_counter()-start;start=time.perf_counter()
             self.construction['readiness']=self.pc.ready()
             self.construction['readiness_seconds']=time.perf_counter()-start
-        rid=self.rid('read:prime');start=time.perf_counter()
-        if self.cached:
-            from runner.naive_reuse import ACTION
-            arm_tree(self.llm,self.sample,rid,ACTION if self.protocol.get('naive_reuse') else PROBE,tp=self.tp)
-        generate(self.llm.llm_engine,self.sample['token_ids'],1,rid,self.sample['thinking'],sample=self.sample)
-        self.llm.collective_rpc(drain);verify_retired(self.llm,self.tp,rid,self.scheduler if self.cached else None)
-        if self.pc:self.pc.unchanged();clean_capture(self.llm,self.tp)
-        self.construction['priming_seconds']=time.perf_counter()-start
+            self.pc.unchanged()
+            clean_capture(self.llm,self.tp)
 
     def rid(self,suffix):return f"{self.namespace}:{self.row['id']}:{suffix}"
 
@@ -137,7 +133,7 @@ class Engine:
             retirement=retired,initialization=str(path.relative_to(self.root)),initialization_sha256=file_hash(path),
             timings=timings,construction=self.construction,alignment_audit=alignment)
 
-    def probe(self,folder):
+    def probe(self,folder,feature_extractor=None,capture_heads=True):
         if answer_validation(self.protocol)==NATIVE_ANSWER_VALIDATION:
             raise ValueError('Independent probes are disabled for native answer controls')
         import numpy as np
@@ -147,7 +143,7 @@ class Engine:
         folder=Path(folder);folder.mkdir(parents=True,exist_ok=True)
         started=time.perf_counter();rid=self.rid('read:probe-'+uuid.uuid4().hex)
         head_layers=()
-        if self.protocol.get('feature_profile'):
+        if self.protocol.get('feature_profile') and capture_heads:
             from runner.longbench_features import DEFINITIONS,HEAD_LAYERS
             if self.protocol['feature_profile']!=DEFINITIONS:raise ValueError('Unknown feature profile')
             head_layers=HEAD_LAYERS
@@ -177,7 +173,9 @@ class Engine:
                 raise ValueError('Probe diagnostics differ from archived native scores')
         replay_seconds=time.perf_counter()-replay_start
         features_start=time.perf_counter()
-        if head_layers:
+        if feature_extractor is not None:
+            features=feature_extractor(attention,self.sample['boundaries'][1],self.sample['boundaries'][-2])
+        elif head_layers:
             from runner.longbench_features import features as longbench_features
             features=longbench_features(attention,self.sample['boundaries'][1],self.sample['boundaries'][-2])
         else:
@@ -194,9 +192,12 @@ class Engine:
         result.update(artifacts=artifacts,features=features,internal_tokens=1)
         return result,ds,attention
 
-    def answer(self,definition,case,attention=None,overhead=0.,route_started=None, *, seed=None):
+    def answer(self,definition,case,attention=None,overhead=0.,route_started=None, *, seed=None, policy=None):
         from runner.generation import generate, verify_diagnostics
         from runner.worker import drain,router_dense_receipt
+        integrated=self.protocol.get('integrated_gpu_router',False) and self.cached
+        if integrated:
+            from runner.gpu_router import drain
         from runner.reporting import evaluation_metadata,score_answer
         mode=answer_validation(self.protocol)
         if mode==NATIVE_ANSWER_VALIDATION and (attention is not None or case=='router'):
@@ -206,13 +207,26 @@ class Engine:
         if self.cached and dense:rid+='|router-dense'
         start=time.perf_counter()
         if self.cached:
-            clean_capture(self.llm,self.tp);sync=arm_tree(self.llm,self.sample,rid,definition,tp=self.tp)
+            clean_capture(self.llm,self.tp)
+            if integrated:
+                from runner.gpu_router import arm as gpu_arm
+                from runner.worker import arm
+                sync=self.llm.collective_rpc(gpu_arm,kwargs=dict(request_id=rid,definition=definition,policy=policy,tp=self.tp))
+                if sorted(r['rank'] for r in sync)!=list(range(self.tp)):raise ValueError('Missing GPU router rank')
+                self.llm.collective_rpc(arm,kwargs=dict(request_id=rid,boundaries=self.sample['boundaries'],question_positions=self.sample['question_positions']))
+            else:
+                sync=arm_tree(self.llm,self.sample,rid,definition,tp=self.tp)
         else:sync=[]
         sync_seconds=time.perf_counter()-start
         routing_time=time.perf_counter()-route_started if route_started is not None else overhead+sync_seconds
         output,ttft,elapsed=generate(self.llm.llm_engine,self.sample['token_ids'],self.sample['max_output_tokens'],rid,self.sample['thinking'],sample=self.sample, **({'seed': seed} if seed is not None else {}))
         ds=self.llm.collective_rpc(drain)
-        verify_diagnostics(ds,self.sample,definition['method'],definition['ratio'],self.tp,range(64))
+        routed_decision=None
+        if policy is not None:
+            from runner.gpu_router import decision
+            routed_decision=decision(ds,policy)
+            definition=actions(self.protocol['actions'])[routed_decision['action']]
+        verify_diagnostics(ds,self.sample,definition['method'],definition['ratio'],self.tp,range(64),gpu_scores=integrated)
         if dense and output.num_cached_tokens!=0:raise ValueError('Dense request reused KV')
         audits=self.llm.collective_rpc(router_dense_receipt) if dense and self.cached else []
         if not dense and mode==PROBE_ANSWER_VALIDATION:
@@ -230,6 +244,9 @@ class Engine:
             answer_validation=mode,
             output_cap_reached=len(tokens)>=self.sample['max_output_tokens'],max_output_tokens=self.sample['max_output_tokens'],
             dense_receipts=audits,decision_sync=sync,**metrics,**evaluation,accuracy=score_answer(scoring_text(output.outputs[0].text,metrics,evaluation),evaluation))
+        if routed_decision is not None:
+            record.update(decision=routed_decision,independent_probes=0,
+                probe_count_per_rank=[sum(e['kind']=='prophetkv_selection' for e in w['diagnostics']) for w in ds])
         if 'scored_text' in metrics:
             record['timings']['first_answer_content_seconds']=(routing_time+output.first_answer_content_seconds
                 if output.first_answer_content_seconds is not None else None)

@@ -16,11 +16,11 @@ outputs/
 !.env.l20.example
 !.env.l20.thinking.example
 !.env.l40.thinking.example
+!.env.l20.thinking.traj4f.example
 
 # Local workspace data, archived files and agent configuration.
 /.analysis/
 /.trash/
 /.worktrees/
-/.agents/
 /.codex/
 /.aws/

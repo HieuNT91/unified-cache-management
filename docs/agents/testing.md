@@ -1,5 +1,35 @@
 # Testing and evidence limits
 
+## L20 trajectory launcher and removal of collection priming (2026-10-16)
+
+63 distinct focused CPU tests passed:3 collection-no-priming,7 L20 launcher,
+4 FA2 attention,18 trajectory math/runtime/native-evidence, and31 retained
+cached-only/v3/source-update/lightweight-loading tests. The priming removal
+supersedes the earlier cached-only behavior described below.
+
+Coverage includes construction/retirement/readiness ordering without a discarded
+full-prompt read; readiness and immutability failures; ten UUIDs/five TP2 shards;
+read-only adoption, unchanged input bytes/mtimes and metadata-only resume;
+feature-then-method scheduling without baseline; custom detached supervisor and
+worker entry points; accepted thinking answers; and no false final completion.
+Synthetic13x500 membership gives6500 probes and52000 answers at the eight ratios.
+
+Attention checks exercise suffix and sparse/contiguous dispatch, original Q
+positions, decode bypass and GQA. The supplied candidate's arithmetic and wrapper
+defaults match after normalizing docstring whitespace. Six FP32 causal/GQA/partial
+tile cases matched an independent dense reference under Triton3.3's CPU
+interpreter with NumPy2.2.6. Its interpreter failed with NumPy2.5 scalar conversion;
+only the temporary test environment was changed, not the kernel or site-packages.
+The optional interpreter test reports this known environment limitation as a skip.
+This is not CUDA/BF16 correctness or L20 performance evidence.
+
+The new suites are `test_collection_no_priming`, `test_l20_traj4f` and
+`test_fa2_attention`. Retained regressions are `test_cached_only`,
+`test_collection_v3`, `test_source_updates`, `test_lightweight_loading` and the
+math/runtime/native-evidence classes from `test_last_traj_4`/`test_last_traj_4f`.
+Shell/Python3.10 syntax and diff checks passed. No GPU, SSH, commit or push ran.
+See [deployment commands](../deployment/L20_RULER_THINKING_TRAJ4F.md).
+
 ## Resume cached answers without features (2026-10-16)
 
 27 CPU tests passed across `test_cached_only`, `test_collection_v3` and

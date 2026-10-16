@@ -91,8 +91,12 @@ def tree_mode(worker,request_id,definition,capture=False,head_layers=()):
     if naive and (definition != ACTION or capture or head_layers):
         raise ValueError('Invalid naive reuse action')
     if is_dense_request(request_id)!=dense or (capture and definition['ratio']!=.01):raise ValueError('Invalid tree request tag/probe')
-    configure(worker,'prophetkv',.01 if definition['ratio'] is None else definition['ratio'])
+    trajectory=definition['method'] in ('last_traj_4','last_traj_4f','query_traj_4f')
+    if trajectory and (capture or head_layers):
+        raise ValueError('last_traj_4 does not support independent feature capture')
+    configure(worker,definition['method'] if trajectory else 'prophetkv',.01 if definition['ratio'] is None else definition['ratio'])
     sparse=get_ucm_sparse()
+    sparse.gpu_router=None
     sparse.naive_reuse=naive
     if sparse.router_arrays is not None or sparse.router_capture:raise RuntimeError('Capture leaked')
     if head_layers:

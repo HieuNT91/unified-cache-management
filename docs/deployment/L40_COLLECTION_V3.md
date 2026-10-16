@@ -21,9 +21,12 @@ reads the env file automatically and forwards `--cached-only` to the detached
 supervisor. Stop the previous owned supervisor with the launcher's `stop` command
 before resuming in this mode; changing an env file does not change a live process.
 
-This changes scheduling only. Cached answers still perform construction, readiness,
-`read:prime`, native sparse scoring and retirement; the prime timeout is not fixed
-by skipping independent feature collection.
+The collection runtime no longer submits `read:prime`; there is no priming env
+switch. After construction and committed-shard readiness, the next request is
+the requested probe or answer. Cached answers retain native sparse scoring,
+all-layer alignment, cache immutability and retirement. The first real request
+can include cold kernel compilation. Removing this extra read does not establish
+or fix the underlying external-KV transfer timeout; it can recur in a real read.
 
 Completion writes `ruler/cached-complete.json` and updates the normal status report.
 It does not claim the full collection is complete or export a dataset with missing

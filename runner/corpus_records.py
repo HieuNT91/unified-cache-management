@@ -90,7 +90,15 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
         if result['internal_tokens']!=1 or len(result.get('artifacts',[]))!=tp:raise ValueError('Incomplete independent probe')
         if any(saved['files'].get(a['path'])!=a['sha256'] for a in result['artifacts']):raise ValueError('Unpinned attention')
     else:
-        if case!='router' and result['executed_action']!=case:raise ValueError('Accepted action differs from inventory')
+        study_router=(protocol.get('schema') in ('live-study-confirm-v1','live-study-gpu-router-v2') and
+                      case in {p['id'] for p in protocol.get('policies',[])})
+        if study_router:
+            if protocol.get('schema')=='live-study-gpu-router-v2':
+                from runner.gpu_router import validate_record
+            else:
+                from runner.live_study import validate_record
+            validate_record(root,case,protocol,result,folder,full)
+        elif case!='router' and result['executed_action']!=case:raise ValueError('Accepted action differs from inventory')
         if not math.isfinite(result['accuracy']) or not 0<=result['accuracy']<=1:raise ValueError('Invalid score')
         if case=='nocache' and (result['num_cached_tokens']!=0 or initial['engine_config'].get('kv_transfer_config')):
             raise ValueError('Baseline is not connector-free')
@@ -100,13 +108,13 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
         raise ValueError('Invalid timing')
     if (protocol.get('execution_profile')=='ruler-thinking' or (enabled(protocol) and protocol['dataset']=='longbench-v2')) and case!='probe':
         from runner.thinking_budget import KEY, PROTOCOL, validate_thinking_outcome
-        expected_protocol = row.get('evaluation_protocol') if enabled(protocol) else PROTOCOL
+        expected_protocol = row.get('evaluation_protocol') if enabled(protocol) else protocol.get('evaluation_protocol', PROTOCOL)
         if result.get(KEY)!=row[KEY] or result.get('evaluation_protocol')!=expected_protocol:
             raise ValueError('Thinking result policy/provenance changed')
         validate_thinking_outcome(dict(result,ttft_seconds=result['timings']['ttft_seconds'],
             first_answer_content_seconds=result['timings'].get('first_answer_content_seconds')),row[KEY])
     if full and case=='router':validate_routed(root,folder,row,protocol,result)
-    if full and case!='router':
+    if full and case!='router' and not (protocol.get('schema') in ('live-study-confirm-v1','live-study-gpu-router-v2') and case in {p['id'] for p in protocol.get('policies',[])}):
         from runner.generation import verify_diagnostics
         from runner.corpus import load_attention,match_answer
         sample=json.loads(relative(prepared or protocol['prepared'],row['prepared']).read_text())
