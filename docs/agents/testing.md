@@ -1,5 +1,19 @@
 # Testing and evidence limits
 
+## L40 outer RPC deadline and transfer progress (2026-10-16)
+
+34 focused CPU tests passed:8 transfer/launcher tests,6 source-update tests and
+20 TP2 collection tests. The launcher test exercises15 combinations of commands,
+TP2/TP4 defaults, `.env` values and inherited overrides, including a child process.
+A simulated1,017-block load completes16 batches below120 seconds each but exceeds
+300 seconds overall; progress reports the final batch only after its wait succeeds.
+Failed waits retain pending tasks and timing state, with no false completion log.
+Existing resume tests still preserve accepted no-cache records and prepared inputs.
+
+Shell syntax, Python3.10 syntax parsing and `git diff --check` passed. These are CPU
+checks; no SSH, GPU execution or server throughput measurement was performed.
+The2400-second outer deadline does not establish the cause of slow worker execution.
+
 ## L40 transfer and source updates (2026-10-16)
 
 The staged source snapshot ran119 CPU tests:116 passed, including all12 new

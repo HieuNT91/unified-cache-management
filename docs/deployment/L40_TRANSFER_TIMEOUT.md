@@ -41,6 +41,41 @@ baseline và thuật toán ProphetKV giữ nguyên.
 
 ## Pull và resume cùng run
 
+### Phiên mới: timeout RPC sau300 giây
+
+Log `features-104f74782b6d4ffbbcba62dd297afe25-group2.log` và receipt xác nhận
+`max_load_blocks=64` đã có hiệu lực. Prime bắt đầu05:44:14, engine báo lỗi05:49:14.
+Đây là deadline300 giây của RPC `execute_model` bao ngoài cả các lô KV tuần tự
+và model forward. vLLM0.9.2 đặt mặc định này trong
+[`VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS`](https://github.com/vllm-project/vllm/blob/v0.9.2/vllm/envs.py#L843-L846).
+Bản chia lô trước đó bỏ sót việc cấu hình deadline bao ngoài này.
+
+Launcher L40 TP2 nay mặc định RPC2400 giây; chỉnh trực tiếp trong
+`.env.l40.thinking` của checkout chạy launcher:
+
+```bash
+VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS="2400"
+```
+
+Launcher tự đọc và export file; không cần `source` hoặc export thủ công.
+Biến đã có trong shell vẫn ưu tiên hơn file theo quy tắc loader hiện có.
+Mốc2400 giây cho phép16 lô ×120 giây cùng phần tính toán còn lại; đây là ngân
+sách hữu hạn, không phải cam kết mọi request hoàn thành trước hạn. Hash trùng
+có thể tạo thêm lô. Timeout backend vẫn120 giây/lô; lỗi KV vẫn dừng engine.
+TP4 không được tự đặt mặc định mới, còn cấu hình tường minh vẫn được truyền qua.
+
+Log mới ghi `KV load pid=... load=... batch=.../... blocks=... submit`, rồi
+`complete batch_seconds=... total_seconds=...` sau khi wait thành công, kể cả
+lô cuối. `all batches complete` chỉ xuất hiện khi đã wait thành công lô cuối;
+`wait failed` giữ nguyên task pending và lỗi gốc. PID giúp phân biệt các worker.
+Nếu cả hai rank đã báo hoàn tất tất cả lô của lần load này trước RPC timeout,
+cần xem phần thực thi sau load. Nếu dừng giữa các lô, log xác định lô đang chờ.
+
+Log hiện có chưa phân biệt transfer chậm với phần tính toán sau đó. Khoảng264
+giây từ populate cuối05:39:50 đến prime05:44:14 cũng chưa xác định thời gian nằm
+ở xử lý chunk cuối, retirement hay readiness. Tăng RPC budget xử lý deadline
+bao ngoài; không chứng minh đã sửa nguyên nhân chạy chậm trên server.
+
 Theo yêu cầu ngày2026-10-16, các controller collection/corpus/router bỏ điều kiện
 source hiện tại phải khớp hash lúc configure, bao gồm prepare và resume. Configure
 lại cùng tham số giữ nguyên hash lịch sử. `settings.code` không bị sửa; metadata,
@@ -48,7 +83,7 @@ protocol, input/token/layout, policy, kết quả accepted và process ownership
 được kiểm tra. Mỗi engine session mới ghi `execution_code` trong
 `initialization.json`, bên cạnh cấu hình thực tế có `max_load_blocks=64`.
 
-Máy local không truy cập được L40. Chạy block sau **trên L40** trong checkout mà
+Máy local không truy cập được L40. Sau khi push thay đổi, chạy block sau **trên L40** trong checkout mà
 log đang dùng. `stop` chỉ dừng process thuộc run này, kiểm tra identity và giữ kết
 quả. `pull --ff-only` dùng branch được chỉ định nên dùng được cả khi worktree đang
 ở detached HEAD. Block dừng ngay nếu stop/pull lỗi; không reset hoặc ghi đè local edits.
@@ -56,26 +91,17 @@ quả. `pull --ff-only` dùng branch được chỉ định nên dùng được 
 ```bash
 (
 set -e
-REPO=/home/zhufangzhou/jh/projects/unified-cache-management
-RUN="$REPO/outputs/ruler-l40-tp2-thinking-500-v3"
-PY=/home/zhufangzhou/jh/envs/ucm/bin/python
-cd "$REPO/.worktrees/ruler-l40-tp2-thinking-500-v3"
-export CUDA_HOME=/home/zhufangzhou/jh/envs/cuda-12.8
-export LD_LIBRARY_PATH="$CUDA_HOME/targets/x86_64-linux/lib:$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export PATH="$CUDA_HOME/bin:$(dirname "$PY"):$PATH"
-export NLTK_DATA=/home/zhufangzhou/jh/nltk_data
-export PYTHONPATH="$PWD" CUDA_VISIBLE_DEVICES=''
-export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1
-
-"$PY" scripts/longbench_a800_control.py stop --root "$RUN" --role ruler
+cd /home/zhufangzhou/jh/projects/unified-cache-management/.worktrees/ruler-l40-tp2-thinking-500-v3
+bash scripts/launcher/l40_ruler_thinking_data.sh stop
 git pull --ff-only origin prophetkv/tp2-router-data
-"$PY" scripts/longbench_a800_control.py resume --root "$RUN" --role ruler
-"$PY" scripts/longbench_a800_control.py status --root "$RUN" --role ruler
+bash scripts/launcher/l40_ruler_thinking_data.sh resume
+bash scripts/launcher/l40_ruler_thinking_data.sh status
 )
 ```
 
 Controller đọc model, prepared, cache-root, TP2 và bốn cặp GPU UUID từ metadata
-của run cũ. Không cần nạp `.env` TP4/30 cũ, configure hoặc prepare lại. User vẫn
+của run cũ. Giữ `.env.l40.thinking` hiện có và thêm dòng timeout trên; không chép
+đè toàn bộ file. Không cần configure hoặc prepare lại. User vẫn
 kiểm tra availability của các GPU đã gán trước resume. No-cache đã accepted được
 bỏ qua; feature probes còn thiếu chạy tiếp, rồi các answer ProphetKV còn thiếu.
 Inputs và seed giữ nguyên. Không xóa `records`, `validated.json`, settings, plan
@@ -90,16 +116,24 @@ Nếu từng lô64 vẫn timeout, giữ worker log và `failure.json`, đọc `c
 settings rồi kiểm tra storage trên server:
 
 ```bash
+RUN=/home/zhufangzhou/jh/projects/unified-cache-management/outputs/ruler-l40-tp2-thinking-500-v3
+PY=/home/zhufangzhou/jh/envs/ucm/bin/python
 CACHE_ROOT=$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["cache_root"])' "$RUN/settings.json")
 findmnt -T "$CACHE_ROOT"
 df -hT "$CACHE_ROOT"
 iostat -xz 1 5  # Nếu server đã có sysstat.
 ```
 
-Các biến `PY`/`RUN` ở block resume nằm trong subshell; đặt lại chúng nếu chạy block
-chẩn đoán riêng. Log chưa xác định storage hay backend là nguyên nhân gốc.
+Log chưa xác định storage hay backend là nguyên nhân gốc.
 
 ## Kiểm tra
+
+Phần deadline RPC/log tiến độ:34 tests CPU pass (8 transfer/launcher,6 source
+update,20 TP2 collection). Test fake-clock mô phỏng16 lô đều dưới120 giây nhưng
+tổng324 giây; xác nhận chỉ báo hoàn tất sau wait lô cuối và giữ task lỗi pending.
+Launcher được chạy với15 tổ hợp lệnh/TP/env, kiểm tra cấu hình được process con
+kế thừa. Resume vẫn giữ no-cache accepted. Shell/Python3.10 syntax và diff check
+pass; chưa kiểm chứng GPU hoặc tốc độ server.
 
 Trên snapshot đúng phần commit:119 tests được gọi,116 pass;3 test không chạy được
 do local thiếu vLLM/matplotlib (scheduler thật, export capture và plot report).

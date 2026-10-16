@@ -1,6 +1,6 @@
 # L40 collection v3
 
-For `PC::S2D timeout(120000)` during priming, see
+For `PC::S2D timeout(120000)` or a 300-second `execute_model` RPC timeout during priming, see
 [the transfer diagnosis and bounded-load patch](L40_TRANSFER_TIMEOUT.md).
 ProphetKV attention remains unchanged. Source hashes are provenance only; the
 guide includes pull/resume commands that preserve old no-cache results and inputs.
@@ -40,6 +40,7 @@ EXPERIMENT_DIR="$PROJECT/outputs/ruler-l40-tp2-thinking-500-v3"
 PREPARED_DIR="$PROJECT/inputs/ruler-l40-tp2-thinking-500-v3"
 CACHE_ROOT="$PROJECT/.cache/ruler-l40-tp2-thinking-500-v3"
 TP="2"
+VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS="2400"
 GPU_DEVICES="GPU-f1523b4e-7652-3c0a-a4ce-00b6a9035eb7,GPU-0ba0b63b-10f2-8b99-022f-53776add2f98,GPU-7e88e081-b436-d6b1-1566-fef586a00bd2,GPU-0a78dc8d-9e48-ee78-6f8c-16ab702264a4,GPU-b05b518f-f9cc-5fec-dece-a622a320171f,GPU-d1b70968-82cf-fa4f-b832-e07ec6141b51,GPU-fff11353-d6c1-e416-e681-a6c345fd8c67,GPU-d570360a-f461-72cb-d8df-d9ad0da25252"
 SAMPLES_PER_TASK="500"
 SEED="42"

@@ -19,6 +19,11 @@ collection_args=(--collection-version v3)
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 TP="${TP:-2}"
+if [[ "$TP" == 2 ]]; then
+  # execute_model covers every serial KV batch plus the model forward. PcStore
+  # still enforces its independent 120-second timeout on each batch.
+  export VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS="${VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS:-2400}"
+fi
 default_run=ruler-l40-tp2-thinking-500-v3
 if [[ "$TP" == 4 ]]; then
   collection_args=(--collection-version legacy)

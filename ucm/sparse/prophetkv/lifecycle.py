@@ -1,5 +1,11 @@
 """Namespace and transfer lifecycle, shared by worker and private connector."""
+import os
 import re
+from time import monotonic
+
+from ucm.logger import init_logger
+
+logger = init_logger(__name__)
 
 
 def namespace_from_id(request_id):
@@ -28,6 +34,8 @@ class TrackedStore:
         self.store = store
         self.max_load_blocks = max_load_blocks
         self.pending = {}
+        self._load_timings = {}
+        self._load_serial = 0
         self.completed = 0
         self.router_dense = False
         self.operations = dict(lookup=0,load=0,store=0)
@@ -97,12 +105,18 @@ class TrackedStore:
             seen.add(key)
         if indices:
             batches.append(indices)
+        self._load_serial += 1
+        load_started = monotonic()
         task = None
-        for indices in batches:
+        for number, indices in enumerate(batches, 1):
             if task is not None:
                 self.wait(task)
+            label = (os.getpid(), self._load_serial, number, len(batches), len(indices))
+            logger.info('KV load pid=%d load=%d batch=%d/%d blocks=%d submit', *label)
+            batch_started = monotonic()
             task = self._submit('load_data', [block_ids[i] for i in indices],
                 [shard_index[i] for i in indices], [dst_addr[i] for i in indices])
+            self._load_timings[id(task)] = (label, batch_started, load_started)
         return task if task is not None else RepeatedLoad(())
 
     def dump_data(self, *args, **kwargs):
@@ -113,9 +127,29 @@ class TrackedStore:
             for child in task.tasks:
                 self.wait(child)
             return None
-        result = self.store.wait(task)
+        timing = self._load_timings.get(id(task))
+        try:
+            result = self.store.wait(task)
+        except Exception:
+            if timing is not None:
+                label, batch_started, load_started = timing
+                now = monotonic()
+                logger.error('KV load pid=%d load=%d batch=%d/%d blocks=%d wait failed '
+                             'batch_seconds=%.3f total_seconds=%.3f',
+                             *label, now - batch_started, now - load_started)
+            raise
         if self.pending.pop(id(task), None) is not None:
             self.completed += 1
+        timing = self._load_timings.pop(id(task), None)
+        if timing is not None:
+            label, batch_started, load_started = timing
+            now = monotonic()
+            logger.info('KV load pid=%d load=%d batch=%d/%d blocks=%d complete '
+                        'batch_seconds=%.3f total_seconds=%.3f',
+                        *label, now - batch_started, now - load_started)
+            if label[2] == label[3]:
+                logger.info('KV load pid=%d load=%d all batches complete total_seconds=%.3f',
+                            label[0], label[1], now - load_started)
         return result
 
     def drain(self):
@@ -150,6 +184,7 @@ def retire(worker):
         sparse.selection_diagnostics.clear()
         sparse.active = False
         sparse.router_capture = False
+        sparse.gpu_router = None
         sparse.router_arrays = None
         sparse.router_head_layers = ()
         sparse.router_head_arrays = None
