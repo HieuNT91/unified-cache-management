@@ -131,6 +131,7 @@ def configure(a):
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);idle(a.root)
         target=a.root/'settings.json'
         if target.exists():
+            settings['code']=json.loads(target.read_text())['code']
             if json.loads(target.read_text())!=settings:raise ValueError('Settings changed; use a new collection version/output path')
         else:
             if any(p.name!='launch.lock' for p in a.root.iterdir()):raise ValueError('Use a new empty result directory')
@@ -147,7 +148,6 @@ def configure(a):
 
 def load_run(root,hardware=True,publish=True):
     root=Path(root);s=json.loads((root/'settings.json').read_text())
-    if s['code']!=code_hashes():raise ValueError('Configured implementation changed; use a new version')
     rows=read_rows(s)
     limit=json.loads((root/'tranche.json').read_text())['limit_per_task']
     if s['dataset']=='ruler':

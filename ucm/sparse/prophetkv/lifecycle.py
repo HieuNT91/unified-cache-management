@@ -22,8 +22,11 @@ class RepeatedLoad:
 
 class TrackedStore:
     """Retain every asynchronous operation until its backend wait succeeds."""
-    def __init__(self, store):
+    def __init__(self, store, max_load_blocks=None):
+        if max_load_blocks is not None and (type(max_load_blocks) is not int or max_load_blocks <= 0):
+            raise ValueError('max_load_blocks must be a positive integer')
         self.store = store
+        self.max_load_blocks = max_load_blocks
         self.pending = {}
         self.completed = 0
         self.router_dense = False
@@ -49,6 +52,8 @@ class TrackedStore:
     def load_data(self, block_ids, shard_index=None, dst_addr=None):
         if getattr(self, 'router_dense', False):
             raise RuntimeError('UCM transfer attempted during dense fallback')
+        if self.max_load_blocks is not None:
+            return self._load_bounded(block_ids, shard_index, dst_addr)
         if len(block_ids) == len(set(block_ids)):
             return self._submit('load_data', block_ids, shard_index, dst_addr)
         if len(block_ids) != len(shard_index) or len(block_ids) != len(dst_addr):
@@ -71,6 +76,34 @@ class TrackedStore:
         # Each backend task is tracked separately, including already submitted
         # batches if a later submission fails. Retirement waits for all of them.
         return RepeatedLoad(tasks)
+
+    def _load_bounded(self, block_ids, shard_index, dst_addr):
+        """Keep at most one bounded read in flight, including repeated hashes.
+
+        A whole 64K prompt otherwise becomes one 128K-tensor PcStore task per
+        rank with a single transfer timeout. Retire each batch before submitting
+        the next; a failed wait remains pending and prevents further submission.
+        The final batch is waited by the connector's ordinary load barrier.
+        """
+        if (shard_index is None or dst_addr is None or len(block_ids) != len(shard_index)
+                or len(block_ids) != len(dst_addr)):
+            raise ValueError('Cache load hashes, shards and destination rows differ')
+        batches, indices, seen = [], [], set()
+        for i, key in enumerate(block_ids):
+            if indices and (len(indices) == self.max_load_blocks or key in seen):
+                batches.append(indices)
+                indices, seen = [], set()
+            indices.append(i)
+            seen.add(key)
+        if indices:
+            batches.append(indices)
+        task = None
+        for indices in batches:
+            if task is not None:
+                self.wait(task)
+            task = self._submit('load_data', [block_ids[i] for i in indices],
+                [shard_index[i] for i in indices], [dst_addr[i] for i in indices])
+        return task if task is not None else RepeatedLoad(())
 
     def dump_data(self, *args, **kwargs):
         return self._submit('dump_data', *args, **kwargs)

@@ -76,7 +76,8 @@ class Engine:
                 r['id']:json.loads((Path(protocol['prepared'])/r['prepared']).read_text())['boundaries'] for r in rows}
         start=time.perf_counter();self.llm=start_engine(cfg)
         try:
-            init=dict(model_load_seconds=time.perf_counter()-start,engine_config=cfg)
+            from scripts.router_control import code_hashes
+            init=dict(model_load_seconds=time.perf_counter()-start,engine_config=cfg,execution_code=code_hashes())
             init['setup']=self.llm.collective_rpc(setup);validate_initialization(init['setup'],self.profile,protocol.get('hardware_profile','server'),tp=self.tp)
             self.analyzer=OutputAnalyzer(self.llm.get_tokenizer())
             warmup_started=time.perf_counter()

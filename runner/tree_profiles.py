@@ -59,6 +59,10 @@ def config(model,dataset,cached,cache,delimiter=None,hardware='server',tp=4):
     result.update(max_model_len=p['kv_tokens'],
                   hf_overrides=dict(max_position_embeddings=32768,ucm_activation_tile=4096))
     if profile['kv_cache_mode']=='fixed':result['num_gpu_blocks_override']=p['kv_blocks']
+    if cached and hardware == 'l40-tp2':
+        # Bound each PcStore task to one context chunk instead of all 64K KV.
+        # This is captured in initialization.json with the rest of the config.
+        result['kv_transfer_config']['kv_connector_extra_config']['max_load_blocks'] = 64
     return result
 
 

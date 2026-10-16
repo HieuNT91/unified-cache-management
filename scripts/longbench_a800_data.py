@@ -229,6 +229,10 @@ def validate_rows(settings, rows):
 
 
 def load(base, check_code=False):
+    """Load immutable run metadata; check_code is a legacy, ignored argument.
+
+    Source hashes record provenance, not permission to resume after a code fix.
+    """
     base = Path(base); settings = read(base/'settings.json'); plan = read(base/'plan.json')
     if (file_hash(base/'settings.json') != plan['settings_sha256']
             or file_hash(base/'rows.json') != plan['rows_sha256']):
@@ -248,10 +252,6 @@ def load(base, check_code=False):
                 or any(plan.get(k) != v for k, v in declaration.items())
                 or plan['answers'] != len(rows)*9*len(seeds(settings)) or plan['probes'] != len(rows)):
             raise ValueError('Collection v3 plan mismatch')
-    if check_code:
-        from scripts.router_control import code_hashes
-        if settings['code'] != code_hashes():
-            raise ValueError('Implementation changed; keep the original checkout for resume')
     return settings, plan, rows
 
 

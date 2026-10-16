@@ -1,5 +1,10 @@
 # L40 collection v3
 
+For `PC::S2D timeout(120000)` during priming, see
+[the transfer diagnosis and bounded-load patch](L40_TRANSFER_TIMEOUT.md).
+ProphetKV attention remains unchanged. Source hashes are provenance only; the
+guide includes pull/resume commands that preserve old no-cache results and inputs.
+
 Use the [v3 protocol](COLLECTION_V3.md) for this fresh `ruler-l40-tp2-thinking-500-v3` run. Physical GPUs:
 0–7, paired 0/1, 2/3, 4/5, 6/7. All devices are explicit UUIDs below. These are stored assignments; no
 remote hardware status was checked during implementation.

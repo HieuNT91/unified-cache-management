@@ -39,8 +39,7 @@ def main():
             atomic_json(target/'launch.json',receipt);state.update(state='longbench',child=receipt);atomic_json(base/'sequence.json',state)
             code=child.wait()
             if code:raise RuntimeError(f'LongBench failed ({code}); preserved logs')
-            if file_hash(ROOT/'scripts/rpkv_gpu_results.py')!=state['reporter_sha256']:raise ValueError('Reporter source changed')
-            state.update(state='reporting');atomic_json(base/'sequence.json',state)
+            state.update(state='reporting',execution_reporter_sha256=file_hash(ROOT/'scripts/rpkv_gpu_results.py'));atomic_json(base/'sequence.json',state)
             with (base/'final-report.log').open('w') as log:
                 subprocess.run([sys.executable,'-u',str(ROOT/'scripts/rpkv_gpu_results.py'),'--root',str(base)],env=environment(),cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,check=True)
             state.update(state='complete',finished_at=time.time())

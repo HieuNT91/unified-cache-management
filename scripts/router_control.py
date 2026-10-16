@@ -30,6 +30,7 @@ def groups(a,b):
 
 
 def code_hashes():
+    """Source provenance only; these hashes do not gate launch or resume."""
     paths=[ROOT/'run.py',ROOT/'run.sh']
     for base in ('runner','ucm','scripts'):
         paths.extend(p for p in (ROOT/base).rglob('*') if p.is_file() and p.suffix in ('.py','.sh','.json')
@@ -48,6 +49,7 @@ def configure(args):
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         target=root/'settings.json'
         if target.exists():
+            settings['code']=json.loads(target.read_text())['code']
             if json.loads(target.read_text())!=settings:raise ValueError('Existing router settings differ; use new result paths')
         else:
             if any(p.name!='configure.lock' for p in root.iterdir()):raise ValueError('Use a new empty router result directory')
@@ -57,8 +59,8 @@ def configure(args):
 
 def load_run(root, publish=True):
     root=Path(root);settings=json.loads((root/'settings.json').read_text())
-    if settings['code']!=code_hashes() or settings['cohort_sha256']!=fingerprint('rpkv-original-ruler-13x500-seed42'):
-        raise ValueError('Configured code/cohort changed; review before using a new experiment directory')
+    if settings['cohort_sha256']!=fingerprint('rpkv-original-ruler-13x500-seed42'):
+        raise ValueError('Configured cohort changed; use a new experiment directory')
     rows=load_prepared(settings['prepared'])
     policy=load_policy(settings['policy'])
     from runner.layout import PROMPT_PROTOCOL

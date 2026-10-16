@@ -30,14 +30,15 @@ class PersistentBlendConnector(UCMBlendConnector):
 
     def _create_store(self, *args, **kwargs):
         store = super()._create_store(*args, **kwargs)
+        max_load_blocks = self.launch_config.get('max_load_blocks')
         config = self.launch_config.get('persistent_setup')
         if config:
             from runner.setup_store import SetupStore
-            return SetupStore(store, config, self.global_rank)
+            return SetupStore(store, config, self.global_rank, max_load_blocks=max_load_blocks)
         if self.launch_config.get("temporary_layouts"):
             from runner.temporary import TemporaryStore
-            return TemporaryStore(store)
-        return TrackedStore(store)
+            return TemporaryStore(store, max_load_blocks=max_load_blocks)
+        return TrackedStore(store, max_load_blocks=max_load_blocks)
 
     def get_num_new_matched_tokens(self, request, num_computed_tokens):
         from runner.layout import METADATA_KEY, validate_request_metadata

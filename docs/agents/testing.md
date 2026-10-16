@@ -1,5 +1,23 @@
 # Testing and evidence limits
 
+## L40 transfer and source updates (2026-10-16)
+
+The staged source snapshot ran119 CPU tests:116 passed, including all12 new
+source-update/transfer tests. Three existing tests could not run because the CPU
+environment lacks vLLM (real scheduler and capture export) or matplotlib (plots).
+No production changes were made to bypass those missing dependencies. Python3.10
+syntax parsing, launcher shell syntax and staged diff checks passed.
+
+Coverage includes preserving accepted no-cache records across source updates,
+unchanged metadata bytes/mtimes, missing-feature/answer scheduling, rejection of
+changed inputs/protocols/results, reconfigure without rewriting old source
+provenance, and actual source hashes in new engine sessions. Transfer tests cover
+1008 blocks with128 pointers each, bounded sequential submission, repeated hashes,
+failed tasks retained for retirement, and L40-only configuration propagation.
+Collection v3, TP2, router/corpus, reporting, fast loading and historical recovery
+regressions were included. No SSH/GPU run or L40 throughput measurement was made;
+bounded loads do not establish the underlying cause of the remote I/O timeout.
+
 ## Nine-action collection v3 (2026-10-11)
 
 124 distinct CPU tests passed across the v3 and retained regression suites. The

@@ -114,6 +114,9 @@ def configure(args):
             raise ValueError('Configure primary first')
         if not (args.root/'settings.json').exists() and any(p.name != 'configure.lock' for p in args.root.iterdir()):
             raise ValueError('Use a new empty experiment directory')
+        if (args.root/'settings.json').exists():
+            # Keep the original provenance and all downstream receipt hashes.
+            settings['code'] = read(args.root/'settings.json')['code']
         freeze(args.root/'settings.json', settings)
         for other in args.root.glob('*/devices.json'):
             if other.parent.name != args.role and set(sum(read(other)['groups'], [])) & set(sum(selected, [])):
@@ -138,7 +141,7 @@ def worker(base, role, phase, attempt, group=0):
     from runner.corpus_runtime import Engine
     from runner.setups import check_environment
     target = 'features' if phase == 'features' else role
-    protocol, rows = stage(base, target, check_code=True)
+    protocol, rows = stage(base, target)
     if protocol.get('naive_reuse') and phase != 'cached':
         raise ValueError('Naive reuse runs only its cached answer phase')
     root = Path(base)/target
@@ -255,7 +258,7 @@ def worker_failure(receipt, code, reason=None):
 
 
 def execute_phase(base, role, phase, state):
-    settings, _, _ = load(base, check_code=True)
+    settings, _, _ = load(base)
     if settings.get('naive_reuse') and phase != 'cached':
         raise ValueError('Naive reuse runs only its cached answer phase')
     target = 'features' if phase == 'features' else role
@@ -383,7 +386,7 @@ def supervise(base, role):
 
 
 def detach(base, role, resume=False):
-    stage(base, role, check_code=True)
+    stage(base, role)
     target = base/role
     with (target/'launch.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -467,9 +470,6 @@ def main():
             parser.error('configure requires model/data/prepared/cache-root paths')
         configure(args)
     elif args.command == 'prepare':
-        settings = read(args.root/'settings.json')
-        if settings['code'] != code_hashes():
-            raise ValueError('Implementation changed since configure')
         from scripts.longbench_a800_data import prepare
         with (args.root/'prepare.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

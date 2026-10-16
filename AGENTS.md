@@ -24,6 +24,16 @@
 These rules govern the primary workspace. Historical notes under
 `docs/studies/` describe earlier scopes and do not override these rules.
 
+- Source update/resume (2026-10-16): at the user's request, active collection,
+  corpus and router controllers no longer require current source hashes to match
+  configure-time hashes. Keep historical `settings.code` and protocol/accepted
+  receipts intact; new collection/corpus engine sessions record `execution_code`.
+  Reconfigure retains the original source provenance while still rejecting
+  changed run parameters. Input/token/layout/policy/result and process ownership
+  checks remain required. L40 TP2 bounds each KV load to64 blocks without changing
+  ProphetKV attention. Pull/resume instructions: `docs/deployment/L40_TRANSFER_TIMEOUT.md`.
+  This supersedes earlier source-pin restrictions for these controllers; it does
+  not authorize remote execution or modification of historical frozen packages.
 - Naive reuse controls: `l20_ruler_naive_reuse.sh` runs full prepared500/task
   non-thinking (6500 answers, five TP2 pairs); `a800_longbench_naive_reuse.sh`
   runs all503 prepared thinking inputs (two TP2 pairs, GPU0/1 and2/3). Both retain

@@ -6,8 +6,8 @@ from ucm.sparse.prophetkv.lifecycle import TrackedStore
 
 
 class SetupStore(TrackedStore):
-    def __init__(self, store, config, rank=0):
-        super().__init__(store)
+    def __init__(self, store, config, rank=0, max_load_blocks=None):
+        super().__init__(store, max_load_blocks=max_load_blocks)
         self.config = config
         self.rank = rank
         self.cache = Path(config['cache_dir'])

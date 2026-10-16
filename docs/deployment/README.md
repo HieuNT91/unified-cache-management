@@ -4,6 +4,17 @@ Run shell commands from the worktree root. Read [AGENTS.md](../../AGENTS.md) and
 [experiment protection](../agents/experiment-rules.md) before process operations.
 This documentation move does not authorize a launch, update, stop or resume.
 
+## Source updates and resume (2026-10-16)
+
+Collection, corpus and router controllers permit source updates between attempts.
+Configure-time `settings.code` stays as historical provenance; it is no longer
+compared to current files to permit prepare/launch/resume. Reconfiguring with the
+same parameters also preserves that original receipt. Collection/corpus engine
+sessions record their actual source hashes as `execution_code` in initialization.
+Metadata, prepared inputs, policies, accepted records and ownership still validate.
+Use [the L40 pull/resume instructions](L40_TRANSFER_TIMEOUT.md) for the existing
+500/task thinking run; no configure/prepare or no-cache rerun is needed.
+
 ## New nine-action collection v3
 
 Use [collection v3](COLLECTION_V3.md) for new A800 four-seed LongBench and
