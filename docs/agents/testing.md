@@ -1,5 +1,21 @@
 # Testing and evidence limits
 
+## L20 thinking memory admission (2026-10-16)
+
+33 focused CPU tests passed:5 new `test_l20_thinking_memory`,20 TP2 collection,
+7 L20 launcher and the thinking admission test. The new fixture reproduces the
+reported46952 MiB estimate on idle46068 MiB devices. L20 thinking proceeds to
+runtime profiling, while insufficient weights/KV space, unavailable95% budget,
+busy devices and wrong GPU models still fail. A mocked real `Engine` initialization
+with1285 KV blocks shuts down before warmup/generation and publishes no successful
+initialization receipt. Equal1286-block capacity and unchanged BF16/window/budget
+remain required; other profiles retain their static workspace reserve and receipt
+shape. The existing worker-failure fixture now supplies the scheduled action
+inventory required by the shared controller.
+
+Python3.10 syntax and diff checks passed. No GPU or remote launch was performed;
+actual L20 workspace and KV capacity are not established by these CPU tests.
+
 ## L20 trajectory launcher and removal of collection priming (2026-10-16)
 
 63 distinct focused CPU tests passed:3 collection-no-priming,7 L20 launcher,

@@ -108,6 +108,37 @@ Probes are under `features/records/probe/`; answers under
 `final.json`/`final.md` require all probes and answers. No baseline-dependent
 portable router dataset or automatic fit is produced.
 
+## L20 reports 46068 MiB and preflight rejects 46952 MiB
+
+The original preflight treated the estimated3 GiB workspace per rank as a hard
+minimum. With the supplied checkpoint this produced a46952 MiB requirement,
+rejecting the user's idle46068 MiB L20s before vLLM measured memory.
+L40 uses the user-managed preflight branch and never runs this static workspace
+test. Its budget is96%, versus95% on L20. The rejection therefore was not a
+measured comparison showing L40 fits and L20 does not.
+
+For L20 thinking TP2 only, preflight now checks the BF16 weights/full-window KV
+lower bound and requires the95% automatic memory budget to be free. The3 GiB
+estimate is still recorded as `estimated_required_mib_per_rank` in the hardware
+receipt. Workspace capacity is decided by vLLM profiling and the existing
+all-rank initialization audit: at least1286 equal64-token KV blocks per rank,
+before warmup or collection. Other profiles keep their static reserve checks.
+GPU identity and busy-process checks remain enabled.
+
+This fixes the premature static rejection; it does not prove the actual runtime
+fits. Keep the same env, inputs and result directory. After pulling the patch,
+use `resume`, since `start` already created a supervisor attempt:
+
+```bash
+cd /data/jh/unified-cache-management
+git pull --ff-only origin prophetkv/tp2-router-data
+bash scripts/launcher/l20_ruler_thinking_traj4f.sh resume
+```
+
+No memory-ratio increase, shorter input, precision change or new preparation is
+required by this patch. If actual profiling reports insufficient KV capacity,
+that is a separate measured limitation and must not be bypassed.
+
 ## Kernel identity
 
 `ucm/sparse/prophetkv/causal_fa2_kernel.py` contains the supplied

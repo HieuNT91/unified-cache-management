@@ -79,22 +79,40 @@ def check_hardware(settings):
         raise ValueError('L20 TP2 allocation requires exactly two ranks')
     weights=index['metadata']['total_size']/tp
     kv=allocation(settings.get('execution_profile',settings['dataset']),settings.get('hardware_profile','server'))['kv_tokens']*262144/tp
-    # Per-rank BF16 weights + full position KV + explicit activation/runtime reserve.
-    required=(weights+kv+profile['workspace_gib']*2**30)/profile['memory']/2**20
+    # The L20 thinking profile uses vLLM's measured automatic allocation. Its
+    # 3 GiB workspace estimate is not a measured minimum: treating it as one
+    # rejects idle 46068 MiB devices before profiling can run. Preflight checks
+    # the weights/full-window KV lower bound; Engine validates the actual KV
+    # block capacity on every rank after profiling, before any collection work.
+    measured_workspace=(settings.get('hardware_profile')=='l20-tp2'
+        and settings.get('execution_profile',settings['dataset'])=='ruler-thinking'
+        and profile['kv_cache_mode']=='auto')
+    workspace=profile['workspace_gib']*2**30
+    estimated_required=(weights+kv+workspace)/profile['memory']/2**20
+    required=((weights+kv)/profile['memory']/2**20 if measured_workspace else estimated_required)
     for gpu in requested:
         if gpu not in inventory:raise ValueError('Configured UUID is unavailable')
         if not any(model in inventory[gpu]['name'] for model in profile['names']):raise ValueError('GPU does not match the explicit hardware profile')
         if inventory[gpu]['total_mib']<required or inventory[gpu]['free_mib']<required:
-            raise ValueError(f'Profile cannot fit GPU {gpu}: requires at least {required:.0f} MiB; no precision/input shortening is applied')
+            raise ValueError(f'Profile cannot fit GPU {gpu}: total={inventory[gpu]["total_mib"]:.0f} MiB, '
+                f'free={inventory[gpu]["free_mib"]:.0f} MiB, requires at least {required:.0f} MiB'
+                f'{" before runtime workspace" if measured_workspace else ""}; no precision/input shortening is applied')
         if (profile['kv_cache_mode']=='auto' and
                 inventory[gpu]['free_mib']<inventory[gpu]['total_mib']*profile['memory']):
             raise ValueError(f'GPU {gpu} has insufficient free memory for the {profile["memory"]:.0%} automatic KV budget')
     busy=subprocess.check_output(['nvidia-smi','--query-compute-apps=gpu_uuid','--format=csv,noheader'],text=True).splitlines()
     if set(requested)&{r.strip() for r in busy}:raise ValueError('Configured GPUs are occupied; existing processes left untouched')
-    return dict(groups=[[dict(uuid=g,name=inventory[g]['name'],total_mib=inventory[g]['total_mib']) for g in group] for group in settings['groups']],
+    result=dict(groups=[[dict(uuid=g,name=inventory[g]['name'],total_mib=inventory[g]['total_mib']) for g in group] for group in settings['groups']],
                 required_mib_per_rank=required, tp=tp, weights_bytes_per_rank=weights, kv_bytes_per_rank=kv,
-                workspace_bytes_per_rank=profile['workspace_gib']*2**30, gpu_memory_utilization=profile['memory'],
+                workspace_bytes_per_rank=workspace, gpu_memory_utilization=profile['memory'],
                 kv_cache_mode=profile['kv_cache_mode'], kv_bytes_are_minimum=profile['kv_cache_mode']=='auto')
+    if measured_workspace:
+        result.update(estimated_required_mib_per_rank=estimated_required,
+                      workspace_validation='runtime-kv-capacity-audit')
+        for group in result['groups']:
+            for device in group:
+                device['free_mib']=inventory[device['uuid']]['free_mib']
+    return result
 
 
 def configure(a):

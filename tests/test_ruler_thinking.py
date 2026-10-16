@@ -349,7 +349,9 @@ class ThinkingTests(unittest.TestCase):
             raw='a,NVIDIA L20,49152,49152\nb,NVIDIA L20,49152,49152'
             with patch('scripts.corpus_control.subprocess.check_output',side_effect=[raw,'']):
                 receipt=check_hardware(settings)
-            self.assertAlmostEqual(receipt['required_mib_per_rank'],(30.6*2**30+82304*262144/2+3*2**30)/.95/2**20)
+            self.assertAlmostEqual(receipt['required_mib_per_rank'],(30.6*2**30+82304*262144/2)/.95/2**20)
+            self.assertAlmostEqual(receipt['estimated_required_mib_per_rank'],(30.6*2**30+82304*262144/2+3*2**30)/.95/2**20)
+            self.assertEqual(receipt['workspace_validation'],'runtime-kv-capacity-audit')
 
     def test_live_report_and_portable_example_preserve_phase_metrics(self):
         from scripts.longbench_a800_report import report

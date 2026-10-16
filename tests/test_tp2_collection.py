@@ -264,7 +264,7 @@ class TP2Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp); (base/'primary').mkdir()
             saved=base/'accepted.json';saved.write_text('untouched')
-            protocol=dict(groups=[['a','b'],['c','d']],tp=2)
+            protocol=dict(groups=[['a','b'],['c','d']],tp=2,scheduled_actions=['prophetkv-1'])
             processes=[Mock(pid=101,returncode=1),Mock(pid=102,returncode=-15)]
             processes[0].poll.return_value=1;processes[1].poll.return_value=None
             calls=iter(processes)
