@@ -181,6 +181,7 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual([(c.args[1], c.kwargs['seed']) for c in engine.answer.call_args_list],
                          [(a['id'], seed) for a in v3.ACTIONS[1:] for seed in range(4) if (a['id'], seed) != ('prophetkv-1', 0)])
         engine.begin.assert_called_once(); engine.end.assert_called_once()
+        engine.probe.assert_not_called()
 
     def test_configure_pins_answers_and_rejects_reused_paths(self):
         args = NS(root=self.root/'run', model=self.root/'model', data=self.root/'source',

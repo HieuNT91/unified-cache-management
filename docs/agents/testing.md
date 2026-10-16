@@ -1,5 +1,20 @@
 # Testing and evidence limits
 
+## Resume cached answers without features (2026-10-16)
+
+27 CPU tests passed across `test_cached_only`, `test_collection_v3` and
+`test_source_updates`. Coverage includes env-to-launcher-to-detached-supervisor
+phase selection, cached-only scheduling with missing feature records, unchanged
+baseline/accepted-answer/metadata bytes and mtimes, preservation of partial probes,
+and later resumption of the full schedule. Cached workers retain ordinary priming
+and skip already accepted method/seed pairs without calling independent probes.
+Failure does not publish cached completion; successful partial completion neither
+marks the full collection complete nor exports missing feature data.
+
+Shell/Python3.10 syntax and diff checks passed. Tests use CPU mocks and synthetic
+records; no GPU job or remote launch ran. This scheduling option does not fix the
+unresolved priming timeout shared by feature and cached-answer workers.
+
 ## L40 outer RPC deadline and transfer progress (2026-10-16)
 
 34 focused CPU tests passed:8 transfer/launcher tests,6 source-update tests and

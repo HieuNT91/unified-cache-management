@@ -16,6 +16,14 @@ if [[ "$command" == compute ]]; then
   command=compute-feature
 fi
 collection_args=(--collection-version v3)
+phase_args=()
+if [[ "$command" == resume || "$command" == detach ]]; then
+  case "${PROPHETKV_ONLY:-0}" in
+    1) phase_args=(--cached-only) ;;
+    0) ;;
+    *) echo 'PROPHETKV_ONLY must be 0 or 1 in .env.l40.thinking' >&2; exit 2 ;;
+  esac
+fi
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 TP="${TP:-2}"
@@ -48,4 +56,4 @@ exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/lon
   --prepared "${PREPARED_DIR:-$CODE_ROOT/inputs/$default_run}" \
   --cache-root "${CACHE_ROOT:-$CODE_ROOT/.cache/$default_run}" \
   --tp "$TP" --devices "${GPU_DEVICES:?Set GPU_DEVICES in .env.l40.thinking to eight full UUIDs}" \
-  --samples-per-task "${SAMPLES_PER_TASK:-500}" --seed "${SEED:-42}" "${collection_args[@]}" "${extension_args[@]}" "$@"
+  --samples-per-task "${SAMPLES_PER_TASK:-500}" --seed "${SEED:-42}" "${collection_args[@]}" "${extension_args[@]}" "${phase_args[@]}" "$@"

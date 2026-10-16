@@ -336,24 +336,39 @@ def wait_extra(base):
         time.sleep(5)
 
 
-def supervise(base, role):
+def supervise(base, role, cached_only=False):
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     state_root = base/role
     with (state_root/'run.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         state = dict(pid=os.getpid(), identity=identity(os.getpid()), state='running', role=role, started_at=time.time())
+        if cached_only:
+            state.update(cached_only=True, selected_phases=['cached'])
         atomic_json(state_root/'supervisor.json', state)
         try:
             settings, _, _ = load(base)
             naive = settings.get('naive_reuse', False)
             # Do not ask idle() to lock our own run.lock during execute_phase.
-            for phase in (PHASES if enabled(settings) else ('cached',) if naive or role == 'extra' else ('baseline', 'cached')):
+            phases = ('cached',) if cached_only else (PHASES if enabled(settings) else ('cached',) if naive or role == 'extra' else ('baseline', 'cached'))
+            for phase in phases:
                 execute_phase(base, role, phase, state)
                 if enabled(settings) and phase == 'features':
                     _, _, feature_rows = load(base)
                     freeze(base/'features/complete.json', dict(probes=len(feature_rows), owned_engines_exited=True,
                            protocol_sha256=file_hash(base/'features/protocol.json')))
             protocol, rows = stage(base, role)
+            if cached_only:
+                cases = [c for c in protocol['scheduled_actions'] if c != 'nocache']
+                freeze(state_root/'cached-complete.json', dict(
+                    answers=len(rows)*len(cases)*len(seeds(protocol)), scheduled_actions=cases,
+                    protocol_sha256=file_hash(state_root/'protocol.json'), owned_engines_exited=True))
+                from scripts.longbench_a800_report import report
+                report(base, final=False, emit=False)
+                # A partial phase run must remain resumable for missing probes
+                # or baselines. Do not publish full completion/export receipts.
+                state.update(state='cached-complete', phase='cached', finished_at=time.time())
+                print('Cached answers complete; baseline and feature phases were skipped.', flush=True)
+                return
             freeze(state_root/'controls-complete.json', dict(answers=len(rows)*len(protocol['scheduled_actions'])*len(seeds(protocol)),
                    protocol_sha256=file_hash(state_root/'protocol.json'), owned_engines_exited=True))
             if enabled(settings):
@@ -385,7 +400,7 @@ def supervise(base, role):
             atomic_json(state_root/'supervisor.json', state)
 
 
-def detach(base, role, resume=False):
+def detach(base, role, resume=False, cached_only=False):
     stage(base, role)
     target = base/role
     with (target/'launch.lock').open('a') as lock:
@@ -398,6 +413,8 @@ def detach(base, role, resume=False):
         if (target/'supervisor.json').exists() and not resume:
             raise ValueError('Existing attempt; use resume for missing work')
         command = ['nohup', sys.executable, '-u', str(Path(__file__).resolve()), 'supervise', '--root', str(base), '--role', role]
+        if cached_only:
+            command.append('--cached-only')
         helper = '''import json,subprocess,sys
 c=json.load(sys.stdin)
 with open(c['log'],'a') as log:
@@ -435,6 +452,8 @@ def main():
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--collection-version', choices=('legacy', 'v3'), default='legacy')
     parser.add_argument('--answers-per-question', type=int)
+    parser.add_argument('--cached-only', action='store_true',
+                        help='Run only missing cached answers; skip baseline/features without changing the saved plan')
     parser.add_argument('--thinking', action='store_true', help='Separate thinking RULER protocol')
     parser.add_argument('--naive-reuse', action='store_true', help='Only zero-repair control on existing complete prepared inputs; no generation/probes')
     parser.add_argument('--extend-from', type=Path, help='Parent RULER run: L40 thinking 30->200 or L20 non-thinking 200->500; collect only new ordinals')
@@ -451,6 +470,8 @@ def main():
     parser.add_argument('--phase', choices=('baseline', 'cached', 'features'))
     parser.add_argument('--attempt')
     args = parser.parse_args()
+    if args.cached_only and args.command not in ('detach', 'resume', 'supervise'):
+        parser.error('--cached-only is supported only for detach/resume/supervise')
     for name, value in vars(args).items():
         if isinstance(value, Path):
             setattr(args, name, value.resolve())
@@ -475,7 +496,7 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             prepare(args.root)
     elif args.command in ('detach', 'resume'):
-        detach(args.root, args.role, args.command == 'resume')
+        detach(args.root, args.role, args.command == 'resume', cached_only=args.cached_only)
     elif args.command == 'compute-feature':
         from scripts.export_features import export
         export(args.root)
@@ -486,7 +507,7 @@ def main():
         from scripts.launcher_stop import stop
         stop(args.root, Path(__file__).name, args.root/args.role)
     elif args.command == 'supervise':
-        supervise(args.root, args.role)
+        supervise(args.root, args.role, cached_only=args.cached_only)
     elif args.command == 'worker':
         worker(args.root, args.role, args.phase, args.attempt, args.group)
     else:
