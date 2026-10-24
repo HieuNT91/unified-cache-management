@@ -1,4 +1,6 @@
 """All-layer probing using the loaded Qwen3 model and once-aligned paged KV."""
+import math
+import os
 import time
 import torch
 from .selection import context_importance, select, LayerAlignment
@@ -47,7 +49,8 @@ def setup(worker):
     if not has_ucm_sparse():return {'baseline':True}
     sparse=get_ucm_sparse()
     model=worker.model_runner.model.model
-    if model.__class__.__name__!='Qwen3Model' or len(model.layers)!=64:
+    if (model.__class__.__name__!='Qwen3Model' or
+            len(model.layers)!=worker.vllm_config.model_config.hf_config.num_hidden_layers):
         raise RuntimeError('Model must be an unpartitioned Qwen3 decoder (TP supported; PP unsupported)')
     sparse.model=model
     group=get_kv_transfer_group()
@@ -79,6 +82,40 @@ def set_request(worker,request_id,boundaries,question_positions):
     sparse.request_state.arm(RequestMetadata(request_id,tuple(boundaries),tuple(question_positions)))
 
 
+def tree_selection(sparse, scores, b):
+    """UCM_TREE=1: hierarchical selection. The min-Cartesian tree of each chunk's construction-time link strength F3
+    (selection.F3Recorder; every head of layers 0-8) is cut top-down at the weakest link, chunk starts first; a
+    token's need is the density sum(u)/|A| of the densest node A containing it (selection.tree_need), u being the
+    probe scores. UCM_S4=1 forces the first 4 tokens of every reused chunk; the rest of the budget,
+    floor(ratio * eligible), is filled by need (top-k)."""
+    import numpy as np
+    from vllm.distributed import tensor_model_parallel_all_reduce, get_tp_group
+    from .selection import tree_need
+    group = get_tp_group(); scores = tensor_model_parallel_all_reduce(scores) / group.world_size
+    if group.world_size != 1:
+        raise RuntimeError('tree selection needs every head on one rank (TP=1)')
+    eligible = scores[b[1]:]
+    t0 = time.perf_counter()
+    store = getattr(sparse, 'f3_store', {}); tokens = sparse.prompt_token_ids
+    s = np.empty(b[-2] - b[1])
+    for a, z in zip(b[1:-2], b[2:-1]):
+        k_ = hash(tuple(tokens[a:z]))
+        if k_ not in store:
+            raise RuntimeError('Missing construction-time F3 for a context chunk')
+        s[a - b[1]:z - b[1]] = store[k_]; s[a - b[1]] = -np.inf
+    u = eligible.double().cpu().numpy(); u = u / max(u.sum(), 1e-30)
+    need = tree_need(s, u)
+    forced = [x + i for x in b[1:-2] for i in range(4)] if os.environ.get('UCM_S4') == '1' else []
+    count = math.floor(len(eligible) * sparse.ratio) + len(forced)
+    sel = set(forced)
+    for p_ in np.argsort(-need, kind='stable') + b[1]:
+        if len(sel) >= count: break
+        sel.add(int(p_))
+    selected = torch.tensor(sorted(sel), device=scores.device, dtype=torch.long)
+    return eligible, selected, dict(selection_method='tree_topk', unit_budget=count, forced=forced,
+                                    tree_seconds=time.perf_counter() - t0)
+
+
 @torch.inference_mode()
 def probe(sparse,positions,embeddings,query_budget=16384):
     if not 0 < query_budget <= 16384:
@@ -95,6 +132,16 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     if not torch.equal(suffix_positions,torch.arange(b[-2],b[-1],device=device)):
         raise RuntimeError('Fresh suffix positions changed')
     hidden=embeddings[-suffix_tokens:].clone();residual=None
+    # UCM_PROBE_S4=1: the probe reads the stale cache with the first 4 tokens of every reused chunk recomputed first
+    # (as the simulator does): those tokens are the sinks every later token of a reused chunk attends, and left stale
+    # they distort the question's reading of the whole chunk. Computed layer by layer alongside the suffix (ragged
+    # kernel); the recomputed K/V go to a local copy of the context only, never to the paged cache.
+    s4 = os.environ.get('UCM_PROBE_S4') == '1'
+    if s4:
+        from .causal_kernel import ragged_positions_attention_fwd
+        pos4 = torch.tensor(sorted({x + j for x in b[1:-2] for j in range(4) if x + j < b[-2]}), device=device, dtype=torch.long)
+        h4 = sparse.model.get_input_embeddings(torch.tensor([sparse.prompt_token_ids[p_] for p_ in pos4.tolist()], device=device)); r4 = None
+        z4 = torch.zeros(1, device=device, dtype=torch.int32)
     scores=torch.zeros(b[-2],device=device,dtype=torch.float32)
     blocks=sparse.attn_metadata.block_table[0].long()
     cp=torch.arange(b[-2],device=device)
@@ -107,7 +154,16 @@ def probe(sparse,positions,embeddings,query_budget=16384):
         name=f'model.layers.{i}.self_attn.attn'
         sparse.connector.wait_for_layer_load(name)
         cache=context.no_compile_layers[name].kv_cache[context.virtual_engine]
-        ck=cache[0,slots//64,slots%64];cv=cache[1,slots//64,slots%64]
+        ck=cache[0,slots//64,slots%64];cv=cache[1,slots//64,slots%64]   # advanced indexing = a copy
+        if s4:
+            q4, k4, v4, r4 = project(layer, h4, r4, pos4)
+            ck[pos4] = k4; cv[pos4] = v4
+            o4 = torch.empty_like(q4)
+            ragged_positions_attention_fwd(q4, ck, cv, o4, z4, torch.tensor([len(pos4)], device=ck.device, dtype=torch.int32),
+                z4, torch.tensor([b[-2]], device=ck.device, dtype=torch.int32), pos4, len(pos4), is_causal=True,
+                sm_scale=1.0 / math.sqrt(layer.self_attn.head_dim))
+            h_, _ = layer.self_attn.o_proj(o4.reshape(len(pos4), -1)); h_, r4 = layer.post_attention_layernorm(h_, r4); h4 = layer.mlp(h_)
+            del q4, k4, v4, o4, h_
         # Project the complete saved suffix in bounded batches. No context KV
         # is changed by the probe; attention uses all context keys per query.
         projected = [project(layer, hidden[a:a+query_budget],
@@ -150,14 +206,18 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     # across the TP group before ranking, so every rank repairs the same tokens.
     scores.div_(len(scoring_layers))
     local_mean = scores.detach().clone() if capture else None
-    eligible, selected = global_selection(scores, b[1], sparse.ratio)
+    extra = {}
+    if os.environ.get('UCM_TREE') == '1':
+        eligible, selected, extra = tree_selection(sparse, scores, b)
+    else:
+        eligible, selected = global_selection(scores, b[1], sparse.ratio)
     sparse.selection_diagnostics.append(dict(kind='prophetkv_selection',request_id=meta.request_id,
         scores=eligible,selected_positions=selected,eligible_count=len(eligible),selected_count=len(selected),
         question_positions=list(meta.question_positions),prefix_tokens=b[1],suffix_tokens=suffix_tokens,
         probe_layers=len(scoring_layers),scoring_layers=list(scoring_layers),sequential_project_layers=scoring_layers[-1]+1,
         suffix_forward_layers=scoring_layers[-1] if sparse.method == "selective_prophetkv" else len(sparse.model.layers),probe_tokens_per_layer=suffix_tokens,probe_query_budget=query_budget,probe_seconds=time.perf_counter()-started,
         normalization='all_context_keys',fusion='mean_layers_fp32',ratio=sparse.ratio,
-        selection_stage='before_layer_0_qkv',alignment_count=len(sparse.connector.prophet_aligned)))
+        selection_stage='before_layer_0_qkv',alignment_count=len(sparse.connector.prophet_aligned),**extra))
     if capture:
         sparse.router_arrays = (torch.stack(captured), eligible.detach().clone(), local_mean)
     return selected

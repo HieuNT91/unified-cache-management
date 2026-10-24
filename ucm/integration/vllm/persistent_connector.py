@@ -82,6 +82,13 @@ class PersistentBlendConnector(UCMBlendConnector):
         return result
 
     def _process_req(self, tokens):
+        if getattr(self, 'temporary_layouts', None) and not self.temporary_readonly:
+            # Temporary sweeps tag every request; a populate request is exactly
+            # one block-aligned chunk, so no delimiter is needed to recognize it.
+            if len(tokens) % self.block_size:
+                raise RuntimeError('Populate request is not block aligned')
+            return (BlendStage.BUILD_CHUNK_CACHE,
+                    self.generate_hash(self.block_size, tokens, self._seed), [], [])
         if not ((getattr(self, 'persistent_setup', None) and self.persistent_setup['readonly'])
                 or getattr(self, 'temporary_readonly', False)):
             return super()._process_req(tokens)

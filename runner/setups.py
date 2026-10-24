@@ -446,6 +446,8 @@ def prepare_collection(args, entries, preparation, write):
             options.max_output_tokens = args.max_output_tokens if args.max_output_tokens is not None else 16384
             sample = tokenize_sample(options, tokenizer)
         validate_sample(sample, args.kv_chunk_size, args.context_length)
+        if sample.get('layout', 'padded') != 'padded':
+            raise ValueError('Persistent setups detect chunks by delimiter; use run.sh sweep for aligned layouts')
         if sample.get('model_config_sha256') != config_sha:
             raise ValueError('Prepared input uses another model configuration')
         samples.append(sample)

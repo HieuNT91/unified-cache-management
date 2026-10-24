@@ -1,4 +1,5 @@
 """Two-stage ProphetKV with configurable attention scoring layers."""
+import os
 import torch
 from ucm.sparse.blend.blend import Blend
 from .selection import RequestState
@@ -14,9 +15,19 @@ class ProphetKV(Blend):
         super().__init__(config,role)
         self.method=self.blend_config.get('method','prophetkv')
         self.ratio=self.blend_config.get('ratio',.2)
-        self.scoring_layers=resolve_layers(self.method, self.blend_config.get('scoring_layers'), self.blend_config.get('num_scoring_layers'))
+        self.num_layers=config.model_config.hf_config.num_hidden_layers
+        self.model_config_hf=config.model_config.hf_config
+        self.scoring_layers=resolve_layers(self.method, self.blend_config.get('scoring_layers'), self.blend_config.get('num_scoring_layers'),
+                                           self.num_layers)
         if not 0 <= self.ratio <= 1: raise ValueError('ratio must be in [0, 1]')
         self.audit=self.blend_config.get('component_audit',False)
+        # UCM_MASK_QUESTION=1: prompt-suffix rows attend only chunk 0 + recomputed positions + the suffix while the
+        # suffix is computed (stale context hidden); decode reads the whole cache (attention.masked_suffix_attention).
+        self.mask_question=os.environ.get('UCM_MASK_QUESTION','0')=='1'
+        self._mask_allowed=None
+        # UCM_RMASK=1: recomputed context rows attend only chunk 0 + earlier recomputed positions + their own chunk's
+        # causal prefix (attention.rmask_attention); needs UCM_MASK_QUESTION.
+        self.rmask=os.environ.get('UCM_RMASK','0')=='1'
         self.request_state=RequestState()
         self.active=False
         self.pending_audit=None
@@ -66,6 +77,13 @@ class ProphetKV(Blend):
             self.coverage_selected=None
             self.req=ReqMeta(request_id=rid,prefix_len=b[1],prefix_blk_len=b[1]//64,
                 chunks_len=b[-2]-b[1],chunk_hit_mask=hits,need_blend=True)
+        if (self.prefill_state is None and ':populate:' in rid and start == 0
+                and count == len(worker_request.prompt_token_ids) and os.environ.get('UCM_TREE') == '1'):
+            # Construction of one reusable chunk (outside TTFT): record its F3 link strength for the tree selection.
+            from .selection import F3Recorder
+            hf=self.model_config_hf
+            self.f3rec = F3Recorder(tuple(worker_request.prompt_token_ids),
+                getattr(hf,'head_dim',hf.hidden_size//hf.num_attention_heads))
         if self.prefill_state is None:
             # Offline construction and warmup are dense, single-step requests.
             return self.blend_req_metas
@@ -115,9 +133,18 @@ class ProphetKV(Blend):
             prefill_complete=self.step_end==self.request.boundaries[-1]))
         if not expected:
             # Explicitly record all empty layer sets without invoking QKV/FFN.
-            for i in range(64):
+            for i in range(getattr(self,'num_layers',64)):
                 self.record_layer(f'model.layers.{i}.self_attn.attn',self.step_positions)
         return mask
+
+    def mask_allowed(self,device):
+        """Context positions the masked suffix may attend: chunk 0 (the exact prefix) and the recomputed positions."""
+        rid=self.request.request_id
+        if self._mask_allowed is None or self._mask_allowed[0]!=rid:
+            b=self.request.boundaries
+            allowed=torch.cat((torch.arange(b[1],device=device),self.coverage_selected.to(device).long())).unique(sorted=True)
+            self._mask_allowed=(rid,allowed)
+        return self._mask_allowed[1]
 
     def record_layer(self,name,positions):
         if not torch.equal(positions,self.step_positions):
@@ -150,6 +177,12 @@ class ProphetKV(Blend):
 
     def attention_begin(self,query,key,value,layer_name,forward_context,output=None,
                         phase=None,k_hash=None,decode_ql_nope=None,decode_q_pe=None):
+        f3rec=getattr(self,'f3rec',None)
+        if f3rec is not None:
+            if f3rec.add_layer(int(layer_name.split('.')[2]),query,key):
+                if not hasattr(self,'f3_store'):self.f3_store={}
+                self.f3_store[f3rec.key]=f3rec.result();self.f3rec=None
+            return query,key,value,output
         if not self.active:return query,key,value,output
         from .attention import install
         install(forward_context.no_compile_layers[layer_name],self)

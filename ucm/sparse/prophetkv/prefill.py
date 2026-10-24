@@ -1,7 +1,9 @@
 """Original-position prefill progress, independent of vLLM and CUDA."""
+import os
 from dataclasses import dataclass
 
-PREFILL_BUDGET = 16384
+# Must match runner.config.PREFILL_BUDGET (vLLM max_num_batched_tokens); UCM_PREFILL_BUDGET overrides both.
+PREFILL_BUDGET = int(os.environ.get('UCM_PREFILL_BUDGET', 16384))
 
 
 @dataclass
