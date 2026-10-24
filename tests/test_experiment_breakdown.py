@@ -115,6 +115,38 @@ class L20ReportTests(unittest.TestCase):
         self.assertEqual(matching['matched_samples'], 1)
         self.assertEqual(tables['overall'][self.cases[0]]['accuracy_percent'], 100.)
 
+    def test_tree_collection_cli_and_seeded_records(self):
+        import subprocess
+        from scripts import tree_prophetkv_data as tree
+        from test_tree_collection import fixture as tree_fixture
+        with tempfile.TemporaryDirectory() as temp:
+            args = tree_fixture(Path(temp))
+            with patch('scripts.router_control.code_hashes', return_value={}), redirect_stdout(io.StringIO()):
+                tree.adopt(args)
+            protocol, rows = tree.stage(args.root, 'tree')
+            script = Path(breakdown.__file__)
+            result = subprocess.run([sys.executable, str(script), str(args.root)],
+                                    cwd='/tmp', capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('task/'+TASKS[-1], result.stdout)
+            self.assertIn('tree-prophetkv-5', result.stdout)
+            row = rows[0]
+            for case in protocol['scheduled_actions']:
+                atomic_json(record_dir(args.root/'tree', case, row['id'], 0)/'validated.json', {})
+            pins = {p: (file_hash(p), p.stat().st_mtime_ns) for p in args.root.rglob('*') if p.is_file()}
+            def accepted(root, case, source, saved, seed):
+                self.assertEqual(root, args.root/'tree')
+                self.assertEqual(seed, 0)
+                return dict(prompt_id=source['id'], subtask=source['subtask'], seed=seed,
+                            sequence_id=source['id'], accuracy=1., timings={'ttft_seconds': 2.},
+                            thinking_tokens=0, answer_tokens=1, control_tokens=0, output_tokens=1,
+                            output_cap_reached=False, unfinished_thinking=False)
+            with patch('runner.corpus_records.accepted', side_effect=accepted):
+                _, tables, matching = breakdown.report(args.root, same_count=True)
+            self.assertEqual(matching['matched_samples'], 1)
+            self.assertEqual(tables['overall']['tree-prophetkv-5']['accuracy_percent'], 100.)
+            self.assertEqual(pins, {p: (file_hash(p), p.stat().st_mtime_ns) for p in pins})
+
 
 if __name__ == '__main__':
     unittest.main()

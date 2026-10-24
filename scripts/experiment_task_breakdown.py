@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Print committed RULER results by task: python SCRIPT EXPERIMENT_DIR.
 
-Works with L20 trajectory and L40 collection runs. Read-only; no env, model,
+Works with L20 trajectory, L40 and tree-prophetkv RULER runs. Read-only; no env, model,
 prepared-input access, report writes or GPU execution. Uses repository readers.
 """
 import argparse
@@ -23,7 +23,8 @@ def read(path):
 def snapshot(base):
     from runner.corpus_records import accepted
     base = Path(base).resolve()
-    paths = [base/name for name in ('settings.json', 'plan.json', 'rows.json', 'ruler/protocol.json')]
+    role = 'tree' if read(base/'settings.json').get('schema') == 'tree-prophetkv-thinking-collection-v1' else 'ruler'
+    paths = [base/name for name in ('settings.json', 'plan.json', 'rows.json', f'{role}/protocol.json')]
     pins = {path: file_hash(path) for path in paths}
     settings, plan, rows, protocol = map(read, paths)
     if settings.get('dataset') != 'ruler':
@@ -43,7 +44,7 @@ def snapshot(base):
     expected = [dict(prompt_id=json.dumps([r['id'], seed]), subtask=r['subtask'])
                 for r in rows for seed in scheduled_seeds]
     # Freeze commit boundaries before reading; in-flight results are excluded.
-    receipts = {case: sorted((base/'ruler/records'/case).glob(
+    receipts = {case: sorted((base/role/'records'/case).glob(
         '*/validated.json' if scheduled_seeds == [None] else '*/seed-*/validated.json'))
         for case in cases}
     data = {case: [] for case in cases}
@@ -56,7 +57,7 @@ def snapshot(base):
                 pid, seed = path.parent.parent.name, int(path.parent.name.removeprefix('seed-'))
             if pid not in row_map or seed not in scheduled_seeds:
                 raise ValueError(f'Unexpected answer identity: {path}')
-            record = accepted(base/'ruler', case, row_map[pid], protocol, seed=seed)
+            record = accepted(base/role, case, row_map[pid], protocol, seed=seed)
             if record is None:
                 raise ValueError(f'Committed answer disappeared: {path}')
             value = answer_metrics(record)
