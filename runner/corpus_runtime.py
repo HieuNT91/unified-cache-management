@@ -68,6 +68,12 @@ class Engine:
                 raise ValueError('Complete input plus output reserve exceeds assigned hardware KV capacity')
         cfg=config(protocol['model'],self.profile,self.cached,self.cache,None,
                    protocol.get('hardware_profile','server'),tp=self.tp)
+        self.tree_cached = protocol.get('schema') == 'tree-prophetkv-thinking-collection-v1'
+        if self.tree_cached:
+            if not self.cached:
+                raise ValueError('Tree collection runs only cached answers')
+            from runner.tree_collection import configure_engine
+            configure_engine(cfg, self.cache, protocol)
         if self.cached:
             if 'position_attention_kernel' in protocol:
                 cfg['kv_transfer_config']['kv_connector_extra_config']['position_attention_kernel']=protocol['position_attention_kernel']
@@ -92,6 +98,9 @@ class Engine:
                 if init['warmup_readiness']['verified_shards']!=2*self.tp:raise ValueError('Expected two committed warmup shards per TP rank')
             retirement(self.llm,self.tp)
             if self.cached:delete_retired_files(self.cache,{str(p.relative_to(self.cache)) for p in (self.cache/'kv').rglob('*') if p.is_file()})
+            if self.tree_cached:
+                from runner.tree_collection import retire_warmup
+                retire_warmup(self.cache, warm)
             init['warmup_seconds']=time.perf_counter()-warmup_started
             init['validated']=True;atomic_json(self.session/'initialization.json',init)
         except BaseException:
@@ -108,6 +117,11 @@ class Engine:
             raise ValueError('Prepared model mismatch')
         start=time.perf_counter()
         if self.cached:
+            if getattr(self, 'tree_cached', False):
+                from runner.tree_collection import TreePromptCache as PromptCache
+                from runner.tree_prophetkv import budget
+                for percentage in self.protocol['percentages']:
+                    budget(self.sample['boundaries'], percentage/100)
             self.pc=PromptCache(self.cache,Path(self.protocol['model']),self.tp,self.namespace,self.sample)
             for i,chunk in enumerate(self.pc.chunks):
                 generate(self.llm.llm_engine,list(chunk),1,self.rid(f'populate:{i}'),phase='populate')

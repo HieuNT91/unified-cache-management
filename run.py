@@ -49,6 +49,8 @@ def main():
     setup_parser.add_argument('--thinking', action=argparse.BooleanOptionalAction, default=True)
     setup_parser.add_argument('--max-output-tokens', type=int)
     setup_parser.add_argument('--dry-run', action='store_true')
+    setup_parser.add_argument('--tree-prophetkv', action='store_true',
+                              help='Build F3 metadata for tree-prophetkv in a fresh persistent setup')
     from runner.setups import build_setup, run_collection
     setup_parser.set_defaults(func=build_setup)
     args = parser.parse_args()

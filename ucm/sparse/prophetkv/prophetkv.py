@@ -16,6 +16,9 @@ class ProphetKV(Blend):
         self.position_attention_kernel=config.kv_transfer_config.kv_connector_extra_config.get(
             'position_attention_kernel', DEFAULT_POSITION_ATTENTION_KERNEL)
         self.method=self.blend_config.get('method','prophetkv')
+        self.model_config_hf=config.model_config.hf_config
+        self.tree_f3_config=config.kv_transfer_config.kv_connector_extra_config.get('tree_f3')
+        self.f3rec=None
         self.ratio=self.blend_config.get('ratio',.2)
         self.scoring_layers=resolve_layers(self.method, self.blend_config.get('scoring_layers'), self.blend_config.get('num_scoring_layers'))
         if not 0 <= self.ratio <= 1: raise ValueError('ratio must be in [0, 1]')
@@ -25,7 +28,7 @@ class ProphetKV(Blend):
         self.pending_audit=None
         self.layer_index=0
         self.prefill_state=None
-        if self.method in ('prophetkv','selective_prophetkv','last_traj_4','last_traj_4f','query_traj_4f'):self.compute_meta={}
+        if self.method in ('prophetkv','selective_prophetkv','last_traj_4','last_traj_4f','query_traj_4f','tree-prophetkv'):self.compute_meta={}
 
     def build_sparse_meta(self, scheduler_output, requests, input_batch, attn_metadata):
         self.active=False;self.pending_audit=None;self.layer_index=0
@@ -74,6 +77,10 @@ class ProphetKV(Blend):
             self.coverage_selected=None
             self.req=ReqMeta(request_id=rid,prefix_len=b[1],prefix_blk_len=b[1]//64,
                 chunks_len=b[-2]-b[1],chunk_hit_mask=hits,need_blend=True)
+        if getattr(self, 'tree_f3_config', None) is not None and self.prefill_state is None:
+            from .tree_runtime import begin_population
+            begin_population(self, getattr(dispatch, 'request_layout', None), rid,
+                             worker_request.prompt_token_ids, start, count)
         if self.prefill_state is None:
             # Offline construction and warmup are dense, single-step requests.
             return self.blend_req_metas
@@ -140,6 +147,8 @@ class ProphetKV(Blend):
             projection_tokens=len(positions),attention_tokens=len(positions),ffn_tokens=len(positions)))
 
     def request_finished_in_worker(self,request_id):
+        if getattr(self, 'f3_request_id', None) == request_id:
+            self.f3rec=None;self.f3_tokens=None;self.f3_request_id=None
         if self.request_state.pending is not None and self.request_state.pending.request_id==request_id:
             self.request_state.pending=None
         if getattr(self,'request',None) is not None and self.request.request_id==request_id:
@@ -162,6 +171,10 @@ class ProphetKV(Blend):
 
     def attention_begin(self,query,key,value,layer_name,forward_context,output=None,
                         phase=None,k_hash=None,decode_ql_nope=None,decode_q_pe=None):
+        if getattr(self, 'f3rec', None) is not None:
+            from .tree_runtime import record_layer
+            record_layer(self, int(layer_name.split('.')[2]), query, key)
+            return query,key,value,output
         if not self.active:return query,key,value,output
         from .attention import install
         install(forward_context.no_compile_layers[layer_name],self)

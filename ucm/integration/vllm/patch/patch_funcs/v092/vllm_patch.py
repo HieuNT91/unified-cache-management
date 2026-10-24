@@ -1910,6 +1910,10 @@ def _patch_gpu_model_runner() -> None:
             if is_prefill and not final_prefill:
                 # Advance scheduler progress without sampling, even for a range
                 # with zero selected queries. KV transfers are still retired.
+                # No sampling synchronization occurs on this path. Finish H2D
+                # copies before the next step reuses pinned staging buffers.
+                if input_ids.is_cuda:
+                    torch.cuda.current_stream(input_ids.device).synchronize()
                 if has_kv_transfer_group():
                     get_kv_transfer_group().clear_connector_metadata()
                 self.eplb_step()

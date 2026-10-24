@@ -24,3 +24,7 @@ outputs/
 /.worktrees/
 /.codex/
 /.aws/
+
+# Tree-prophetkv server templates; local configuration remains ignored.
+!/config/.env.l20.tree-prophetkv.example
+!/config/.env.a800.tree-prophetkv.example

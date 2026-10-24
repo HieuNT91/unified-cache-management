@@ -203,6 +203,12 @@ def worker(base, role, phase, attempt, group=0, *, stage_loader=None):
 
 
 def hardware(protocol):
+    if protocol.get('hardware_profile') == 'rtx4500ada-tree-validation':
+        if (protocol.get('schema') != 'tree-prophetkv-thinking-collection-v1'
+                or not protocol.get('local_validation') or protocol.get('tp') != 4
+                or len(protocol.get('groups', [])) != 1):
+            raise ValueError('Local tree validation requires an explicit single TP4 group')
+        return check_hardware(protocol)
     if protocol.get('hardware_profile') in ('l40-tp2', 'l40-tp4'):
         from runner.tensor_parallel import protocol_tp
         from runner.tree_profiles import hardware_profile

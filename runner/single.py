@@ -23,6 +23,9 @@ def run(args):
         validate_layout(sample['token_ids'], sample['boundaries'], sample['question_positions'], sparse=True)
     if sample['model_config_sha256'] != digest(args.model / 'config.json'):
         raise ValueError('Input was prepared with a different model configuration')
+    if args.method == 'tree-prophetkv':
+        from runner.tree_prophetkv import budget
+        budget(sample['boundaries'], args.ratio)
     cfg = engine_config(args.model, args.method, args.ratio, args.layers, args.num_layers,
         args.tp, args.memory, args.output.resolve() / 'cache',
         None,
@@ -98,6 +101,9 @@ def run(args):
         timings['priming_seconds'] = time.perf_counter() - started
         before = {str(p.relative_to(cache)): (p.stat().st_size, p.stat().st_mtime_ns)
                   for p in (cache / 'kv').glob('*/*') if p.is_file()}
+        if args.method == 'tree-prophetkv':
+            from runner.tree_prophetkv import snapshot_f3
+            f3_before = snapshot_f3(cache, str(cache), [sample])
         routing = None
         if args.method == 'router':
             from runner.router_measure import measure
@@ -129,6 +135,8 @@ def run(args):
                  for p in (cache / 'kv').glob('*/*') if p.is_file()}
         if before != after:
             raise RuntimeError('Offline cache changed during measured generation')
+        if args.method == 'tree-prophetkv' and f3_before != snapshot_f3(cache, str(cache), [sample]):
+            raise RuntimeError('Offline F3 changed during measured generation')
         dump(args.output / 'diagnostics.json', diagnostics)
         timings['validation_and_export_seconds'] = time.perf_counter() - started
         started = time.perf_counter()

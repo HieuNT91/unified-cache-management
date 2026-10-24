@@ -21,6 +21,35 @@ LIFECYCLE = 'ucm.sparse.prophetkv.lifecycle'
 
 
 class BoundedLoadTests(unittest.TestCase):
+    def test_unbounded_transfer_retains_backend_failure_for_connector(self):
+        backend = Mock()
+        store = TrackedStore(backend)
+        backend.load_data.side_effect = RuntimeError('PC::S2D submit -50010')
+        with self.assertRaisesRegex(RuntimeError, '-50010'):
+            store.load_data([b'a'],[0],[[1]])
+        self.assertEqual(store.last_error, dict(operation='load_data',type='RuntimeError',message='PC::S2D submit -50010'))
+        backend.load_data.side_effect = None
+        task = store.load_data([b'a'],[0],[[1]])
+        self.assertIsNone(store.last_error)
+        backend.wait.side_effect = RuntimeError('PC::S2D timeout 120000 ms')
+        with self.assertRaisesRegex(RuntimeError,'timeout'):
+            store.wait(task)
+        self.assertEqual(store.last_error['message'],'PC::S2D timeout 120000 ms')
+        self.assertIn(id(task),store.pending)
+
+    def test_connector_fails_with_backend_detail_without_accepting_invalid_kv(self):
+        tree=ast.parse((ROOT/'ucm/integration/vllm/persistent_connector.py').read_text())
+        method=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name=='start_load_kv')
+        base=type('Base',(),{'start_load_kv':lambda self,*a,**kw:None})
+        node=ast.ClassDef(name='Connector',bases=[ast.Name(id='Base',ctx=ast.Load())],keywords=[],body=[method],decorator_list=[])
+        module=ast.fix_missing_locations(ast.Module(body=[node],type_ignores=[])); scope={'Base':base}
+        exec(compile(module,'<connector>','exec'),scope)
+        obj=scope['Connector'](); obj._invalid_block_ids={1,2}; obj.global_rank=1; obj.worker_request_id='read:p'
+        obj.store=types.SimpleNamespace(last_error=dict(operation='wait',message='timeout -50010'))
+        with self.assertRaisesRegex(RuntimeError,'Incomplete external cache load.*rank=1.*timeout -50010'):
+            obj.start_load_kv(None)
+        self.assertEqual(obj._invalid_block_ids,{1,2})
+
     def test_full_prompt_waits_between_batches_and_preserves_all_layer_slots(self):
         keys = [i.to_bytes(4, 'little') for i in range(1008)]
         addresses = np.arange(1008 * 128, dtype=np.uint64).reshape(1008, 128)

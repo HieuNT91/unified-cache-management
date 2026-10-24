@@ -161,7 +161,11 @@ def preparation_identity(args, entries, previous=None):
     validate_preparation(args.kv_chunk_size, args.context_length)
     # Validate TP/memory with the same public config path before any engine.
     engine_config(args.model, 'baseline', tp=args.tp, memory=args.memory)
-    return dict(model=model_identity(args.model, previous['preparation']['model'] if previous else None,
+    tree = {}
+    if getattr(args, 'tree_prophetkv', False):
+        from runner.tree_prophetkv import PROTOCOL
+        tree['tree_protocol'] = PROTOCOL
+    return dict(**tree, model=model_identity(args.model, previous['preparation']['model'] if previous else None,
                                     previous.get('model_stamp') if previous else None), sources=source_identity(entries),
         runtime=runtime_identity(), versions=VERSIONS, cache_format=CACHE_FORMAT,
         hash_protocol=HASH_PROTOCOL, tp=args.tp, dtype='bfloat16', rope=ROPE,
@@ -324,7 +328,9 @@ def retirement(llm, tp):
 def persistent_config(root, descriptor, readonly, layouts=None):
     return dict(fingerprint=descriptor['fingerprint'], tp=descriptor['preparation']['tp'],
         cache_dir=str(root / 'cache'), bytes_per_shard=descriptor['inventory']['bytes_per_shard'],
-        readonly=readonly, layouts=layouts or {}, setup_root=str(root))
+        readonly=readonly, layouts=layouts or {}, setup_root=str(root),
+        **({'tree_protocol': descriptor['preparation']['tree_protocol']}
+           if 'tree_protocol' in descriptor['preparation'] else {}))
 
 
 def construct_missing(root, descriptor, samples, missing, args, progress):
@@ -336,7 +342,7 @@ def construct_missing(root, descriptor, samples, missing, args, progress):
     namespace = uuid.uuid4().hex
     cache = root / 'cache'
     cache.mkdir(exist_ok=True)
-    cfg = engine_config(args.model, 'prophetkv', tp=args.tp, memory=args.memory,
+    cfg = engine_config(args.model, 'tree-prophetkv' if 'tree_protocol' in descriptor['preparation'] else 'prophetkv', tp=args.tp, memory=args.memory,
         cache_dir=cache, end_token=None,
         persistent=persistent_config(root, descriptor, False))
     os.environ['PROPHETKV_SCHEDULER_RECEIPT'] = str(root / 'scheduler.json')
@@ -355,6 +361,9 @@ def construct_missing(root, descriptor, samples, missing, args, progress):
             # A preceding chunk can also complete shared blocks for this chunk.
             try:
                 snapshot(cache, descriptor['inventory'], [cid])
+                if 'tree_protocol' in descriptor['preparation']:
+                    from runner.tree_prophetkv import read_f3
+                    read_f3(cache, descriptor['fingerprint'], tokens_by_id[cid])
                 continue
             except RuntimeError:
                 pass
@@ -400,10 +409,33 @@ def build_setup(args):
             descriptor, samples = prepare_collection(args, entries, preparation, write=True)
         inventory = descriptor['inventory']
         missing = incomplete_chunks(root, inventory)
+        tree_enabled = 'tree_protocol' in descriptor['preparation']
+        old_tree_receipt = None
+        if tree_enabled:
+            from runner.tree_prophetkv import f3_path, read_f3
+            if (root / 'complete.json').exists():
+                old_tree_receipt = check_receipt(root, descriptor).get('tree_f3')
+                if not isinstance(old_tree_receipt, dict):
+                    raise RuntimeError('Missing F3 completion receipt')
+            for _, sample in samples:
+                for tokens in chunks_of(sample):
+                    path = f3_path(root / 'cache', tokens)
+                    if not path.exists():
+                        cid = fingerprint(tokens)
+                        if cid not in missing:
+                            missing.append(cid)
+                    else:
+                        read_f3(root / 'cache', descriptor['fingerprint'], tokens)
+                        if old_tree_receipt is not None and old_tree_receipt.get(path.name) != file_hash(path):
+                            raise RuntimeError('Committed F3 changed; use a fresh setup')
         print(f"Persistent KV: {inventory['expected_bytes']} bytes, {len(inventory['chunks'])} unique chunks, "
               f"{len(missing)} incomplete", flush=True)
         if not missing and (root / 'complete.json').exists():
-            check_receipt(root, descriptor)
+            complete = check_receipt(root, descriptor)
+            if tree_enabled:
+                from runner.tree_prophetkv import snapshot_f3
+                if complete.get('tree_f3') != snapshot_f3(root / 'cache', descriptor['fingerprint'], [s for _, s in samples]):
+                    raise RuntimeError('Completed F3 records changed; use a fresh setup')
             print(f"Setup reusable: {root} ({descriptor['fingerprint']})")
             return
         # A failed rebuild must never leave a stale completion marker.
@@ -424,9 +456,15 @@ def build_setup(args):
         for name in state:
             with (root / 'cache' / name).open('rb') as stream:
                 os.fsync(stream.fileno())
+        tree_receipt = {}
+        if tree_enabled:
+            from runner.tree_prophetkv import snapshot_f3
+            tree_receipt['tree_f3'] = snapshot_f3(root / 'cache', descriptor['fingerprint'], [s for _, s in samples])
+            if old_tree_receipt is not None and tree_receipt['tree_f3'] != old_tree_receipt:
+                raise RuntimeError('Reconstructed F3 differs from its committed receipt; use a fresh setup')
         atomic_json(root / 'complete.json', dict(fingerprint=descriptor['fingerprint'],
             inventory_sha256=descriptor['inventory_sha256'], committed_shards=len(state),
-            preparation_timings='progress.json', retirement_verified=True, completed_at=time.time()))
+            preparation_timings='progress.json', retirement_verified=True, completed_at=time.time(), **tree_receipt))
         print(f'Setup complete: {root}')
 
 
@@ -464,7 +502,7 @@ def prepare_collection(args, entries, preparation, write):
     descriptor['evaluation_sha256'] = fingerprint([e['evaluation'] for e in descriptor['samples']])
     root = args.output.resolve()
     if not write:
-        cfg = engine_config(args.model, 'prophetkv', tp=args.tp, memory=args.memory,
+        cfg = engine_config(args.model, 'tree-prophetkv' if 'tree_protocol' in descriptor['preparation'] else 'prophetkv', tp=args.tp, memory=args.memory,
             cache_dir=root / 'cache', end_token=None,
             persistent=persistent_config(root, descriptor, False))
         print(json.dumps(dict(fingerprint=fp, prompts=len(samples), chunks=len(inventory['chunks']),
@@ -499,6 +537,15 @@ def run_collection(args):
             from runner.layout import validate_layout
             for _,sample in samples:
                 validate_layout(sample['token_ids'],sample['boundaries'],sample['question_positions'],sparse=True)
+        if args.method == 'tree-prophetkv':
+            from runner.tree_prophetkv import PROTOCOL, budget, snapshot_f3
+            if descriptor['preparation'].get('tree_protocol') != PROTOCOL:
+                raise ValueError('tree-prophetkv requires a fresh setup built with --tree-prophetkv')
+            for _, sample in samples:
+                budget(sample['boundaries'], args.ratio)
+            state = snapshot_f3(root / 'cache', descriptor['fingerprint'], [s for _, s in samples])
+            if any(receipt.get('tree_f3', {}).get(name) != sha for name, sha in state.items()):
+                raise RuntimeError('F3 records differ from setup completion receipt')
         layouts = {f'prompt-{i}': sample['boundaries'] for i, (_, sample) in enumerate(samples)}
         cfg = engine_config(model, args.method, args.ratio, args.layers, args.num_layers,
             tp, args.memory, root / 'cache',
@@ -592,6 +639,9 @@ def execute_collection(args, root, descriptor, samples, cfg, devices, receipt, r
             timings = {}
             started = time.perf_counter()
             before = snapshot(root / 'cache', inventory, entry['chunks']) if cached else None
+            if args.method == 'tree-prophetkv':
+                from runner.tree_prophetkv import snapshot_f3
+                f3_before = snapshot_f3(root / 'cache', descriptor['fingerprint'], [sample])
             timings['readiness_seconds'] = time.perf_counter()-started
             started = time.perf_counter()
             infer(sample, tag, 'prime', 1)
@@ -630,6 +680,8 @@ def execute_collection(args, root, descriptor, samples, cfg, devices, receipt, r
                     raise RuntimeError('Scheduler request not retired')
                 if before != snapshot(root / 'cache', inventory, entry['chunks']):
                     raise RuntimeError('Persistent KV changed during inference or retirement')
+                if args.method == 'tree-prophetkv' and f3_before != snapshot_f3(root / 'cache', descriptor['fingerprint'], [sample]):
+                    raise RuntimeError('Persistent F3 changed during inference or retirement')
             timings['retirement_seconds'] = time.perf_counter()-started
             output = result.outputs[0]
             evaluation = entry.get('evaluation', evaluation_metadata(sample))

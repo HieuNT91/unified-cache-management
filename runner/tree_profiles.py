@@ -8,6 +8,9 @@ PROFILES={
 
 
 def hardware_profile(name='server',dataset='ruler',tp=4):
+    if name=='rtx4500ada-tree-validation' and dataset in ('ruler-thinking','longbench-v2') and tp==4:
+        return dict(names=('RTX 4500 Ada Generation',),memory=.95,workspace_gib=2.5,
+                    kv_cache_mode='fixed',cpu_offload_gb=4.)
     if name=='server':
         return dict(names=('A800','L20'),memory=.95 if tp==2 else .9,workspace_gib=8.,
                     kv_cache_mode='auto' if tp==2 else 'fixed')
@@ -58,6 +61,8 @@ def config(model,dataset,cached,cache,delimiter=None,hardware='server',tp=4):
     # budget on KV. Context/output limits remain independent of cache capacity.
     result.update(max_model_len=p['kv_tokens'],
                   hf_overrides=dict(max_position_embeddings=32768,ucm_activation_tile=4096))
+    if profile.get('cpu_offload_gb'):
+        result['cpu_offload_gb']=profile['cpu_offload_gb']
     if profile['kv_cache_mode']=='fixed':result['num_gpu_blocks_override']=p['kv_blocks']
     if cached and hardware == 'l40-tp2':
         # Bound each PcStore task to one context chunk instead of all 64K KV.

@@ -78,6 +78,8 @@ def check_hardware(settings):
     if settings.get('hardware_profile')=='l20-tp2' and tp!=2:
         raise ValueError('L20 TP2 allocation requires exactly two ranks')
     weights=index['metadata']['total_size']/tp
+    offload_bytes=profile.get('cpu_offload_gb',0)*2**30
+    resident_weights=max(0,weights-offload_bytes)
     kv=allocation(settings.get('execution_profile',settings['dataset']),settings.get('hardware_profile','server'))['kv_tokens']*262144/tp
     # The L20 thinking profile uses vLLM's measured automatic allocation. Its
     # 3 GiB workspace estimate is not a measured minimum: treating it as one
@@ -88,8 +90,8 @@ def check_hardware(settings):
         and settings.get('execution_profile',settings['dataset'])=='ruler-thinking'
         and profile['kv_cache_mode']=='auto')
     workspace=profile['workspace_gib']*2**30
-    estimated_required=(weights+kv+workspace)/profile['memory']/2**20
-    required=((weights+kv)/profile['memory']/2**20 if measured_workspace else estimated_required)
+    estimated_required=(resident_weights+kv+workspace)/profile['memory']/2**20
+    required=((resident_weights+kv)/profile['memory']/2**20 if measured_workspace else estimated_required)
     for gpu in requested:
         if gpu not in inventory:raise ValueError('Configured UUID is unavailable')
         if not any(model in inventory[gpu]['name'] for model in profile['names']):raise ValueError('GPU does not match the explicit hardware profile')
@@ -106,6 +108,8 @@ def check_hardware(settings):
                 required_mib_per_rank=required, tp=tp, weights_bytes_per_rank=weights, kv_bytes_per_rank=kv,
                 workspace_bytes_per_rank=workspace, gpu_memory_utilization=profile['memory'],
                 kv_cache_mode=profile['kv_cache_mode'], kv_bytes_are_minimum=profile['kv_cache_mode']=='auto')
+    if offload_bytes:
+        result.update(cpu_offload_bytes_per_rank=offload_bytes,resident_weights_bytes_per_rank=resident_weights)
     if measured_workspace:
         result.update(estimated_required_mib_per_rank=estimated_required,
                       workspace_validation='runtime-kv-capacity-audit')

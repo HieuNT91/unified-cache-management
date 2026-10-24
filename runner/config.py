@@ -1,7 +1,7 @@
 """Shared clean method configuration; importable without CUDA."""
 from ucm.sparse.prophetkv.layers import resolve_layers
 
-METHODS = ('baseline', 'prophetkv', 'selective_prophetkv', 'router', 'last_traj_4', 'last_traj_4f', 'query_traj_4f')
+METHODS = ('baseline', 'prophetkv', 'selective_prophetkv', 'router', 'last_traj_4', 'last_traj_4f', 'query_traj_4f', 'tree-prophetkv')
 WINDOW = 131072
 PREFILL_BUDGET = 16384
 ROPE = dict(rope_type='yarn', factor=4.0, original_max_position_embeddings=32768)
@@ -60,6 +60,15 @@ def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
                     ucm_connector_config=dict(storage_backends=str(cache_dir),
                         use_direct=False, timeout_ms=120000))],
                 ucm_sparse_config={'ProphetKV': sparse, 'Blend': sparse}))
+    if method == 'tree-prophetkv':
+        from pathlib import Path
+        from runner.tree_prophetkv import PROTOCOL
+        if persistent is not None and persistent.get('tree_protocol') != PROTOCOL:
+            raise ValueError('tree-prophetkv requires a fresh setup built with --tree-prophetkv')
+        cfg['kv_transfer_config']['kv_connector_extra_config']['tree_f3'] = dict(
+            protocol=PROTOCOL, cache_dir=str(Path(cache_dir).resolve()),
+            namespace=persistent['fingerprint'] if persistent else str(Path(cache_dir).resolve()),
+            readonly=bool(persistent and persistent['readonly']))
     if persistent is not None and method != 'baseline':
         cfg['kv_transfer_config']['kv_connector_extra_config']['persistent_setup'] = persistent
     return cfg

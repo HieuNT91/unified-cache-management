@@ -29,5 +29,7 @@ def configure_sparse(sparse, method, ratio, layers=None):
             or sparse.active or sparse.connector.worker_request_id is not None
             or sparse.connector.store.pending):
         raise RuntimeError('Retire the request before changing the scoring policy')
+    if method == 'tree-prophetkv' and getattr(sparse, 'tree_f3_config', None) is None:
+        raise ValueError('tree-prophetkv needs a tree-enabled construction engine')
     sparse.method, sparse.ratio, sparse.scoring_layers = method, ratio, selected
     return dict(method=method, ratio=ratio, scoring_layers=list(selected))

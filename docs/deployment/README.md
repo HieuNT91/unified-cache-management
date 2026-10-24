@@ -22,6 +22,13 @@ L20/L40 500/task RULER runs. Server commands: [A800](A800_COLLECTION_V3.md),
 [L20](L20_COLLECTION_V3.md), [L40](L40_COLLECTION_V3.md). The three data launchers
 default to this protocol; the guides below retain their historical run scopes.
 
+## Tree-prophetkv thinking controls
+
+Use [the L20/A800 tree launcher guide](TREE_PROPHETKV_L20_A800.md) for
+RULER thinking on five L20 TP2 pairs and LongBench v2 thinking on two A800 TP2
+pairs. Reuse manually copied prepared inputs; run only 5/20/40/60% tree answers,
+with no no-cache rerun or feature extraction.
+
 ## TP2 collection and portable training
 
 For a single 0% control using existing prepared inputs, see

@@ -22,6 +22,7 @@ and real-data training have not been performed for this implementation.
 |---|---|
 | [AGENTS.md](AGENTS.md) | Short mandatory rules for work in this branch |
 | [run.py](run.py), [run.sh](run.sh) | CLI dispatch and environment setup |
+| [TREE_RMASK.md](docs/TREE_RMASK.md) | `tree-prophetkv`: F3 tree selection, S4 probing and masked recomputation |
 | [runner/preparation.py](runner/preparation.py), [runner/generation.py](runner/generation.py), [runner/single.py](runner/single.py) | Prompt preparation, shared inference/validation and single-input execution |
 | [runner/](runner/) | Layouts, orchestration, cache lifecycle, reporting and routers |
 | [ucm/](ucm/) | Connector, storage, sparse attention and runtime integration |
@@ -72,7 +73,8 @@ For prefix placement, task caps, decoding and scoring, read the
 
 ## Inference and deployment
 
-The public modes are `baseline`, `prophetkv`, `selective_prophetkv` and `router`.
+The public modes include `baseline`, `prophetkv`, `selective_prophetkv`, `router`
+and [`tree-prophetkv`](docs/TREE_RMASK.md).
 Baseline disables the connector and prefix reuse. Sparse methods share the
 metadata layout and keep the complete question in the fresh suffix. Persistent
 setup builds reusable KV for a collection; temporary sweeps build one prompt's

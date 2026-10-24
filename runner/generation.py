@@ -55,7 +55,7 @@ def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None,
 def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, *, gpu_scores=False):
     """Independent CPU replay of each TP rank's global scores and layer sets."""
     import math
-    if method in ('last_traj_4', 'last_traj_4f', 'query_traj_4f') and gpu_scores:
+    if method in ('last_traj_4', 'last_traj_4f', 'query_traj_4f', 'tree-prophetkv') and gpu_scores:
         raise ValueError('Trajectory controls require their native trajectory evidence')
     if sorted(w['rank'] for w in workers) != list(range(tp)):
         raise RuntimeError('Missing tensor-parallel rank')
@@ -97,6 +97,8 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, *, g
             if len(selections) != 1 or any(e['kind'] == 'cache_miss' for e in events):
                 raise RuntimeError('Expected exactly one successful cache selection')
             event = selections[0]
+            if method != 'tree-prophetkv' and event.get('selection_method') == 'tree-prophetkv':
+                raise RuntimeError('Unexpected tree-prophetkv evidence for another method')
             prefix, end = sample['boundaries'][1], sample['boundaries'][-2]
             if gpu_scores:
                 reference = event['selected_positions']
@@ -114,7 +116,14 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, *, g
                     raise RuntimeError('TP ranks disagree on native attention scores')
                 common_scores = scores
                 count = math.floor(len(scores) * ratio)
-                if method in ('last_traj_4', 'last_traj_4f', 'query_traj_4f'):
+                if method == 'tree-prophetkv':
+                    from runner.tree_prophetkv import validate_selection
+                    reference = validate_selection(event, sample, ratio)
+                    tree_evidence = event['f3_links']
+                    if common_trajectory is not None and tree_evidence != common_trajectory:
+                        raise RuntimeError('TP ranks disagree on F3 evidence')
+                    common_trajectory = tree_evidence
+                elif method in ('last_traj_4', 'last_traj_4f', 'query_traj_4f'):
                     from runner.last_traj_4 import validate_selection
                     reference = validate_selection(event, sample, ratio, method)
                     trajectory = (event['draft_tokens'], event['copy_z'], event['copying'])

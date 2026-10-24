@@ -39,6 +39,7 @@ class TrackedStore:
         self.completed = 0
         self.router_dense = False
         self.operations = dict(lookup=0,load=0,store=0)
+        self.last_error = None
 
     def __getattr__(self, name):
         return getattr(self.store, name)
@@ -47,7 +48,11 @@ class TrackedStore:
         if getattr(self, 'router_dense', False):
             raise RuntimeError('UCM transfer attempted during dense fallback')
         self.operations['load' if operation == 'load_data' else 'store'] += 1
-        task = getattr(self.store, operation)(*args, **kwargs)
+        try:
+            task = getattr(self.store, operation)(*args, **kwargs)
+        except Exception as error:
+            self.last_error = dict(operation=operation, type=type(error).__name__, message=str(error))
+            raise
         self.pending[id(task)] = task
         return task
 
@@ -60,6 +65,7 @@ class TrackedStore:
     def load_data(self, block_ids, shard_index=None, dst_addr=None):
         if getattr(self, 'router_dense', False):
             raise RuntimeError('UCM transfer attempted during dense fallback')
+        self.last_error = None
         if self.max_load_blocks is not None:
             return self._load_bounded(block_ids, shard_index, dst_addr)
         if len(block_ids) == len(set(block_ids)):
@@ -130,7 +136,8 @@ class TrackedStore:
         timing = self._load_timings.get(id(task))
         try:
             result = self.store.wait(task)
-        except Exception:
+        except Exception as error:
+            self.last_error = dict(operation='wait', type=type(error).__name__, message=str(error))
             if timing is not None:
                 label, batch_started, load_started = timing
                 now = monotonic()

@@ -83,6 +83,15 @@ class PersistentBlendConnector(UCMBlendConnector):
                 raise RuntimeError('Persistent context KV is incomplete; rerun setup')
         return result
 
+    def _get_req_chunk_hit(self, req_stage, prefix_block_hashes, req_chunks_meta, req_chunks_hashes):
+        if (getattr(self, 'launch_config', {}).get('tree_f3') is not None
+                and self.active_layout['phase'] == 'populate'):
+            # F3 needs every query row at local position zero, even if another
+            # chunk or an interrupted setup already committed these KV blocks.
+            # SetupStore.dump_data still preserves every complete shard.
+            return 0, 0
+        return super()._get_req_chunk_hit(req_stage, prefix_block_hashes, req_chunks_meta, req_chunks_hashes)
+
     def _process_req(self, tokens):
         if self.active_layout['phase'] == 'populate':
             keys = self.generate_hash(self.block_size, tokens, self._seed)
@@ -167,7 +176,13 @@ class PersistentBlendConnector(UCMBlendConnector):
             return
         super().start_load_kv(*args, **kwargs)
         if self._invalid_block_ids:
-            raise RuntimeError('Incomplete external cache load')
+            detail = getattr(self.store, 'last_error', None)
+            rank = getattr(self, 'global_rank', 'unknown')
+            request = getattr(self, 'worker_request_id', None)
+            raise RuntimeError(
+                f'Incomplete external cache load: rank={rank}, '
+                f'request={request}, invalid_blocks={len(self._invalid_block_ids)}, '
+                f'backend_error={detail!r}')
 
     def save_kv_layer(self, *args, **kwargs):
         if getattr(self, 'router_dense_id', None):

@@ -54,6 +54,10 @@ def setup(worker):
     if model.__class__.__name__!='Qwen3Model' or len(model.layers)!=64:
         raise RuntimeError('Model must be an unpartitioned Qwen3 decoder (TP supported; PP unsupported)')
     sparse.model=model
+    if getattr(sparse, 'tree_f3_config', None) is not None:
+        # Compile the source tree outside measured answer TTFT.
+        from .tree_selection import tree_need
+        tree_need([0.], [1.])
     sparse.lm=worker.model_runner.model
     group=get_kv_transfer_group()
     connector=getattr(group,"connector",group)
@@ -98,11 +102,19 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     trajectory = sparse.method in ('last_traj_4', 'last_traj_4f', 'query_traj_4f')
     query_trajectory = sparse.method == 'query_traj_4f'
     probe_positions = (b[-1] - 1,) if trajectory and not query_trajectory else meta.question_positions
+    tree = sparse.method == 'tree-prophetkv'
+    if tree:
+        if getattr(sparse, 'router_capture', False) or getattr(sparse, 'gpu_router', None) is not None:
+            raise RuntimeError('tree-prophetkv does not use router capture or routing')
+        probe_positions = tuple(range(min(meta.question_positions), b[-1]))
     qp=torch.tensor(probe_positions,device=device)-b[-2]
     suffix_positions=positions[-suffix_tokens:]
     if not torch.equal(suffix_positions,torch.arange(b[-2],b[-1],device=device)):
         raise RuntimeError('Fresh suffix positions changed')
     hidden=embeddings[-suffix_tokens:].clone();residual=None
+    if tree:
+        from .tree_runtime import prepare_sinks, probe_sinks
+        pos4, h4, r4 = prepare_sinks(sparse, b, device)
     scores=torch.zeros(b[-2],device=device,dtype=torch.float32)
     blocks=sparse.attn_metadata.block_table[0].long()
     cp=torch.arange(b[-2],device=device)
@@ -127,6 +139,8 @@ def probe(sparse,positions,embeddings,query_budget=16384):
         sparse.connector.wait_for_layer_load(name)
         cache=context.no_compile_layers[name].kv_cache[context.virtual_engine]
         ck=cache[0,slots//64,slots%64];cv=cache[1,slots//64,slots%64]
+        if tree:
+            h4, r4 = probe_sinks(sparse, layer, h4, r4, pos4, ck, cv)
         # Project the complete saved suffix in bounded batches. No context KV
         # is changed by the probe; attention uses all context keys per query.
         projected = [project(layer, hidden[a:a+query_budget],
@@ -204,6 +218,9 @@ def probe(sparse,positions,embeddings,query_budget=16384):
         if query_trajectory:
             extra['trajectory_head_positions'] = list(meta.question_positions)
             extra['trajectory_head_fusion'] = 'mean_query_tokens'
+    elif tree:
+        from .tree_runtime import tree_selection
+        eligible, selected, extra = tree_selection(sparse, scores, b)
     elif gpu_router is None:
         eligible, selected = global_selection(scores, b[1], sparse.ratio)
     else:
