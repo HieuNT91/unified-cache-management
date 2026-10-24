@@ -173,22 +173,65 @@ L20/A800 TP2 capacity, I/O contention or full-cohort stability.
 
 ### Local GPU test limits (2026-10-24)
 
-The authorized TP4 test used the L20 launcher with original RULER thinking
-inputs, 4 GiB/rank CPU offload and a fresh cache. It passed engine initialization,
-chunk KV/F3 construction, full cache loading and masked multi-step prefill for
-the first 65K-token prompt at 5%. Duplicate launch was rejected. The owned
-supervisor/workers were stopped when the user requested finalization; zero
-answer records had committed. Existing layer-mean results were preserved.
+The authorized local matrix completed on four RTX 4500 Ada GPUs, TP4 BF16 and
+4 GiB/rank CPU offload. It exercised the `13982dd` integration with the scoped
+local-progress callback. Original input tokens, thinking policy, output budgets
+and execution windows were unchanged. This does not establish server TP2 capacity
+or the I/O contention of five simultaneous L20 pairs.
 
-The A800 launcher adopted two original LongBench inputs for the declared
-two-seed test, but its GPU run had not started. The complete ratio/seed matrix,
-GPU resume and sustained multi-pair server I/O remain unverified. This partial
-test neither reproduced nor established a fix for the reported L20 cache-load
-failure. Runtime errors now include the backend error, rank, request and failed
-block count while retaining the fatal incomplete-load check. No automatic retry
-or timeout increase was introduced to hide failures.
+The L20 launcher completed all **8/8** answers for `niah_single_1-000` and
+`qa_2-000`, at 5/20/40/60% and seed 0. Duplicate launch was rejected. An intentional
+stop after the first accepted answer and subsequent resume preserved all three
+accepted artifact checksums and skipped that completed method/seed. All accepted
+answers passed native diagnostics, four-rank agreement, cache immutability and
+retirement with no pending transfers. The supervisor completed, owned engines
+exited, and no cache files remained. Prepared manifest, preparation receipt and
+both consumed sample hashes were unchanged. No no-cache answers or independent
+feature probes ran. Seven of the eight answers scored correct; QA at 5% scored 0.
+These two prompts are runtime validation, not an accuracy benchmark.
 
-Final commit validation: 181 focused CPU tests passed in an isolated checkout of
+The A800 launcher completed all **16/16** answers for `longbench-v2-461`
+(10,150 input tokens) and `longbench-v2-498` (114,688 input tokens), with seeds 0–1
+at all four percentages. It used an isolated source snapshot, excluding unrelated
+workspace study changes. An intentional stop/resume preserved all 15 accepted
+artifact checksums and skipped the five completed answers, restarting at
+40%/seed 1. All answers passed native diagnostics, four-rank agreement, cache
+immutability and transfer retirement. The longest answer produced 9,331 tokens
+and closed thinking naturally. At completion the owned engines exited and no
+cache files remained; preparation receipts, manifest and consumed sample hashes
+were unchanged. No no-cache answers or independent feature probes ran. Six of
+sixteen answers scored correct; this small cohort is not an accuracy benchmark.
+
+Local evidence lives under `outputs/tree-launcher-local-validation-20261024/`:
+`l20/final.md`, `a800/final.md`, both `*-test-evidence.json` files, and the
+stop/resume checksum receipts. These generated artifacts remain outside Git.
+
+Local validation writes `sessions/*/answer-progress.json` after the first output,
+every 30 seconds and on completion. It records method, seed, token count, phase
+and elapsed time; production server generation does not enable this callback.
+The scoped follow-up passed 23 focused CPU tests in an isolated source snapshot.
+
+An additional opt-in CUDA test passed four BF16/GQA cases against a dense FP32
+reference, using the real ragged kernel and FlashAttention suffix merge. It covers
+context-only repair, mixed context/suffix rows, later suffix steps, and both tile
+sizes. Maximum absolute error was 0.005821 (test tolerances: atol 0.008, rtol 0.02).
+Run `tests/test_tree_attention_cuda.py` only with explicitly assigned GPU UUIDs
+and `UCM_TREE_CUDA_TEST=1`; ordinary CPU test discovery skips it.
+
+While this matrix ran, the branch gained the L20 buffer change (`bcf23c0`),
+task-report changes (`97483d1`, `e8e5cb2`), and duplicate-write fix (`24d65f0`).
+A clean staged snapshot based on `24d65f0` passed **94 focused CPU tests**, including
+new temporary-store and buffer behavior, collection/resume, method checks and
+reports. The GPU matrix above did not exercise those later runtime changes;
+additional GPU validation of the duplicate-write fix is not established here.
+
+The local test has not reproduced or established a fix for the reported L20
+cache-load failure. Runtime errors now include the backend error, rank, request
+and failed block count while retaining the fatal incomplete-load check. No
+automatic retry or server timeout increase was introduced to hide failures.
+Existing layer-mean results were preserved when its authorized local job stopped.
+
+Initial integration validation (`13982dd`): 181 focused CPU tests passed in an isolated checkout of
 the staged tree, without the unrelated uncommitted study modules. This includes
 method math/native evidence, persistent setup, temporary cache retirement,
 chunked prefill, transfer failure diagnostics, TP2/server launchers, thinking

@@ -2,7 +2,7 @@
 import time
 
 
-def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None, phase=None, seed=0):
+def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None, phase=None, seed=0, progress=None):
     from vllm import SamplingParams
     from vllm.inputs import TokensPrompt
     if engine.has_unfinished_requests():
@@ -30,6 +30,7 @@ def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None,
         params.top_k = 32
     engine.add_request(request_id, TokensPrompt(prompt_token_ids=tokens), params)
     first, result = None, None
+    last_progress = None
     while engine.has_unfinished_requests():
         for output in engine.step():
             if output.request_id != request_id:
@@ -40,6 +41,13 @@ def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None,
                 state.consume(output.outputs[0].token_ids)
                 if state.first_answer_index is not None and answer_first is None:
                     answer_first = time.perf_counter() - started
+            if progress is not None and output.outputs:
+                now = time.perf_counter()
+                if last_progress is None or now-last_progress >= 30 or output.finished:
+                    progress(dict(request_id=request_id, output_tokens=len(output.outputs[0].token_ids),
+                                  elapsed_seconds=now-started, phase=state.phase if state else 'generation',
+                                  finished=output.finished))
+                    last_progress = now
             if output.finished:
                 result = output
     if result is None or first is None:

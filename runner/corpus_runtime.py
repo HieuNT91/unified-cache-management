@@ -233,7 +233,12 @@ class Engine:
         else:sync=[]
         sync_seconds=time.perf_counter()-start
         routing_time=time.perf_counter()-route_started if route_started is not None else overhead+sync_seconds
-        output,ttft,elapsed=generate(self.llm.llm_engine,self.sample['token_ids'],self.sample['max_output_tokens'],rid,self.sample['thinking'],sample=self.sample, **({'seed': seed} if seed is not None else {}))
+        progress_kwargs = {}
+        if self.protocol.get('local_validation'):
+            def save_progress(value):
+                atomic_json(self.session/'answer-progress.json', dict(value, method=case, seed=seed, at=time.time()))
+            progress_kwargs['progress'] = save_progress
+        output,ttft,elapsed=generate(self.llm.llm_engine,self.sample['token_ids'],self.sample['max_output_tokens'],rid,self.sample['thinking'],sample=self.sample, **({'seed': seed} if seed is not None else {}), **progress_kwargs)
         ds=self.llm.collective_rpc(drain)
         routed_decision=None
         if policy is not None:

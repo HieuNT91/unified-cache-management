@@ -55,6 +55,25 @@ def fixture(root, dataset='ruler'):
 
 
 class TreeCollectionTests(unittest.TestCase):
+    def test_local_generation_progress_reports_first_and_final_token_counts(self):
+        from runner.generation import generate
+        class Engine:
+            active = False
+            count = 0
+            def has_unfinished_requests(self): return self.active
+            def add_request(self, rid, prompt, params): self.active = True; self.rid = rid
+            def step(self):
+                self.count += 1; self.active = self.count < 3
+                return [NS(request_id=self.rid, outputs=[NS(token_ids=[65]*self.count)], finished=not self.active)]
+        progress = Mock()
+        with patch.dict(sys.modules, {'vllm': NS(SamplingParams=lambda **kw:NS(**kw)),
+                                     'vllm.inputs': NS(TokensPrompt=lambda **kw:kw)}), \
+                patch('runner.generation.time.perf_counter', return_value=1.):
+            generate(Engine(), [65], 3, 'progress-test', progress=progress)
+        values = [c.args[0] for c in progress.call_args_list]
+        self.assertEqual([v['output_tokens'] for v in values], [1,3])
+        self.assertEqual([v['finished'] for v in values], [False,True])
+
     def test_local_validation_is_explicit_tp4_subset_with_full_windows(self):
         from runner.tree_profiles import config
         for dataset in ('ruler','longbench-v2'):
