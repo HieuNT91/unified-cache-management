@@ -10,7 +10,9 @@ Prompt = chunk 0 (prefix chính xác) + các chunk ngữ cảnh, mỗi chunk đ�
 
 Khi encode mỗi chunk, với mỗi khe giữa token t−1 và t:
 
-F3(t) = khối lượng attention mà các token [t, t+16) đặt lên [t−16, t), chia cho khối lượng của chúng lên toàn bộ phần đứng trước (bỏ 4 token sink đầu chunk), lấy trung bình trên **mọi head của 1/4 số lớp đầu** (Qwen3-4B: 9/36 lớp, 0–8; Qwen3-32B: 16/64 lớp, 0–15).
+F3(t) = Σ_{i∈[t, t+16)} A(i → [t−16, t)) / Σ_{i∈[t, t+16)} A(i → [t−16, i)), lấy trung bình trên **mọi head của 1/4 số lớp đầu** (Qwen3-4B: 9/36 lớp, 0–8; Qwen3-32B: 16/64 lớp, 0–15).
+
+A là attention softmax thường của lúc encode chunk (chuẩn hoá trên toàn bộ phần đứng trước, 4 token sink đầu chunk bị loại khỏi softmax). Tử: khối lượng mà 16 token sau khe đặt lên 16 token trước khe. Mẫu: khối lượng chúng đặt lên **cửa sổ cục bộ** [t−16, i), tức từ t−16 tới ngay trước chính token đó, không phải toàn bộ phần đứng trước. Nên F3 ∈ [0, 1] là tỉ lệ "nhìn qua khe" trong phần attention cục bộ: 1 = cửa sổ 16 token sau khe chỉ nhìn sang trước khe, 0 = chỉ nhìn nhau (cụm mới bắt đầu sau khe).
 
 F3 cao: hai bên khe đọc nhau, cùng một cụm. F3 thấp: liên kết yếu, khả năng là ranh giới. (`selection.F3Recorder`, ghi lúc chunk được dựng.)
 
