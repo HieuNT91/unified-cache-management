@@ -83,7 +83,7 @@ class ProphetKV(Blend):
             from .selection import F3Recorder
             hf=self.model_config_hf
             self.f3rec = F3Recorder(tuple(worker_request.prompt_token_ids),
-                getattr(hf,'head_dim',hf.hidden_size//hf.num_attention_heads))
+                getattr(hf,'head_dim',hf.hidden_size//hf.num_attention_heads), self.num_layers)
         if self.prefill_state is None:
             # Offline construction and warmup are dense, single-step requests.
             return self.blend_req_metas

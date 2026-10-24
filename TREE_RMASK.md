@@ -10,7 +10,7 @@ Prompt = chunk 0 (prefix chính xác) + các chunk ngữ cảnh, mỗi chunk đ�
 
 Khi encode mỗi chunk, với mỗi khe giữa token t−1 và t:
 
-F3(t) = khối lượng attention mà các token [t, t+16) đặt lên [t−16, t), chia cho khối lượng của chúng lên toàn bộ phần đứng trước (bỏ 4 token sink đầu chunk), lấy trung bình trên **mọi head của lớp 0–8**.
+F3(t) = khối lượng attention mà các token [t, t+16) đặt lên [t−16, t), chia cho khối lượng của chúng lên toàn bộ phần đứng trước (bỏ 4 token sink đầu chunk), lấy trung bình trên **mọi head của 1/4 số lớp đầu** (Qwen3-4B: 9/36 lớp, 0–8; Qwen3-32B: 16/64 lớp, 0–15).
 
 F3 cao: hai bên khe đọc nhau, cùng một cụm. F3 thấp: liên kết yếu, khả năng là ranh giới. (`selection.F3Recorder`, ghi lúc chunk được dựng.)
 
@@ -83,4 +83,4 @@ PYTHON_BIN=... MODEL=<Qwen3-4B-Instruct-2507> MANIFEST=<prepared_ruler13/manifes
 OUT=<out> CACHE_ROOT=<cache> GPUS="0 1" PERCENTAGES="15 20" bash scripts/ruler64k_tree_rmask.sh
 ```
 
-Script bật `UCM_TREE=1 UCM_S4=1 UCM_PROBE_S4=1 UCM_MASK_QUESTION=1 UCM_RMASK=1` và `--probe-query suffix`; tắt hết các biến này là ProphetKV gốc. Prompt RULER chuẩn bị bằng `scripts/ruler_prepared.py`. Cây cần TP=1.
+Script bật `UCM_TREE=1 UCM_S4=1 UCM_PROBE_S4=1 UCM_MASK_QUESTION=1 UCM_RMASK=1` và `--probe-query suffix`; tắt hết các biến này là ProphetKV gốc. Prompt RULER chuẩn bị bằng `scripts/ruler_prepared.py`. Chạy được với tensor parallel: mỗi rank cộng F3 trên head của mình rồi all-reduce (tổng và số head), điểm probe được all-reduce như ProphetKV gốc, tập chọn của rank 0 được broadcast. Đã kiểm TP=2 (Qwen3-4B, 2×A5000): các rank chọn giống nhau, điểm khớp TP=1; tập chọn trùng 86–95% với TP=1 do sai khác số học bf16 khi chia head. Trên máy có GPU nối qua switch PCIe, NCCL có thể treo lúc khởi tạo — đặt `NCCL_P2P_DISABLE=1`.

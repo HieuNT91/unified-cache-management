@@ -51,11 +51,16 @@ class F3Recorder:
     """Construction-time link strength of a chunk (outside the measured TTFT), for the hierarchical selection.
 
     For the gap before token t, F3[t] = attention mass that tokens [t, t+W) put on [t-W, t), divided by their mass on
-    [t-W, i), averaged over EVERY head of layers 0..layers-1 (no head selection). High = both sides read each other;
-    low = a boundary. The chunk's first four tokens (sinks) are excluded. Same arithmetic as the simulator's
-    linkfeat.f3_capture, so the tree built from it is the one evaluated there."""
-    def __init__(self, tokens, head_dim, layers=9, W=16):
-        self.key = hash(tokens); self.T = len(tokens); self.D = head_dim; self.L = layers; self.W = W
+    [t-W, i), averaged over EVERY head of the first quarter of the decoder layers (no head selection; 9 of 36 layers
+    for Qwen3-4B, 16 of 64 for Qwen3-32B). High = both sides read each other; low = a boundary. The chunk's first four
+    tokens (sinks) are excluded. Same arithmetic as the simulator's linkfeat.f3_capture, so the tree built from it is
+    the one evaluated there. Under tensor parallelism each rank sums its own heads; result() all-reduces the sum and
+    the head count, so every rank holds the same F3."""
+    DEPTH_FRACTION = 0.25
+
+    def __init__(self, tokens, head_dim, num_layers, W=16):
+        self.key = hash(tokens); self.T = len(tokens); self.D = head_dim; self.W = W
+        self.L = max(1, round(num_layers * self.DEPTH_FRACTION))
         self.seen = 0; self.heads = 0; self.acc = None
 
     def add_layer(self, layer_index, query, key):
@@ -84,7 +89,11 @@ class F3Recorder:
         return self.seen == self.L
 
     def result(self):
-        out = (self.acc / max(self.heads, 1)).cpu().numpy(); self.acc = None
+        from vllm.distributed import get_tp_group, tensor_model_parallel_all_reduce
+        acc, heads = self.acc, torch.tensor([float(self.heads)], device=self.acc.device)
+        if get_tp_group().world_size > 1:
+            acc = tensor_model_parallel_all_reduce(acc); heads = tensor_model_parallel_all_reduce(heads)
+        out = (acc / heads.clamp(min=1)).cpu().numpy(); self.acc = None
         return out
 
 

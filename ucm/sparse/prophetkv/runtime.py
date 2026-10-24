@@ -91,9 +91,10 @@ def tree_selection(sparse, scores, b):
     import numpy as np
     from vllm.distributed import tensor_model_parallel_all_reduce, get_tp_group
     from .selection import tree_need
+    # Probe scores are local head means: average them across the TP group (as global_selection does). F3 is already
+    # identical on every rank (F3Recorder.result all-reduces), so every rank builds the same tree; rank 0's selection
+    # is still broadcast so that the ranks repair exactly the same tokens.
     group = get_tp_group(); scores = tensor_model_parallel_all_reduce(scores) / group.world_size
-    if group.world_size != 1:
-        raise RuntimeError('tree selection needs every head on one rank (TP=1)')
     eligible = scores[b[1]:]
     t0 = time.perf_counter()
     store = getattr(sparse, 'f3_store', {}); tokens = sparse.prompt_token_ids
@@ -112,6 +113,8 @@ def tree_selection(sparse, scores, b):
         if len(sel) >= count: break
         sel.add(int(p_))
     selected = torch.tensor(sorted(sel), device=scores.device, dtype=torch.long)
+    if group.world_size > 1:
+        selected = group.broadcast(selected, src=0)
     return eligible, selected, dict(selection_method='tree_topk', unit_budget=count, forced=forced,
                                     tree_seconds=time.perf_counter() - t0)
 
