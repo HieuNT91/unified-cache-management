@@ -115,6 +115,50 @@ method dispatch, F3 warmup/readiness/immutability/retirement, resume and seeded
 reporting, plus existing TP2, thinking, v3, naive-reuse and tree-method regressions.
 Shell/Python syntax, CLI help and diff checks passed at that stage.
 
+## L20 pinned transfer pool (2026-10-24)
+
+The reported `niah_single_3-004` read at40% timed out in `PC::S2D` after120,000ms
+on both TP2 ranks, followed by `Incomplete external cache load`. This establishes
+a transfer timeout, not whether storage, memory pressure or device transfer caused it.
+
+Tree collection engines with `hardware_profile=l20-tp2` and `tp=2` now explicitly
+set the native PcStore `buffer_number=1152`. Qwen3-32B BF16 uses8 MiB per all-layer
+KV block per TP2 rank: the reserved pinned pool falls from32 GiB to9 GiB per rank,
+or from320 GiB to90 GiB across the five pairs. The pool covers the maximum1,024
+context blocks per RULER prompt. These are reserved-pool sizes, not a cap on total
+host memory: native code can allocate extra buffers when its pool is exhausted.
+The source tree-rmask branch similarly limits the transfer pool for its4B profile;
+the memory figures here are recalculated for32B TP2.
+
+Pinned buffers are transfer staging, not a retained KV cache. Files still live at
+`CACHE_ROOT`; each read uses the file backend. Reducing pinned allocation leaves
+more RAM available to other processes and the OS page cache, but has not been
+shown to eliminate the server timeout. A800, local TP4 and other L20 methods keep
+their existing buffer configuration. Backend timeout remains120 seconds; no load
+batching, RPC deadline change or automatic retry is introduced by this fix.
+
+Validation:26 focused CPU tests passed, including pool geometry, Python-to-native
+buffer configuration, isolation from other profiles/methods, collection resume
+and transfer-failure handling. No L20 GPU run or server stability test was performed.
+
+After publishing this source update, run the following **on L20** in the checkout
+from the failing log. The `stop` command checks owned process identities. Do not
+change the env, settings, plan, prepared inputs or accepted results, and do not
+configure a fresh experiment. A new engine builds cache for the remaining work
+and records `buffer_number: 1152` in `sessions/*/initialization.json`; its backend
+startup log reports `Set UC::BufferNumber to 1152`.
+
+```bash
+(
+set -e
+cd /data/jh/unified-cache-management/.worktrees/tree-prophetkv-l20-v1
+bash scripts/launcher/l20_ruler_thinking_tree_prophetkv.sh stop
+git pull --ff-only origin prophetkv/tp2-router-data
+bash scripts/launcher/l20_ruler_thinking_tree_prophetkv.sh resume
+bash scripts/launcher/l20_ruler_thinking_tree_prophetkv.sh status
+)
+```
+
 ## Explicit local GPU validation
 
 The opt-in arguments `--local-validation --validation-prompt-ids ID ID` allow a

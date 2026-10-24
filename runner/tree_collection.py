@@ -27,6 +27,12 @@ def configure_engine(config, cache, protocol):
     """Opt in only this collection's cached engines, including F3 warmup."""
     inventory(protocol)
     extra = config['kv_transfer_config']['kv_connector_extra_config']
+    if protocol.get('hardware_profile') == 'l20-tp2' and protocol.get('tp') == 2:
+        # Qwen3-32B TP2: each buffer holds one 8 MiB all-layer KV block.
+        # 1152 covers the <=1024 context blocks while reserving 9 GiB/rank,
+        # instead of the native default's 32 GiB/rank (320 GiB for five pairs).
+        for connector in extra['ucm_connectors']:
+            connector['ucm_connector_config']['buffer_number'] = 1152
     extra['tree_f3'] = dict(protocol=PROTOCOL, cache_dir=str(cache), namespace=str(cache), readonly=False)
     for sparse in extra['ucm_sparse_config'].values():
         sparse.update(method=METHOD, ratio=min(protocol['percentages'])/100)
