@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print RULER task metrics on identical completed prompts across all methods."""
+"""Print RULER/LongBench task metrics on identical completed prompt/seed pairs."""
 from experiment_task_breakdown import main
 
 
