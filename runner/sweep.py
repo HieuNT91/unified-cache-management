@@ -141,8 +141,15 @@ class PromptCache:
         return result
 
     def unchanged(self):
-        if self.before is None or self.before != self.snapshot():
-            raise RuntimeError('Original KV changed during inference')
+        if self.before is None:
+            raise RuntimeError('Original KV changed during inference: readiness snapshot missing')
+        after = self.snapshot()
+        if self.before != after:
+            changed = sorted(name for name in self.before if self.before[name] != after[name])
+            examples = {name: dict(before=self.before[name], after=after[name]) for name in changed[:10]}
+            raise RuntimeError('Original KV changed during inference: '
+                               f'cache={self.cache}, changed_shards={len(changed)}, '
+                               f'size_mtime_ns={examples}')
 
     def delete(self):
         from ucm.sparse.prophetkv.lifecycle import delete_retired_files

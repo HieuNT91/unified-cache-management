@@ -10,6 +10,7 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
+import runner.generation  # Keep mock targets stable across sys.modules fixtures.
 from runner import sweep
 from runner.identity import BlockHasher, block_keys, shard_name
 from runner.setups import bytes_per_shard, atomic_json, file_hash

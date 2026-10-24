@@ -36,8 +36,9 @@ class PersistentBlendConnector(UCMBlendConnector):
             from runner.setup_store import SetupStore
             return SetupStore(store, config, self.global_rank, max_load_blocks=max_load_blocks)
         if self.launch_config.get("temporary_layouts"):
-            from runner.temporary import TemporaryStore
-            return TemporaryStore(store, max_load_blocks=max_load_blocks)
+            from runner.temporary import TemporaryStore, TreeTemporaryStore
+            policy = TreeTemporaryStore if self.launch_config.get('tree_f3') is not None else TemporaryStore
+            return policy(store, max_load_blocks=max_load_blocks)
         return TrackedStore(store, max_load_blocks=max_load_blocks)
 
     def get_num_new_matched_tokens(self, request, num_computed_tokens):
@@ -88,7 +89,8 @@ class PersistentBlendConnector(UCMBlendConnector):
                 and self.active_layout['phase'] == 'populate'):
             # F3 needs every query row at local position zero, even if another
             # chunk or an interrupted setup already committed these KV blocks.
-            # SetupStore.dump_data still preserves every complete shard.
+            # Store policies preserve KV without skipping the F3 query rows:
+            # persistent complete shards, or temporary already-submitted shards.
             return 0, 0
         return super()._get_req_chunk_hit(req_stage, prefix_block_hashes, req_chunks_meta, req_chunks_hashes)
 
@@ -160,6 +162,9 @@ class PersistentBlendConnector(UCMBlendConnector):
             layout = metadata.request_meta[first[0]].request_layout
             if layout.get('request_id') != first[0] or layout.get('phase') not in ('populate', 'read'):
                 raise RuntimeError('Worker dispatch missing request layout')
+            from runner.temporary import TreeTemporaryStore
+            if isinstance(self.store, TreeTemporaryStore):
+                self.store.begin_namespace(namespace_from_id(first[0]))
             if hasattr(self.store, 'writable'):
                 self.store.writable = layout['phase'] == 'populate'
             self.worker_request_id = first[0]

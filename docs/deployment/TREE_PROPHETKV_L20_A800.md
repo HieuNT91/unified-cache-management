@@ -194,3 +194,36 @@ method math/native evidence, persistent setup, temporary cache retirement,
 chunked prefill, transfer failure diagnostics, TP2/server launchers, thinking
 policies and local validation-profile guards. Staged Python 3.10/shell syntax,
 document links and diff checks passed.
+
+## L20 duplicate KV publication fix (2026-10-24)
+
+The copied worker logs and session receipts distinguish two failures. The first
+attempt had native load timeouts. Three later failures, with 1152 buffers/rank,
+occurred in `Engine.begin` before any answer for the failing prompt. Their
+inventories contain every expected 8 MiB shard plus 14 or 15 staging files for
+already-existing shard names. Several staging mtimes are 3–6 seconds newer than
+the corresponding published file. `vt-001` populated 890 block occurrences per
+rank but had 797 unique blocks; `vt-004` populated 826 with only 655 unique blocks.
+The receipts' hashes for the relevant cache/connector source match the code
+preceding this fix. The old receipts do not retain the readiness snapshot, so
+they cannot identify every shard that triggered the metadata comparison.
+
+Tree F3 requires full chunk computation, including shared prefixes. PcStore
+0.3.0 retires dump tasks after device-to-host transfer and queues file publication
+separately. A repeated prefix dump can therefore replace an already-published
+file after readiness. Temporary tree stores now remember submitted `(key, shard)`
+pairs for the current prompt namespace and submit each only once, including
+before the first file exists. F3 computation is unchanged. Submission failures
+remain fatal at retirement; readiness, file sizes, cache immutability and
+read-only inference checks remain required. The tracking set resets on the next
+namespace after transfer retirement. Other temporary methods and persistent
+setup stores retain their existing policies.
+
+Immutability errors now include the changed shard count and up to ten filenames
+with before/after size and mtime, which are also retained in failure receipts.
+The exact commit passed 65 CPU tests across temporary tree writes, collection, original
+token metadata, temporary sweep and tree method suites. A controlled asynchronous
+file-queue fixture reproduces the old failure and passes with the fix. These
+checks do not constitute an L20 GPU rerun or establish a fix for the separate
+native load timeout. No prepared inputs or accepted answers need regeneration;
+updated runtime code takes effect in newly started worker processes on resume.
