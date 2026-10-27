@@ -7,6 +7,8 @@ Default: 64 CPU worker processes, one BLAS thread per worker.
 Supported: completed tp2-data-config-v2 LongBench v2 / RULER collections,
 including L40 thinking TP2/TP4. No model, prepared inputs, CUDA or repo imports.
 Source results are read-only. Existing output files are never overwritten.
+Tree-prophetkv uses repository readers and exports complete outcomes plus any
+copied baseline-source/ to tree-prophetkv-outcomes.npz, without feature probes.
 """
 import argparse
 from collections import Counter
@@ -1042,6 +1044,10 @@ def extracted_prompts(jobs, workers):
 def export(root, output=None, quiet=False, workers=DEFAULT_WORKERS):
     require(type(workers) is int and workers > 0, 'workers must be a positive integer')
     root = Path(root).resolve()
+    if json.loads((root/'settings.json').read_text()).get('schema') == 'tree-prophetkv-thinking-collection-v1':
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from scripts.export_tree_outcomes import export as export_tree
+        return export_tree(root, output, quiet)
     if json.loads((root/'settings.json').read_text()).get('collection_protocol') == 'tp2-data-v3':
         from scripts.collection_v3_export import export_compact
         return export_compact(root, output, quiet, workers)
@@ -1158,7 +1164,7 @@ def positive_workers(value):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('experiment_dir', type=Path, help='Completed collection root containing settings.json, plan.json and rows.json')
-    parser.add_argument('--output', type=Path, help='New output .npz path (default: EXPERIMENT_DIR/DATASET-features.npz)')
+    parser.add_argument('--output', type=Path, help='New output .npz path (default: EXPERIMENT_DIR/DATASET-features.npz; tree: tree-prophetkv-outcomes.npz)')
     parser.add_argument('--workers', type=positive_workers, default=DEFAULT_WORKERS,
                         help='Parallel CPU processes (default: 64); use 1 for serial export')
     parser.add_argument('--quiet', action='store_true', help='Suppress progress messages')

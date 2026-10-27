@@ -68,3 +68,23 @@ receipts, L40/L20 group differences, four-to-two seed selection, exact sample
 intersection, unchanged source files, input/policy/token mismatches, corrupted
 results and missing initialization evidence. No remote run or GPU execution is
 part of this report update.
+
+## Export tree outcomes to NPZ
+
+From the updated checkout, run `python scripts/export_features.py EXPERIMENT_DIR`.
+For a tree-prophetkv experiment this writes
+`EXPERIMENT_DIR/tree-prophetkv-outcomes.npz`, with four one-dimensional arrays:
+`prompt_id` (`ID--seed-N`), `method`, `accuracy` (0–1), and `ttft` (seconds).
+No model, prepared inputs, attention captures or feature extraction are needed.
+
+If `baseline-source/` exists, its original accepted no-cache records are included
+after the same input/policy/token checks as the report. Only the target run's
+seeds are included (A800 seeds 0–1, even if the baseline has four). Without that
+folder, the exporter explicitly reports that it exported tree methods only.
+Every declared prompt/seed must have all scheduled tree methods and, when
+copied, no-cache; incomplete or corrupt sources fail before writing the NPZ.
+Existing output files are preserved; use `--output NEW_PATH.npz` for a new export.
+
+This tree export uses repository readers, so deploy the complete checkout,
+including `scripts/export_tree_outcomes.py`; copying only `export_features.py`
+is insufficient. Legacy non-tree export behavior is unchanged by this addition.
