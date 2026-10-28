@@ -52,17 +52,13 @@ class TreeOutcomeExportTests(unittest.TestCase):
                                                       [s+2. for i in range(3) for s in range(seeds)])
                 self.assertEqual(before, {p:(file_hash(p),p.stat().st_mtime_ns) for p in before})
 
-    def test_missing_or_corrupt_baseline_and_partial_tree_do_not_publish(self):
-        for failure in ('missing-baseline-answer', 'missing-tree-answer', 'token-mismatch', 'corrupt-result', 'bad-copy'):
+    def test_corrupt_baseline_does_not_publish(self):
+        for failure in ('token-mismatch', 'corrupt-result', 'bad-copy'):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 target, baseline = completed(root)
                 folder = baseline[0]/'records/nocache/prompt-0/seed-0'
-                if failure == 'missing-baseline-answer':
-                    shutil.rmtree(folder)
-                elif failure == 'missing-tree-answer':
-                    shutil.rmtree(target[0]/'records/tree-prophetkv-20/prompt-0/seed-0')
-                elif failure == 'token-mismatch':
+                if failure == 'token-mismatch':
                     shutil.rmtree(folder)
                     commit(baseline, 'nocache', token_hash='b'*64)
                 elif failure == 'corrupt-result':
@@ -72,6 +68,45 @@ class TreeOutcomeExportTests(unittest.TestCase):
                 with self.assertRaises((ValueError, OSError)):
                     exporter.export(root, quiet=True)
                 self.assertFalse((root/'tree-prophetkv-outcomes.npz').exists())
+
+    def test_partial_methods_and_baseline_export_every_committed_answer(self):
+        for dataset in ('ruler', 'longbench-v2'):
+            with self.subTest(dataset=dataset), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                target, baseline = fixture(root, dataset)
+                # No prompt has a complete set of methods. No completion
+                # receipts exist; baseline and tree have different membership.
+                commit(baseline, 'nocache', i=0)
+                commit(baseline, 'nocache', i=1)
+                commit(target, 'tree-prophetkv-5', i=0, score=.5)
+                commit(target, 'tree-prophetkv-20', i=2, score=0.)
+                if dataset == 'longbench-v2':
+                    commit(target, 'tree-prophetkv-40', i=1, seed=1)
+                    commit(baseline, 'nocache', i=0, seed=3)  # Outside target seeds.
+                # An answer without its commit receipt must not be exported.
+                pending = target[0]/'records/tree-prophetkv-60/prompt-2/seed-0'
+                pending.mkdir(parents=True)
+                (pending/'result.json').write_text('{}')
+                output = exporter.export(root, quiet=True)
+                with np.load(output, allow_pickle=False) as data:
+                    got = dict(zip(zip(data['method'], data['prompt_id']), data['accuracy']))
+                    wanted = {('nocache', 'prompt-0--seed-0'): 1.,
+                              ('nocache', 'prompt-1--seed-0'): 1.,
+                              ('tree-prophetkv-5', 'prompt-0--seed-0'): .5,
+                              ('tree-prophetkv-20', 'prompt-2--seed-0'): 0.}
+                    if dataset == 'longbench-v2':
+                        wanted[('tree-prophetkv-40', 'prompt-1--seed-1')] = 1.
+                    self.assertEqual(got, wanted)
+                    self.assertEqual(len(data['method']), len(wanted))
+
+    def test_empty_collection_exports_empty_arrays_without_completion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fixture(root)
+            output = exporter.export(root, quiet=True)
+            with np.load(output, allow_pickle=False) as data:
+                self.assertEqual(set(data.files), {'prompt_id', 'method', 'accuracy', 'ttft'})
+                self.assertTrue(all(data[key].shape == (0,) for key in data.files))
 
     def test_output_override_no_overwrite_and_no_baseline(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -41,7 +41,8 @@ LongBench tasks use the prepared domain/subdomain labels.
 If `baseline-source/` is absent, the tree report explicitly says it is reporting
 only tree methods. The regular breakdown retains its all-available behavior in
 that case; `experiment_same_count.py EXPERIMENT_DIR` always uses the intersection.
-An incomplete copied baseline is an error rather than a silent fallback.
+A copied baseline with missing metadata or corrupt committed records is an error
+rather than a silent fallback; missing answers are allowed.
 
 The copied RULER baseline comes from L40 and the tree answers from L20. Their
 original hardware provenance is retained; TTFT comparisons are cross-server
@@ -81,8 +82,12 @@ If `baseline-source/` exists, its original accepted no-cache records are include
 after the same input/policy/token checks as the report. Only the target run's
 seeds are included (A800 seeds 0–1, even if the baseline has four). Without that
 folder, the exporter explicitly reports that it exported tree methods only.
-Every declared prompt/seed must have all scheduled tree methods and, when
-copied, no-cache; incomplete or corrupt sources fail before writing the NPZ.
+All currently committed answers are exported independently for each method.
+The experiment may still be running, methods may have different counts, and
+no intersection or complete-cohort requirement is applied. Missing answers and
+in-flight answers without a commit receipt are omitted; an empty collection
+produces empty arrays. Corrupt committed records or mismatched input identities
+still fail before writing the NPZ. The export prints available counts per method.
 Existing output files are preserved; use `--output NEW_PATH.npz` for a new export.
 
 This tree export uses repository readers, so deploy the complete checkout,

@@ -7,7 +7,7 @@ Default: 64 CPU worker processes, one BLAS thread per worker.
 Supported: completed tp2-data-config-v2 LongBench v2 / RULER collections,
 including L40 thinking TP2/TP4. No model, prepared inputs, CUDA or repo imports.
 Source results are read-only. Existing output files are never overwritten.
-Tree-prophetkv uses repository readers and exports complete outcomes plus any
+Tree-prophetkv uses repository readers and exports all committed outcomes plus any
 copied baseline-source/ to tree-prophetkv-outcomes.npz, without feature probes.
 """
 import argparse

@@ -1,4 +1,4 @@
-"""Export complete tree results and copied no-cache outcomes without probes."""
+"""Export all committed tree and copied no-cache outcomes without probes."""
 import json
 import math
 import os
@@ -7,7 +7,6 @@ import tempfile
 
 import numpy as np
 
-from runner.matched_status import match_records
 from scripts.experiment_task_breakdown import snapshot
 
 
@@ -21,14 +20,20 @@ def export(root, output=None, quiet=False):
     # This reader verifies original receipts, input/policy/token identity and
     # selects only the tree experiment's seeds from a copied baseline run.
     expected, data = snapshot(root)
-    data, matching = match_records(data, expected)
-    if not expected or matching['matched_samples'] != len(expected):
-        raise ValueError(f'Incomplete tree outcomes: {matching["matched_samples"]}/{len(expected)} '
-                         f'prompt/seed pairs complete across all methods; '
-                         f'available={matching["available_counts"]}')
+    tasks = {r['prompt_id']: r['subtask'] for r in expected}
+    if len(tasks) != len(expected):
+        raise ValueError('Duplicate expected prompt IDs')
+    seen, present = set(), set()
     fields = {k: [] for k in ('prompt_id', 'method', 'accuracy', 'ttft')}
     for method, records in data.items():
         for record in records:
+            identity = record['prompt_id']
+            key = (method, identity)
+            if (key in seen or identity not in tasks
+                    or record['subtask'] != tasks[identity]):
+                raise ValueError('Duplicate/unexpected result or subtask mismatch')
+            seen.add(key)
+            present.add(identity)
             pid, seed = json.loads(record['prompt_id'])
             pid = f'{pid}--seed-{seed}' if seed is not None else pid
             accuracy, ttft = record['accuracy'], record['timings']['ttft_seconds']
@@ -48,6 +53,8 @@ def export(root, output=None, quiet=False):
     if not quiet:
         baseline = 'included from baseline-source/' if 'nocache' in data else 'absent (tree methods only)'
         print(f'Saved {output}: {len(fields["prompt_id"])} outcomes, '
-              f'{len(expected)} prompt/seed pairs; nocache {baseline}.\n'
+              f'{len(present)}/{len(expected)} prompt/seed pairs with at least one answer; '
+              f'nocache {baseline}.\n'
+              f'Available per method: { {method: len(rows) for method, rows in data.items()} }\n'
               'Fields: prompt_id, method, accuracy, ttft (seconds).', flush=True)
     return output
