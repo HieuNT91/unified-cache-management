@@ -74,8 +74,11 @@ part of this report update.
 
 From the updated checkout, run `python scripts/export_features.py EXPERIMENT_DIR`.
 For a tree-prophetkv experiment this writes
-`EXPERIMENT_DIR/tree-prophetkv-outcomes.npz`, with four one-dimensional arrays:
-`prompt_id` (`ID--seed-N`), `method`, `accuracy` (0–1), and `ttft` (seconds).
+`EXPERIMENT_DIR/tree-prophetkv-outcomes.npz`, with six one-dimensional arrays:
+`prompt_id` (`ID--seed-N`), `method`, `accuracy` (0–1), `ttft` (seconds),
+`thinking_tokens` and `answer_tokens` (int64). Token counts are copied from
+accepted result metrics for both tree and no-cache; they are not retokenized or
+inferred from text. Missing or invalid token counts are rejected.
 No model, prepared inputs, attention captures or feature extraction are needed.
 
 If `baseline-source/` exists, its original accepted no-cache records are included

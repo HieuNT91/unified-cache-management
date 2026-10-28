@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -37,7 +38,16 @@ class TreeOutcomeExportTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('nocache included', result.stdout)
                 with np.load(root/'tree-prophetkv-outcomes.npz', allow_pickle=False) as data:
-                    self.assertEqual(set(data.files), {'prompt_id', 'method', 'accuracy', 'ttft'})
+                    self.assertEqual(set(data.files), {'prompt_id', 'method', 'accuracy', 'ttft',
+                                                       'thinking_tokens', 'answer_tokens'})
+                    for field in ('thinking_tokens', 'answer_tokens'):
+                        self.assertEqual(data[field].dtype, np.dtype('int64'))
+                        for index, (pid, method) in enumerate(zip(data['prompt_id'], data['method'])):
+                            prompt, seed = pid.rsplit('--seed-', 1)
+                            stage = (root/'baseline-source'/('ruler' if dataset == 'ruler' else 'primary')
+                                     if method == 'nocache' else root/'tree')
+                            result = json.loads((stage/'records'/method/prompt/f'seed-{seed}'/'result.json').read_text())
+                            self.assertEqual(data[field][index], result[field])
                     self.assertEqual(len(data['prompt_id']), 3*seeds*5)
                     self.assertEqual(set(data['method']),
                                      {'nocache', 'tree-prophetkv-5', 'tree-prophetkv-20',
@@ -105,8 +115,34 @@ class TreeOutcomeExportTests(unittest.TestCase):
             fixture(root)
             output = exporter.export(root, quiet=True)
             with np.load(output, allow_pickle=False) as data:
-                self.assertEqual(set(data.files), {'prompt_id', 'method', 'accuracy', 'ttft'})
+                self.assertEqual(set(data.files), {'prompt_id', 'method', 'accuracy', 'ttft',
+                                                   'thinking_tokens', 'answer_tokens'})
                 self.assertTrue(all(data[key].shape == (0,) for key in data.files))
+                self.assertEqual(data['thinking_tokens'].dtype, np.dtype('int64'))
+                self.assertEqual(data['answer_tokens'].dtype, np.dtype('int64'))
+
+    def test_token_counts_are_preserved_and_invalid_counts_never_publish(self):
+        from scripts import export_tree_outcomes as tree_exporter
+        expected = [dict(prompt_id=json.dumps(['p',0]), subtask='task')]
+        base = dict(expected[0], accuracy=.5, timings=dict(ttft_seconds=2.))
+        records = {'nocache': [dict(base, thinking_tokens=13, answer_tokens=7)],
+                   'tree-prophetkv-5': [dict(base, thinking_tokens=0, answer_tokens=19)]}
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with patch.object(tree_exporter, 'snapshot', return_value=(expected,records)):
+                path = tree_exporter.export(root, quiet=True)
+            with np.load(path, allow_pickle=False) as data:
+                np.testing.assert_array_equal(data['thinking_tokens'], [13,0])
+                np.testing.assert_array_equal(data['answer_tokens'], [7,19])
+            for field in ('thinking_tokens', 'answer_tokens'):
+                for value in (None, -1, 1.5, True):
+                    with self.subTest(field=field, value=value):
+                        invalid = dict(records['nocache'][0], **{field: value})
+                        output = root/'invalid.npz'
+                        with patch.object(tree_exporter, 'snapshot', return_value=(expected, {'nocache':[invalid]})):
+                            with self.assertRaisesRegex(ValueError, 'token counts'):
+                                tree_exporter.export(root, output, quiet=True)
+                        self.assertFalse(output.exists())
 
     def test_output_override_no_overwrite_and_no_baseline(self):
         with tempfile.TemporaryDirectory() as temp:
