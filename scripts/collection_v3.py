@@ -16,9 +16,20 @@ def seeds(value, case=None):
     if case == 'probe' or not enabled(value):
         return [None]
     n = value.get('answers_per_question')
-    if type(n) is not int or n <= 0 or value.get('answer_seeds') != list(range(n)):
+    selected = value.get('answer_seeds')
+    tree_longbench = (value.get('schema') == 'tree-prophetkv-thinking-collection-v1'
+                      and value.get('dataset') == 'longbench-v2')
+    if type(n) is not int or n <= 0:
         raise ValueError('Invalid frozen answer seed schedule')
-    return value['answer_seeds']
+    if tree_longbench:
+        valid = (isinstance(selected, list) and len(selected) == n
+                 and all(type(seed) is int and seed >= 0 for seed in selected)
+                 and selected == sorted(set(selected)))
+    else:
+        valid = selected == list(range(n))
+    if not valid:
+        raise ValueError('Invalid frozen answer seed schedule')
+    return selected
 
 
 def declaration(dataset, answers, thinking=False):

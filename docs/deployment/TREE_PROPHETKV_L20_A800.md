@@ -78,6 +78,44 @@ rewrite configure-time provenance; each engine records its actual source.
 Changing ratios, seeds, paths or UUID assignments requires a new experiment.
 A completed experiment cannot be restarted.
 
+## Additional LongBench seeds 2 and 3
+
+The A800 launcher accepts `ANSWER_SEEDS="2 3"` (or CLI `--answer-seeds 2 3`).
+`ANSWERS_PER_QUESTION` remains 2: it counts this run's selected seeds, not the
+largest seed plus one. Seeds must be distinct, ascending, nonnegative integers,
+and present in the original prepared receipt. Defaults remain seeds 0–1.
+Explicit seed selection is limited to LongBench tree collections; the shared
+non-tree collection and RULER schedules are unchanged.
+
+Use [the seed23 env template](../../config/.env.a800.tree-prophetkv.seed23.example).
+It creates separate experiment/cache roots ending in `tree-prophetkv-seed23-v1`
+and directly reads the old `tree-prophetkv-2seed-v1/prepared` folder. No input
+copy or preparation is needed. The old settings, receipts, inputs and answers
+remain untouched. The new run schedules 503 × 4 ratios × 2 seeds = 4,024 answers,
+with the same two TP2 pairs, BF16, 95% KV budget and thinking policy.
+
+After updating code on A800, run when the original workers have exited:
+
+```bash
+cd /mnt/sde/jh/projects/unified-cache-management/.worktrees/tree-prophetkv-a800-v1
+cp -n config/.env.a800.tree-prophetkv.seed23.example config/.env.a800.tree-prophetkv.seed23
+(
+set -e
+unset EXPERIMENT_DIR CACHE_ROOT PREPARED_DIR ANSWER_SEEDS ANSWERS_PER_QUESTION PERCENTAGES
+export UCM_ENV_FILE="$PWD/config/.env.a800.tree-prophetkv.seed23"
+bash scripts/launcher/a800_longbench_tree_prophetkv.sh configure
+bash scripts/launcher/a800_longbench_tree_prophetkv.sh start
+bash scripts/launcher/a800_longbench_tree_prophetkv.sh status
+)
+```
+
+Keep exported path/seed variables unset unless deliberately overriding this env.
+To resume this new run, select the same `UCM_ENV_FILE` and invoke `resume`.
+Changing the seed schedule of an existing experiment is rejected. Report and
+NPZ export retain the actual seed IDs; if the original four-seed no-cache results
+are copied into this new run's `baseline-source/`, they select only seeds 2–3.
+The launcher does not merge the two experiment directories or copy old answers.
+
 Logs live at `$EXPERIMENT_DIR/tree/supervisor.log` and
 `$EXPERIMENT_DIR/tree/cached-*-group*.log`. `status.json`/`status.md` show committed
 answer counts, accuracy and TTFT by ratio. Final reports require all scheduled

@@ -105,6 +105,12 @@ def adopt(args):
         samples_per_task=args.samples_per_task if ruler else None, seed=42,
         percentages=args.percentages, watchdog_seconds=7200,
         **declaration(args.dataset, args.answers_per_question, thinking=True))
+    selected_seeds = getattr(args, 'answer_seeds', None)
+    if selected_seeds is not None:
+        if ruler:
+            raise ValueError('Explicit answer seeds are supported only for LongBench v2 tree runs')
+        settings['answer_seeds'] = list(selected_seeds)
+    seeds(settings)  # Validate before adopting inputs or creating any run files.
     settings['phase_order'] = ['cached']
     if local:
         settings.update(local_validation=True, validation_prompt_ids=selected)
@@ -130,7 +136,8 @@ def adopt(args):
                 or spec.get('generation_protocol') != settings['generation_protocol']
                 or type(spec.get('answers_per_question')) is not int
                 or spec['answers_per_question'] < args.answers_per_question
-                or spec.get('answer_seeds') != list(range(spec['answers_per_question']))):
+                or spec.get('answer_seeds') != list(range(spec['answers_per_question']))
+                or not set(seeds(settings)).issubset(spec['answer_seeds'])):
             raise ValueError('LongBench prepared generation/answer seeds differ from this run')
         model_hashes = spec.get('tokenizer_files', {})
         if spec.get('model_config_sha256') != file_hash(args.model/'config.json'):
@@ -294,6 +301,8 @@ def main():
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--samples-per-task', type=int, default=500)
     p.add_argument('--answers-per-question', type=int, default=1)
+    p.add_argument('--answer-seeds', type=int, nargs='+',
+                   help='LongBench tree only: distinct ascending seeds from prepared provenance; count must match answers-per-question')
     p.add_argument('--percentages', type=int, nargs='+', default=list(RATIOS))
     p.add_argument('--role', choices=(ROLE,), default=ROLE)
     p.add_argument('--phase', choices=('cached',))
