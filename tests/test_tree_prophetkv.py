@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import numpy as np
 import torch
+import torch._dynamo  # Initialize before fixtures snapshot/restore sys.modules.
 
 import runner.generation  # Load before fixtures temporarily replace sys.modules.
 from ucm.sparse.prophetkv.tree_selection import F3Recorder, tree_need
@@ -109,6 +110,113 @@ class MaskTests(unittest.TestCase):
             ref = tree_attention.dense_reference(q, k, v, pos, b, selected)
             torch.testing.assert_close(out, ref, atol=2e-6, rtol=2e-6)
         self.assertEqual(calls, [1, 2])
+
+    def test_many_chunks_bound_kv_workspace_and_preserve_all_query_rows(self):
+        # The L20 failure occurs in a late 16K prefill step with 1024-token
+        # chunks. Keep its 64K layout, but use scalar K/V to run on CPU.
+        bounds = list(range(0, 64513, 1024)) + [64768]
+        candidates = torch.arange(1024, 64512)
+        selected = candidates[(candidates % 5) < 3]  # approximately 60%
+        positions = selected[selected >= 50176]
+        key = torch.arange(64512, dtype=torch.float32)[:, None, None]
+        value = -key
+        query = positions.float()[:, None, None]
+        output = torch.full_like(query, float('nan'))
+        calls = []; covered = torch.zeros(len(positions), dtype=torch.int32)
+
+        def kernel(q, k, v, out, qs, qn, ks, kn, qpos, maxq, **kwargs):
+            self.assertLessEqual(len(k), len(key), 'RMASK duplicated too much K/V at once')
+            self.assertEqual(len(v), len(k))
+            # Passing the full Q tensor preserves the existing tile heuristic.
+            self.assertEqual(len(q), len(query))
+            calls.append(len(k))
+            for a, n, start, length in zip(qs.tolist(), qn.tolist(), ks.tolist(), kn.tolist()):
+                p = positions[a:a+n]
+                chunk = int(p[0]) // 1024
+                expected = torch.cat((torch.arange(1024),
+                    selected[selected < chunk*1024], torch.arange(chunk*1024, int(p[-1])+1)))
+                torch.testing.assert_close(k[start:start+length, 0, 0], expected.float())
+                torch.testing.assert_close(v[start:start+length], -k[start:start+length])
+                torch.testing.assert_close(expected[qpos[a:a+n]], p)
+                covered[a:a+n] += 1
+                out[a:a+n] = q[a:a+n]
+
+        with patch('ucm.sparse.prophetkv.attention.positional_kernel', return_value=kernel):
+            tree_attention.rmask_attention(query, key, value, positions, bounds,
+                                           selected, 1., output)
+        self.assertGreater(len(calls), 1)
+        self.assertTrue(torch.equal(covered, torch.ones_like(covered)))
+        torch.testing.assert_close(output, query)
+
+    def test_batched_recompute_matches_dense_mask_and_preserves_suffix(self):
+        torch.manual_seed(29)
+        bounds = list(range(0, 641, 64)) + [704]
+        candidates = torch.arange(64, 640)
+        for ratio in (.05, .2, .4, .6, 1.):
+            with self.subTest(ratio=ratio):
+                selected = candidates[torch.randperm(len(candidates))[:int(ratio*len(candidates))]].sort().values
+                # Only a late prefill step is active; prior fresh keys are still visible.
+                positions = torch.cat((selected[selected >= 256], torch.arange(640, 657)))
+                key, value = torch.randn(657, 2, 8), torch.randn(657, 2, 8)
+                query = torch.randn(len(positions), 4, 8)
+                output = torch.full_like(query, 123.)
+                key_before, value_before = key.clone(), value.clone()
+                calls = []
+
+                def kernel(q, k, v, out, qs, qn, ks, kn, qpos, maxq, **kwargs):
+                    self.assertLessEqual(len(k), len(key))
+                    calls.append(len(k))
+                    for a, n, start, length in zip(qs, qn, ks, kn):
+                        out[a:a+n] = self.attention(q[a:a+n], k[start:start+length],
+                            v[start:start+length], qpos[a:a+n], kwargs['sm_scale'])[0]
+
+                with patch('ucm.sparse.prophetkv.attention.positional_kernel', return_value=kernel):
+                    tree_attention.rmask_attention(query, key, value, positions, bounds,
+                                                   selected, 8**-.5, output)
+                context = positions < 640
+                reference = tree_attention.dense_reference(query[context], key, value,
+                                                           positions[context], bounds, selected)
+                torch.testing.assert_close(output[context], reference, atol=2e-6, rtol=2e-6)
+                self.assertTrue((output[~context] == 123.).all())
+                torch.testing.assert_close(key, key_before)
+                torch.testing.assert_close(value, value_before)
+                self.assertGreater(len(calls), 1)
+
+    def test_batched_offsets_with_real_kernel_cpu_interpreter(self):
+        import importlib.util
+        import os
+        from pathlib import Path
+        import subprocess
+        import sys
+        if not importlib.util.find_spec('triton'):
+            self.skipTest('CPU interpreter requires Triton')
+        import triton
+        if triton.__version__ == '3.3.0' and np.lib.NumpyVersion(np.__version__) >= '2.4.0':
+            self.skipTest('Triton 3.3 interpreter scalar conversion requires NumPy < 2.4')
+        script = '''
+import torch
+from types import SimpleNamespace
+from ucm.sparse.prophetkv.tree_attention import rmask_attention, dense_reference
+torch.manual_seed(29)
+bounds = [0,64,128,192,256,320,384,448]
+for step in (2, 1):
+    selected = torch.arange(64,384,step)
+    positions = selected[selected >= (128 if step == 2 else 64)]
+    query = torch.randn(len(positions),4,16)
+    key = torch.randn(384,2,16); value = torch.randn_like(key)
+    reference = dense_reference(query,key,value,positions,bounds,selected)
+    for name in ('fa2-ragged-v1', '_ragged_positions_fa2_kernel', 'original'):
+        output = torch.full_like(query,float('nan'))
+        rmask_attention(query,key,value,positions,bounds,selected,16**-.5,output,
+                        sparse=SimpleNamespace(position_attention_kernel=name))
+        torch.testing.assert_close(output,reference,atol=2e-5,rtol=2e-4)
+print('six batched masked-attention/GQA interpreter cases passed; CPU only')
+'''
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run([sys.executable, '-c', script], cwd=root,
+            capture_output=True, text=True, timeout=60,
+            env=dict(os.environ, CUDA_VISIBLE_DEVICES='', TRITON_INTERPRET='1', PYTHONPATH=str(root)))
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class SelectionTests(unittest.TestCase):

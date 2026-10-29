@@ -190,6 +190,57 @@ method dispatch, F3 warmup/readiness/immutability/retirement, resume and seeded
 reporting, plus existing TP2, thinking, v3, naive-reuse and tree-method regressions.
 Shell/Python syntax, CLI help and diff checks passed at that stage.
 
+## L20 RMASK workspace OOM (2026-10-29)
+
+The copied `.analysis/bug-reportt/bug_report` contains two CUDA OOM failures at
+`tree-prophetkv-60`, with 1024-token chunks: `qa_1-001` in attempt `36990a72`
+(group 1), and `niah_single_2-005` in attempt `5221519d` (group 0).
+Both tracebacks end at `rmask_attention` gathering `k[kv_idx]`/`v[kv_idx]`.
+They request 446/444 MiB for a tensor while only 400/323.94 MiB is free.
+`EngineDeadError` is the resulting engine failure. The third attempt's logs
+(`8559729c`) end during population; they do not establish recovery or completion.
+
+Previously all active chunks' allowed-key lists were concatenated into a
+single K/V gather. Each later chunk repeats the exact prefix and previously
+recomputed keys, multiplying temporary VRAM as the number of chunks and repair
+ratio increase. The failing allocation occurs inside masked attention after
+cache loading; it is separate from the earlier transfer-timeout issue below.
+
+RMASK now packs consecutive chunks into calls with at most `len(k)` gathered
+rows each. A chunk's keys remain together, in the same order, with the same
+causal positions. Full Q/O tensors, query offsets and maximum query length are
+retained so the existing kernel selection and tile configuration are unchanged.
+Temporary gathered K/V tensors are released between calls. For a 65,536-token
+Qwen3-32B BF16 TP2 prompt, this bounds these extra gathers to 64 MiB each for K
+and V (128 MiB together); it is not a bound on total engine VRAM.
+
+Selection, ratios, original tokens, masks, suffix attention, native decode,
+95% automatic KV allocation and the 82,304-token window are unchanged. More
+kernel launches can affect latency; GPU memory peaks and throughput have not
+been measured for this fix.
+
+After transferring the updated source to the checkout recorded in the log,
+`/data/jh/unified-cache-management/.worktrees/tree-prophetkv-l20-v1`, use the
+existing run's env and the launcher's owned-process `stop`/`resume` commands.
+For the chunk1024 run, retain its existing `UCM_ENV_FILE` selection and confirm
+`EXPERIMENT_DIR` still names
+`/data/jh/unified-cache-management/outputs/ruler-l20-tp2-thinking-tree-prophetkv-chunk1024-500-v1`.
+Do not configure a replacement run or rewrite settings, prepared inputs, source
+receipts or accepted answers. Resume skips committed method/seed records;
+new workers import the fix and record their actual execution source. No remote
+update, stop/resume, push or GPU execution was performed for this fix.
+
+Validation: 36 focused CPU tests passed across `test_tree_prophetkv`,
+`test_tree_collection` and `test_positional_kernel_dispatch`. Two existing
+connector/population tests could not run because the local environment lacks
+vLLM. The new 64K/1024-chunk fixture fails before the fix (497,450 gathered rows)
+and passes with every call bounded to 64,512 rows. Dense-mask comparisons cover
+5/20/40/60/100% repair, later prefill steps, untouched suffix output and immutable
+input K/V. Six FP32/GQA cases also pass with the actual kernels under Triton's
+CPU interpreter, including both default tile sizes and explicit kernel modes.
+These checks do not establish L20 CUDA/BF16 stability or numerical equivalence
+of generated answers.
+
 ## L20 pinned transfer pool (2026-10-24)
 
 The reported `niah_single_3-004` read at40% timed out in `PC::S2D` after120,000ms
