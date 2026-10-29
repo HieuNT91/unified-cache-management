@@ -5,6 +5,28 @@ SCHEMA = 'tree-prophetkv-thinking-collection-v1'
 RATIOS = (5, 20, 40, 60)
 
 
+def chunk_size(protocol):
+    value = protocol.get('kv_chunk_size')
+    if value is not None and (type(value) is not int or value not in (1024, 4096)):
+        raise ValueError('Tree kv_chunk_size must be 1024 or 4096')
+    return value
+
+
+def runtime_sample(sample, protocol):
+    """Derive chunk metadata without modifying the prepared input or its hash."""
+    size = chunk_size(protocol)
+    if size is None:
+        return sample  # Preserve existing experiments' exact prepared layout.
+    from runner.layout import boundaries_for, validate_layout, token_hash
+    validate_layout(sample['token_ids'], sample['boundaries'], sample['question_positions'], sparse=True)
+    if sample.get('token_sha256') != token_hash(sample['token_ids']):
+        raise ValueError('Prepared token identity changed')
+    result = dict(sample, boundaries=boundaries_for(len(sample['token_ids']),
+                  min(sample['question_positions']), size))
+    validate_layout(result['token_ids'], result['boundaries'], result['question_positions'], sparse=True)
+    return result
+
+
 def actions(percentages):
     if (not percentages or len(set(percentages)) != len(percentages)
             or any(type(p) is not int or not 0 < p <= 100 for p in percentages)):
@@ -13,6 +35,7 @@ def actions(percentages):
 
 
 def inventory(protocol):
+    chunk_size(protocol)
     expected = actions(protocol['percentages'])
     if (protocol.get('schema') != SCHEMA or protocol.get('tree_protocol') != PROTOCOL
             or protocol.get('actions') != expected

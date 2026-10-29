@@ -8,10 +8,14 @@ command="${1:?Usage: l20_ruler_thinking_tree_prophetkv.sh configure|start|detach
 shift
 : "${EXPERIMENT_DIR:?Set a fresh EXPERIMENT_DIR}" "${CACHE_ROOT:?Set a fresh CACHE_ROOT}"
 read -r -a percentages <<< "${PERCENTAGES:-5 20 40 60}"
+chunk_args=()
+if [[ -n "${KV_CHUNK_SIZE:-}" ]]; then
+  chunk_args=(--kv-chunk-size "$KV_CHUNK_SIZE")
+fi
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/tree_prophetkv_data.py" "$command" \
   --dataset ruler --root "$EXPERIMENT_DIR" --model "${MODEL_PATH:?Set MODEL_PATH}" \
   --prepared "${PREPARED_DIR:-$EXPERIMENT_DIR/prepared}" --cache-root "$CACHE_ROOT" \
   --devices "${GPU_DEVICES:?Set ten full L20 UUIDs in config/.env.l20.tree-prophetkv}" \
   --tp "${TP:-2}" --samples-per-task "${SAMPLES_PER_TASK:-500}" --seed "${SEED:-42}" \
-  --answers-per-question 1 --percentages "${percentages[@]}" "$@"
+  --answers-per-question 1 --percentages "${percentages[@]}" "${chunk_args[@]}" "$@"

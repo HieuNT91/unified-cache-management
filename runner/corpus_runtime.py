@@ -80,8 +80,12 @@ class Engine:
             if protocol.get('naive_reuse'):
                 for value in cfg['kv_transfer_config']['kv_connector_extra_config']['ucm_sparse_config'].values():
                     value['ratio'] = 0.0
-            cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts']={
-                r['id']:json.loads((Path(protocol['prepared'])/r['prepared']).read_text())['boundaries'] for r in rows}
+            def context_layout(row):
+                sample = json.loads((Path(protocol['prepared'])/row['prepared']).read_text())
+                from runner.tree_collection import runtime_sample
+                return (runtime_sample(sample, protocol) if self.tree_cached else sample)['boundaries']
+            cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts'] = {
+                r['id']: context_layout(r) for r in rows}
         start=time.perf_counter();self.llm=start_engine(cfg)
         try:
             from scripts.router_control import code_hashes
@@ -119,7 +123,14 @@ class Engine:
         if self.cached:
             if getattr(self, 'tree_cached', False):
                 from runner.tree_collection import TreePromptCache as PromptCache
+                from runner.tree_collection import runtime_sample
                 from runner.tree_prophetkv import budget
+                original_bounds = list(self.sample['boundaries'])
+                self.sample = runtime_sample(self.sample, self.protocol)
+                if self.protocol.get('kv_chunk_size') is not None:
+                    self.construction['layout'] = dict(kv_chunk_size=self.protocol['kv_chunk_size'],
+                        prepared_boundaries=original_bounds, runtime_boundaries=list(self.sample['boundaries']),
+                        token_sha256=self.sample['token_sha256'])
                 for percentage in self.protocol['percentages']:
                     budget(self.sample['boundaries'], percentage/100)
             self.pc=PromptCache(self.cache,Path(self.protocol['model']),self.tp,self.namespace,self.sample)

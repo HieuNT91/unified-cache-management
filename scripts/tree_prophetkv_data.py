@@ -29,6 +29,9 @@ ROLE = 'tree'
 
 
 def validate_rows(settings, rows):
+    if settings.get('local_subset'):
+        from scripts.tree_prophetkv_local import validate_rows as validate_local
+        return validate_local(settings, rows)
     ruler = settings['dataset'] == 'ruler'
     local = settings.get('local_validation', False)
     selected = settings.get('validation_prompt_ids', [])
@@ -111,12 +114,17 @@ def adopt(args):
             raise ValueError('Explicit answer seeds are supported only for LongBench v2 tree runs')
         settings['answer_seeds'] = list(selected_seeds)
     seeds(settings)  # Validate before adopting inputs or creating any run files.
+    from runner.tree_collection import chunk_size, runtime_sample
+    if getattr(args, 'kv_chunk_size', None) is not None:
+        settings['kv_chunk_size'] = args.kv_chunk_size
+    chunk_size(settings)
     settings['phase_order'] = ['cached']
     if local:
         settings.update(local_validation=True, validation_prompt_ids=selected)
     if (args.root/'settings.json').exists():
         old, _, _ = load(args.root)
-        if any(old.get(k) != v for k, v in settings.items()):
+        if (any(old.get(k) != v for k, v in settings.items())
+                or old.get('kv_chunk_size') != settings.get('kv_chunk_size')):
             raise ValueError('Existing run parameters differ; use its original env or fresh paths')
         return
     protect_paths(args.root, args.prepared, args.cache_root, args.model)
@@ -170,9 +178,10 @@ def adopt(args):
         if ruler and (sample.get('generator_config_sha256') != fingerprint(spec)
                       or sample.get('task') != row['subtask']):
             raise ValueError('RULER generation/task provenance differs')
+        effective = runtime_sample(sample, settings)
         for definition in definitions:
             try:
-                budget(sample['boundaries'], definition['ratio'])
+                budget(effective['boundaries'], definition['ratio'])
             except ValueError as error:
                 raise ValueError(f'{row["id"]} at {definition["id"]}: {error}') from error
         value = dict(row, ordinal=sample['source_row'], sha256=digest, dataset=args.dataset,
@@ -303,6 +312,8 @@ def main():
     p.add_argument('--answers-per-question', type=int, default=1)
     p.add_argument('--answer-seeds', type=int, nargs='+',
                    help='LongBench tree only: distinct ascending seeds from prepared provenance; count must match answers-per-question')
+    p.add_argument('--kv-chunk-size', type=int, choices=(1024, 4096),
+                   help='Derive runtime chunk boundaries from unchanged prepared tokens; requires a new experiment')
     p.add_argument('--percentages', type=int, nargs='+', default=list(RATIOS))
     p.add_argument('--role', choices=(ROLE,), default=ROLE)
     p.add_argument('--phase', choices=('cached',))

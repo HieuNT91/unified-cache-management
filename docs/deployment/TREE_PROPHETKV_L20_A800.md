@@ -78,6 +78,43 @@ rewrite configure-time provenance; each engine records its actual source.
 Changing ratios, seeds, paths or UUID assignments requires a new experiment.
 A completed experiment cannot be restarted.
 
+## Chunk size 1024
+
+Select `KV_CHUNK_SIZE="1024"` with the new
+[L20 env](../../config/.env.l20.tree-prophetkv.chunk1024.example) or
+[A800 env](../../config/.env.a800.tree-prophetkv.chunk1024.example).
+Both reuse the original experiment's prepared folder directly, and use fresh
+result/cache roots containing `chunk1024`. L20 keeps seed 0 and 500 inputs per
+task; A800 keeps seeds 0–1 and all 503 inputs. Ratios remain 5/20/40/60%, BF16/TP2,
+95% automatic KV, the original UUID pairs, thinking policy and output budgets.
+
+The runtime derives boundaries at multiples of 1024 up to the existing suffix
+start, retaining the final shorter block-aligned context chunk. Prepared files,
+token IDs, token/input hashes, question positions and suffix are unchanged.
+Adoption checks the S4 budgets against the new boundaries. Scheduler dispatch,
+population, F3 capture and sparse reads all use that same runtime layout. Each
+construction receipt records both prepared and runtime boundaries. F3 still
+uses its local window of 16 and first 16 layers; S4 remains inside each ratio's
+budget. New caches are constructed from the smaller chunks; no old KV/F3 is reused.
+
+Copy only the chosen env example to its name without `.example`, then run:
+
+```bash
+# L20, from its updated checkout
+UCM_ENV_FILE=config/.env.l20.tree-prophetkv.chunk1024 bash scripts/launcher/l20_ruler_thinking_tree_prophetkv.sh configure
+UCM_ENV_FILE=config/.env.l20.tree-prophetkv.chunk1024 bash scripts/launcher/l20_ruler_thinking_tree_prophetkv.sh start
+
+# A800, from its updated checkout
+UCM_ENV_FILE=config/.env.a800.tree-prophetkv.chunk1024 bash scripts/launcher/a800_longbench_tree_prophetkv.sh configure
+UCM_ENV_FILE=config/.env.a800.tree-prophetkv.chunk1024 bash scripts/launcher/a800_longbench_tree_prophetkv.sh start
+```
+
+Use the same env for `status` and `resume`. Existing exported variables override
+env files; clear old experiment/prepared/cache/seed/ratio/chunk overrides before
+switching runs. Omitting `KV_CHUNK_SIZE` preserves the prepared layout of existing
+runs. Adding, removing or changing the chunk override on resume is rejected;
+do not edit old settings or receipts to convert a running experiment.
+
 ## Additional LongBench seeds 2 and 3
 
 The A800 launcher accepts `ANSWER_SEEDS="2 3"` (or CLI `--answer-seeds 2 3`).

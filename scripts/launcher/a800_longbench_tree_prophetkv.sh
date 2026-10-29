@@ -13,10 +13,14 @@ if [[ -n "${ANSWER_SEEDS:-}" ]]; then
   read -r -a answer_seeds <<< "$ANSWER_SEEDS"
   seed_args=(--answer-seeds "${answer_seeds[@]}")
 fi
+chunk_args=()
+if [[ -n "${KV_CHUNK_SIZE:-}" ]]; then
+  chunk_args=(--kv-chunk-size "$KV_CHUNK_SIZE")
+fi
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/tree_prophetkv_data.py" "$command" \
   --dataset longbench-v2 --root "$EXPERIMENT_DIR" --model "${MODEL_PATH:?Set MODEL_PATH}" \
   --prepared "${PREPARED_DIR:-$EXPERIMENT_DIR/prepared}" --cache-root "$CACHE_ROOT" \
   --devices "${GPU_PRIMARY:?Set four full A800 UUIDs in config/.env.a800.tree-prophetkv}" \
   --tp "${TP:-2}" --seed "${SEED:-42}" --answers-per-question "${ANSWERS_PER_QUESTION:-2}" \
-  --percentages "${percentages[@]}" "${seed_args[@]}" "$@"
+  --percentages "${percentages[@]}" "${seed_args[@]}" "${chunk_args[@]}" "$@"
