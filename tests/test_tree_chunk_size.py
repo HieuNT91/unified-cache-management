@@ -73,9 +73,12 @@ class ChunkSizeTests(unittest.TestCase):
                 pins={p:(file_hash(p),p.stat().st_mtime_ns) for p in args.prepared.rglob('*') if p.is_file()}
                 args.root=args.root.with_name('chunk1024');args.kv_chunk_size=1024
                 args.percentages=[5,20,40,60]
+                if dataset=='longbench-v2':
+                    args.answers_per_question=1;args.answer_seeds=[0]
                 with patch('scripts.router_control.code_hashes',return_value={}): collection.adopt(args)
                 protocol,rows=collection.stage(args.root,'tree')
-                self.assertEqual(protocol['answer_seeds'],[0] if dataset=='ruler' else [0,1])
+                self.assertEqual(protocol['answer_seeds'],[0])
+                self.assertEqual(collection.load(args.root)[1]['answers'],len(rows)*4)
                 self.assertEqual(protocol['kv_chunk_size'],1024)
                 self.assertFalse((args.root/'prepared').exists())
                 # Real engine config path, stopped before any model/GPU startup.
@@ -111,5 +114,7 @@ class ChunkSizeTests(unittest.TestCase):
                     self.assertNotIn('chunk1024',argv[argv.index('--prepared')+1])
                     self.assertIn('chunk1024',argv[argv.index('--root')+1])
                     self.assertIn('chunk1024',argv[argv.index('--cache-root')+1])
-                    self.assertEqual(argv[argv.index('--answers-per-question')+1],'1' if server=='l20' else '2')
-                    if server=='a800': self.assertEqual(argv[argv.index('--answer-seeds')+1:argv.index('--answer-seeds')+3],['0','1'])
+                    self.assertEqual(argv[argv.index('--answers-per-question')+1],'1')
+                    if server=='a800':
+                        self.assertEqual(argv[argv.index('--answer-seeds')+1:argv.index('--kv-chunk-size')],['0'])
+                        self.assertIn('chunk1024-1seed-v1',argv[argv.index('--root')+1])

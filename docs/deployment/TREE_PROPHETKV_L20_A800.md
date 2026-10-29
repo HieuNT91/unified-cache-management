@@ -85,7 +85,10 @@ Select `KV_CHUNK_SIZE="1024"` with the new
 [A800 env](../../config/.env.a800.tree-prophetkv.chunk1024.example).
 Both reuse the original experiment's prepared folder directly, and use fresh
 result/cache roots containing `chunk1024`. L20 keeps seed 0 and 500 inputs per
-task; A800 keeps seeds 0–1 and all 503 inputs. Ratios remain 5/20/40/60%, BF16/TP2,
+task; A800 uses seed 0 only (one rollout per question) and all 503 inputs,
+for 2,012 answers across four ratios. Its fresh result/cache roots contain
+`chunk1024-1seed-v1`; the prepared folder still comes from the original two-seed
+run. Ratios remain 5/20/40/60%, BF16/TP2,
 95% automatic KV, the original UUID pairs, thinking policy and output budgets.
 
 The runtime derives boundaries at multiples of 1024 up to the existing suffix
