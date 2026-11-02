@@ -118,6 +118,54 @@ switching runs. Omitting `KV_CHUNK_SIZE` preserves the prepared layout of existi
 runs. Adding, removing or changing the chunk override on resume is rejected;
 do not edit old settings or receipts to convert a running experiment.
 
+## Chunk sizes 2048 and 512
+
+These variants follow the final chunk-1024 configuration from chat
+`Merge tree rmask method` (`01a16c5b-da6f-74b2-bb23-7ede10e3eb98`),
+including its A800 update to one rollout per question, seed 0.
+Only `KV_CHUNK_SIZE` and the new result/cache names differ from the 1024 envs.
+The existing shell launchers and runtime layout path are shared.
+
+| Chunk size | L20 RULER thinking | A800 LongBench v2 thinking |
+|---|---|---|
+| 2048 | [L20 env](../../config/.env.l20.tree-prophetkv.chunk2048.example) | [A800 env](../../config/.env.a800.tree-prophetkv.chunk2048.example) |
+| 512 | [L20 env](../../config/.env.l20.tree-prophetkv.chunk512.example) | [A800 env](../../config/.env.a800.tree-prophetkv.chunk512.example) |
+
+Each variant keeps L20 at 13 × 500 inputs / 26,000 answers and A800 at
+503 inputs / 2,012 answers, with seed 0, ratios 5/20/40/60%, the same GPU UUID
+pairs, BF16/TP2, 95% automatic KV, thinking policy and output budgets.
+Both read the same original prepared folders as chunk 1024 without modifying
+them. KV/F3 are constructed under the variant's fresh cache root.
+
+From the updated checkout on each server, choose `chunk=2048` or `chunk=512`.
+Run each variant separately on the assigned GPU pairs:
+
+```bash
+# L20
+chunk=2048  # Use 512 for the other variant.
+cp -n "config/.env.l20.tree-prophetkv.chunk${chunk}.example" \
+      "config/.env.l20.tree-prophetkv.chunk${chunk}"
+unset EXPERIMENT_DIR CACHE_ROOT PREPARED_DIR PERCENTAGES KV_CHUNK_SIZE
+unset ANSWER_SEEDS ANSWERS_PER_QUESTION SAMPLES_PER_TASK TP SEED
+export UCM_ENV_FILE="$PWD/config/.env.l20.tree-prophetkv.chunk${chunk}"
+bash scripts/launcher/l20_ruler_thinking_tree_prophetkv.sh configure
+bash scripts/launcher/l20_ruler_thinking_tree_prophetkv.sh start
+
+# A800
+chunk=2048  # Use 512 for the other variant.
+cp -n "config/.env.a800.tree-prophetkv.chunk${chunk}.example" \
+      "config/.env.a800.tree-prophetkv.chunk${chunk}"
+unset EXPERIMENT_DIR CACHE_ROOT PREPARED_DIR PERCENTAGES KV_CHUNK_SIZE
+unset ANSWER_SEEDS ANSWERS_PER_QUESTION SAMPLES_PER_TASK TP SEED
+export UCM_ENV_FILE="$PWD/config/.env.a800.tree-prophetkv.chunk${chunk}"
+bash scripts/launcher/a800_longbench_tree_prophetkv.sh configure
+bash scripts/launcher/a800_longbench_tree_prophetkv.sh start
+```
+
+Keep the selected env for `status`, `resume`, `stop` and `report`.
+Changing chunk size requires the corresponding fresh experiment/cache roots;
+resume rejects a changed chunk size for an existing experiment.
+
 ## Additional LongBench seeds 2 and 3
 
 The A800 launcher accepts `ANSWER_SEEDS="2 3"` (or CLI `--answer-seeds 2 3`).

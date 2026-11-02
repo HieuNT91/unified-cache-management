@@ -7,8 +7,8 @@ RATIOS = (5, 20, 40, 60)
 
 def chunk_size(protocol):
     value = protocol.get('kv_chunk_size')
-    if value is not None and (type(value) is not int or value not in (1024, 4096)):
-        raise ValueError('Tree kv_chunk_size must be 1024 or 4096')
+    if value is not None and (type(value) is not int or value not in (512, 1024, 2048, 4096)):
+        raise ValueError('Tree kv_chunk_size must be 512, 1024, 2048 or 4096')
     return value
 
 

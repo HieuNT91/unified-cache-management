@@ -312,7 +312,7 @@ def main():
     p.add_argument('--answers-per-question', type=int, default=1)
     p.add_argument('--answer-seeds', type=int, nargs='+',
                    help='LongBench tree only: distinct ascending seeds from prepared provenance; count must match answers-per-question')
-    p.add_argument('--kv-chunk-size', type=int, choices=(1024, 4096),
+    p.add_argument('--kv-chunk-size', type=int, choices=(512, 1024, 2048, 4096),
                    help='Derive runtime chunk boundaries from unchanged prepared tokens; requires a new experiment')
     p.add_argument('--percentages', type=int, nargs='+', default=list(RATIOS))
     p.add_argument('--role', choices=(ROLE,), default=ROLE)
