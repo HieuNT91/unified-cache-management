@@ -6,11 +6,11 @@ import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
-from runner import output_budget
-from runner.thinking_budget import (KEY, BudgetState, make_policy, request_state,
+from runner.runtime import output_budget
+from runner.runtime.thinking_budget import (KEY, BudgetState, make_policy, request_state,
                                     enforce_logits, stopping_hook, validate_thinking_outcome)
-from runner.thinking_loop import CONFIG, KEY as LOOP_KEY, ThinkingLoop, repetition_pattern_size
-from runner.reporting import OutputAnalyzer
+from runner.runtime.thinking_loop import CONFIG, KEY as LOOP_KEY, ThinkingLoop, repetition_pattern_size
+from runner.reporting.aggregate import OutputAnalyzer
 from test_ruler_thinking import Tokenizer, sample
 
 
@@ -136,7 +136,7 @@ class ThinkingLoopTests(unittest.TestCase):
 
     def test_scheduler_worker_and_generation_continue_same_request(self):
         import torch
-        from runner.generation import generate
+        from runner.runtime.generation import generate
         s = sample(); p = s[KEY]
         statuses = NS(FINISHED_STOPPED='stop', FINISHED_LENGTH_CAPPED='length')
         stop = stopping_hook(Mock(side_effect=AssertionError('unmanaged request')), statuses)
@@ -235,7 +235,7 @@ class ThinkingLoopTests(unittest.TestCase):
     def test_portable_and_report_keep_successful_broken_answers(self):
         from scripts.router_dataset import example
         from scripts.collection_v3 import answer_metrics
-        from runner.reporting import metrics
+        from runner.reporting.aggregate import metrics
         p = output_budget.make_policy(Tokenizer())
         tokens = [65] * 24 + [p['close_id']] + p['transition_ids'] + [66, 3]
         state = BudgetState(p, CONFIG).consume(tokens)

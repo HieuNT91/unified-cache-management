@@ -63,7 +63,7 @@ class UCMConnectorMetadata(KVConnectorMetadata):
 class RequestHasher:
     """Use the same implementation as offline block inventories."""
     def __init__(self, vllm_config, rank_id):
-        from runner.identity import BlockHasher
+        from runner.inputs.identity import BlockHasher
         extra = vllm_config.kv_transfer_config.kv_connector_extra_config
         setup = extra.get('persistent_setup')
         identity = setup['fingerprint'] if setup else vllm_config.model_config.model
@@ -168,7 +168,7 @@ class UCMDirectConnector(KVConnectorBase_V1):
     def generate_hash(
         self, block_size: int, token_ids: List[int], parent_block_hash_value: bytes
     ) -> list[bytes]:
-        from runner.identity import chain_keys
+        from runner.inputs.identity import chain_keys
         return chain_keys(self.request_hasher, token_ids, parent_block_hash_value, block_size)
 
     def _create_store(

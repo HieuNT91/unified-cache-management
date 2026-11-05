@@ -10,9 +10,9 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-from runner.corpus_records import protocol_identity
-from runner.setups import atomic_json, file_hash
-from runner.tree_policy import DEFAULT_ACTIONS
+from runner.corpus.records import protocol_identity
+from runner.cache.setups import atomic_json, file_hash
+from runner.router.tree_policy import DEFAULT_ACTIONS
 from scripts.corpus_status import collect, write_summary
 
 

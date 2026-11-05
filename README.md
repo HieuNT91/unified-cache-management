@@ -23,8 +23,8 @@ and real-data training have not been performed for this implementation.
 | [AGENTS.md](AGENTS.md) | Short mandatory rules for work in this branch |
 | [run.py](run.py), [run.sh](run.sh) | CLI dispatch and environment setup |
 | [TREE_RMASK.md](docs/TREE_RMASK.md) | `tree-prophetkv`: F3 tree selection, S4 probing and masked recomputation |
-| [runner/preparation.py](runner/preparation.py), [runner/generation.py](runner/generation.py), [runner/single.py](runner/single.py) | Prompt preparation, shared inference/validation and single-input execution |
-| [runner/](runner/) | Layouts, orchestration, cache lifecycle, reporting and routers |
+| [runner/inputs/preparation.py](runner/inputs/preparation.py), [runner/runtime/generation.py](runner/runtime/generation.py), [runner/runtime/single.py](runner/runtime/single.py) | Prompt preparation, shared inference/validation and single-input execution |
+| [runner/](runner/README.md) | Package map, dependency audit, layouts, cache lifecycle, reporting and routers |
 | [ucm/](ucm/) | Connector, storage, sparse attention and runtime integration |
 | [scripts/](scripts/) | Dataset adapters, launchers, baseline/ProphetKV controls and router workflows |
 | [scripts/launcher/](scripts/launcher/) | Shell launchers for A800/L20 and router/corpus workflows, plus their shared environment loader |

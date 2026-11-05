@@ -3,14 +3,14 @@ import math
 import time
 import torch
 
-from runner.tree_prophetkv import METHOD, PROTOCOL, budget, read_f3, write_f3
+from runner.tree.prophetkv import METHOD, PROTOCOL, budget, read_f3, write_f3
 
 
 def begin_population(sparse, layout, request_id, tokens, start, count):
     config = getattr(sparse, 'tree_f3_config', None)
     if config is None:
         return
-    from runner.layout import validate_request_metadata
+    from runner.inputs.layout import validate_request_metadata
     validate_request_metadata(layout, request_id, list(tokens))
     if layout['phase'] != 'populate':
         return

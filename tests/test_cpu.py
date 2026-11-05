@@ -1,11 +1,11 @@
-from runner.layout import stamp_sample
+from runner.inputs.layout import stamp_sample
 import copy
 import sys
 import types
 import unittest
 from unittest.mock import patch
 
-from runner.config import engine_config, validate_sample
+from runner.inputs.config import engine_config, validate_sample
 from ucm.sparse.prophetkv.layers import resolve_layers
 
 
@@ -16,8 +16,13 @@ class ConfigurationTests(unittest.TestCase):
         script = '''
 import sys
 sys.modules.update({name: None for name in ('run', 'torch', 'vllm', 'transformers')})
-from runner import generation, preparation, single
-from runner import corpus_runtime, router_measure, setups, sweep
+from runner.runtime import generation
+from runner.inputs import preparation
+from runner.runtime import single
+from runner.corpus import runtime as corpus_runtime
+from runner.router import measure as router_measure
+from runner.cache import setups
+from runner.runtime import sweep
 import runpy
 sys.argv = ['run.py', '--help']
 runpy.run_path('run.py', run_name='__main__')
@@ -106,7 +111,7 @@ runpy.run_path('run.py', run_name='__main__')
 
 class AlgorithmTests(unittest.TestCase):
     def test_saved_score_replay_rejects_wrong_masks_and_missing_layers(self):
-        from runner.generation import verify_diagnostics
+        from runner.runtime.generation import verify_diagnostics
         scores = [1.] * 64
         event = dict(kind='prophetkv_selection', scores=scores,
             selected_positions=list(range(64, 96)), scoring_layers=[63],

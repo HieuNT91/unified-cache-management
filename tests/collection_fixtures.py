@@ -1,10 +1,10 @@
 """Synthetic prepared RULER inputs shared by collection and memory tests."""
 import json
 from types import SimpleNamespace as NS
-from runner.layout import stamp_sample
-from runner.setups import atomic_json, file_hash, fingerprint
-from runner import output_budget as budget
-from runner.thinking_budget import KEY
+from runner.inputs.layout import stamp_sample
+from runner.cache.setups import atomic_json, file_hash, fingerprint
+from runner.runtime import output_budget as budget
+from runner.runtime.thinking_budget import KEY
 from scripts.ruler import TASKS
 from test_ruler_thinking import Tokenizer
 

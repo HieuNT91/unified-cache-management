@@ -8,25 +8,27 @@ are relative to the repository root.
 | Area | Files | Responsibility |
 |---|---|---|
 | Public CLI | `run.py`, `run.sh` | Argument parsing, environment setup and prepare/run/setup/sweep dispatch |
-| Prompt preparation | `runner/preparation.py` | Model identity checks and CPU tokenization |
-| Shared inference | `runner/generation.py` | Request generation, decoding/TTFT and native attention diagnostic validation |
-| Single-input execution | `runner/single.py` | Engine/cache lifecycle and baseline/ProphetKV/router result publication |
-| Input identity | `runner/layout.py`, `runner/config.py`, `runner/identity.py` | Token-preserving layouts, request metadata, configuration and hashes |
-| Execution | `runner/worker.py`, `runner/rope_window.py` | Model/worker integration, bounded prefill and RoPE window |
-| Cache lifecycle | `runner/cache.py`, `runner/setup_store.py`, `runner/setups.py` | Construction, persistent setup, readiness and reader ownership |
-| Temporary reuse | `runner/temporary.py`, `runner/sweep.py` | Prompt-major construction, reuse across methods and retirement |
+| Prompt preparation | `runner/inputs/preparation.py` | Model identity checks and CPU tokenization |
+| Shared inference | `runner/runtime/generation.py` | Request generation, decoding/TTFT and native attention diagnostic validation |
+| Single-input execution | `runner/runtime/single.py` | Engine/cache lifecycle and baseline/ProphetKV/router result publication |
+| Input identity | `runner/inputs/layout.py`, `runner/inputs/config.py`, `runner/inputs/identity.py` | Token-preserving layouts, request metadata, configuration and hashes |
+| Execution | `runner/runtime/worker.py`, `runner/runtime/rope_window.py` | Model/worker integration, bounded prefill and RoPE window |
+| Cache lifecycle | `runner/cache/lifecycle.py`, `runner/cache/setup_store.py`, `runner/cache/setups.py` | Construction, persistent setup, readiness and reader ownership |
+| Temporary reuse | `runner/cache/temporary.py`, `runner/runtime/sweep.py` | Prompt-major construction, reuse across methods and retirement |
 | Connector/storage | `ucm/`, especially `ucm/store/` | Scheduler/worker metadata transport and external KV operations |
 | Sparse attention | `ucm/sparse/prophetkv/` | Scoring, token selection, alignment, causal repair and lifecycle |
-| Router | `runner/router_*.py`, `runner/tree_policy.py`, `runner/tree_profiles.py` | Feature collection, compatible policy decisions, dense/sparse dispatch and reporting |
-| Reporting/recovery | `runner/reporting.py`, `runner/resume.py`, `runner/matched_status.py` | Accepted records, aggregation and resume validation |
+| Tree-ProphetKV | `runner/tree/` | Fixed tree policy validation, collection inventory and prompt cache specialization |
+| Router | `runner/router/` | Feature collection, compatible policy decisions, dense/sparse dispatch and reporting |
+| Reporting/recovery | `runner/reporting/aggregate.py`, `runner/reporting/resume.py`, `runner/reporting/status.py` | Accepted records, aggregation and resume validation |
 | Dataset adapters | `scripts/ruler.py`, `scripts/longbench_v2.py` | Source preparation and protocol-specific formatting/scoring |
 | Fixed controls | `scripts/longbench_a800_control.py`, `scripts/tree_prophetkv_data.py` | Baseline/ProphetKV collection and native tree-prophetkv controls |
 | Launchers | `scripts/launcher/*.sh` | Server and corpus/router shell entry points; shared `config/.env` loader |
-| Router training and evidence | `runner/corpus*.py`, `scripts/corpus_*.py`, `scripts/launcher/ruler_corpus*.sh` | Collect baseline/ProphetKV outcomes and router probe features, train/export policies, replay and validate evidence |
+| Router training and evidence | `runner/corpus/`, `scripts/corpus_*.py`, `scripts/launcher/ruler_corpus*.sh` | Collect baseline/ProphetKV outcomes and router probe features, train/export policies, replay and validate evidence |
 
 `run.py` handles CLI dispatch only. Runtime modules and dataset adapters import
-shared functions from `runner.preparation` and `runner.generation`, rather than
-depending on the CLI. The existing `run.sh` commands remain unchanged.
+shared functions from `runner.inputs.preparation` and `runner.runtime.generation`, rather than
+depending on the CLI. The existing `run.sh` commands remain unchanged. See [runner packages](../../runner/README.md)
+for the directory map, direct module entry points and dependency audit.
 
 `scripts/ruler.py` contains both the RULER implementation and CLI; use
 `scripts.ruler` for Python imports. The complete prompt plus output reserve must
@@ -50,7 +52,7 @@ one-shot policy exporter remains a data reader and requires an explicit
 `--cohort /path/to/original/frozen/cohort.json`; it does not make old policies
 compatible with current inference.
 
-`corpus_*` modules remain because fixed controls share their runtime/record
+`runner/corpus/` modules remain because fixed controls share their runtime/record
 validation and router workflows need collection, training and replay. The
 5/10% collection helpers remain part of ProphetKV action collection and the
 router's measured-action training view. Setup/sweep, status/resume, dataset
@@ -62,7 +64,7 @@ change the selection algorithm or remove shared code paths.
 
 1. Dataset preparation produces one token sequence plus evaluation metadata.
    The formatter records prompt/template/token identities and question positions.
-2. `runner/layout.py` derives context ranges and a fresh suffix without editing
+2. `runner/inputs/layout.py` derives context ranges and a fresh suffix without editing
    tokens. All answer methods consume the same prepared sequence.
 3. Construction submits each context chunk with `phase=populate`, local positions
    starting at zero, and explicit request metadata. Readiness waits for committed

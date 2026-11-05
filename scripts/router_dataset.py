@@ -10,12 +10,12 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from runner.longbench_features import FEATURES, DEFINITIONS
-from runner.setups import atomic_json, file_hash, fingerprint
-from runner.tree_policy import actions
-from runner.corpus_records import accepted, protocol_identity
-from runner.layout import PROMPT_PROTOCOL
-from runner.thinking_budget import validate_thinking_outcome
+from runner.router.longbench_features import FEATURES, DEFINITIONS
+from runner.cache.setups import atomic_json, file_hash, fingerprint
+from runner.router.tree_policy import actions
+from runner.corpus.records import accepted, protocol_identity
+from runner.inputs.layout import PROMPT_PROTOCOL
+from runner.runtime.thinking_budget import validate_thinking_outcome
 
 SCHEMA = 'attention-router-dataset-v2'
 
@@ -42,7 +42,7 @@ def validate(data):
             or (l40 and (tp != expected_tp or not thinking or data['dataset'] != 'ruler'))
             or (not l40 and tp != 2)):
         raise ValueError('Portable collection requires matching TP2 or L40 thinking TP4 provenance, with seed42')
-    from runner.thinking_budget import PROTOCOL, KEY, validate_policy
+    from runner.runtime.thinking_budget import PROTOCOL, KEY, validate_policy
     if thinking and (data['dataset'] != 'ruler' or data['provenance'].get('evaluation_protocol') != PROTOCOL):
         raise ValueError('Invalid thinking dataset provenance')
     inventory = actions(data['actions']); rows = data['rows']
@@ -148,7 +148,7 @@ def example(row, probe, outcomes, source_pins, dataset):
                   evaluation_protocol=row.get('evaluation_protocol'), features=probe['features'],
                   probe_overhead_seconds=probe['timings']['routing_overhead_seconds'],
                   source_pins=source_pins, outcomes={})
-    from runner.thinking_budget import KEY
+    from runner.runtime.thinking_budget import KEY
     if KEY in row:
         result[KEY] = row[KEY]
     if dataset == 'longbench-v2':

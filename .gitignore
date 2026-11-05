@@ -4,6 +4,8 @@ __pycache__/
 .envs/
 .cache/
 inputs/
+# Runner input handling is source code, not prepared experiment data.
+!/runner/inputs/
 outputs/
 .exports/
 *.log

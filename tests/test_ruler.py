@@ -10,9 +10,9 @@ from unittest.mock import patch
 
 from scripts.ruler import TASKS, PERCENTAGES, format_sample, generator_command, query_span, CAPS
 from scripts.sweep_report import collect
-from runner.reporting import aggregate, score_answer
-from runner.setups import atomic_json
-from runner.sweep import configurations
+from runner.reporting.aggregate import aggregate, score_answer
+from runner.cache.setups import atomic_json
+from runner.runtime.sweep import configurations
 
 
 class CharacterTokenizer:

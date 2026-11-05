@@ -49,7 +49,7 @@ class LauncherStopTests(unittest.TestCase):
 
     def test_stop_supervisor_worker_and_preserve_data_and_unrelated_process(self):
         supervisor, saved = self.launch()
-        worker, worker_saved = self.launch('runner.corpus_collect', 'worker')
+        worker, worker_saved = self.launch('runner.corpus.collect', 'worker')
         unrelated, _ = self.launch(root=self.root/'other')
         self.write(self.root/'supervisor.json', dict(saved, state='running'))
         self.write(self.root/'processes/attempt.json', worker_saved)
@@ -85,7 +85,7 @@ class LauncherStopTests(unittest.TestCase):
                 'p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(120)"])\n'
                 f'Path({str(ready)!r}).write_text(str(p.pid))\n'
                 'time.sleep(120)\n')
-        leader, saved = self.launch('runner.router_sweep', 'worker', code)
+        leader, saved = self.launch('runner.router.sweep', 'worker', code)
         self.ready(ready)
         orphan = int(ready.read_text())
         self.write(self.root/'sessions/attempt/ownership.json', saved)
@@ -120,7 +120,7 @@ class LauncherStopTests(unittest.TestCase):
         code = ('import signal,time\nfrom pathlib import Path\n'
                 'signal.signal(signal.SIGTERM,signal.SIG_IGN)\n'
                 f'Path({str(ready)!r}).touch()\ntime.sleep(120)')
-        child, saved = self.launch('runner.corpus_collect', 'worker', code)
+        child, saved = self.launch('runner.corpus.collect', 'worker', code)
         self.write(self.root/'processes/attempt.json', saved)
         self.ready(ready)
         wait = control.wait_exit

@@ -11,8 +11,8 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from runner.setups import atomic_json, file_hash, fingerprint
-from runner.tree_collection import SCHEMA
+from runner.cache.setups import atomic_json, file_hash, fingerprint
+from runner.tree.collection import SCHEMA
 from scripts.collection_v3 import declaration, seeds
 from scripts import tree_prophetkv_data as collection
 from scripts import longbench_a800_control as control
@@ -70,8 +70,8 @@ class TreeAnswerSeedTests(unittest.TestCase):
             engine = Mock(); engine.answer.return_value = ({}, []); engine.end.return_value = {}
             def accepted(root, case, row, proto, seed=None):
                 return {} if case == 'tree-prophetkv-5' and seed == 2 else None
-            with patch('runner.corpus_runtime.Engine', return_value=engine), \
-                    patch('runner.setups.check_environment', return_value=protocol['groups'][0]), \
+            with patch('runner.corpus.runtime.Engine', return_value=engine), \
+                    patch('runner.cache.setups.check_environment', return_value=protocol['groups'][0]), \
                     patch.object(control, 'accepted', side_effect=accepted), \
                     patch.object(control, 'publish') as publish:
                 control.worker(args.root, 'tree', 'cached', 'attempt', 0,

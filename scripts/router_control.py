@@ -14,10 +14,10 @@ import uuid
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from runner.setups import atomic_json,file_hash,fingerprint
-from runner.router_policy import load_policy
-from runner.router_process import identity,alive,group_alive
-from runner.router_sweep import CASES,accepted
+from runner.cache.setups import atomic_json,file_hash,fingerprint
+from runner.router.policy import load_policy
+from runner.router.process import identity,alive,group_alive
+from runner.router.sweep import CASES,accepted
 from scripts.router_inputs import load_prepared,prepare
 
 
@@ -63,7 +63,7 @@ def load_run(root, publish=True):
         raise ValueError('Configured cohort changed; use a new experiment directory')
     rows=load_prepared(settings['prepared'])
     policy=load_policy(settings['policy'])
-    from runner.layout import PROMPT_PROTOCOL
+    from runner.inputs.layout import PROMPT_PROTOCOL
     from scripts.ruler import EVALUATION_PROTOCOL
     if policy.get('prompt_protocol') != PROMPT_PROTOCOL or policy.get('evaluation_protocol') != EVALUATION_PROTOCOL:
         raise ValueError('Policy protocol is incompatible; no automatic refit or historical policy reuse')
@@ -203,7 +203,7 @@ def supervise(root):
         running={};session=uuid.uuid4().hex
         def launch(group,case,retry):
             attempt=f'{session}-{retry}'
-            cmd=[sys.executable,'-u','-m','runner.router_sweep','--root',str(root),'--group',str(group),
+            cmd=[sys.executable,'-u','-m','runner.router.sweep','--root',str(root),'--group',str(group),
                  '--case',case,'--attempt',attempt]
             log=(root/f'{case}-group{group}-{attempt}.log').open('a')
             child=subprocess.Popen(cmd,cwd=ROOT,env=environment(','.join(protocol['groups'][group])),
@@ -243,7 +243,7 @@ def supervise(root):
                             else:raise RuntimeError(f'{case} group{group} failed with exit {code}; validation failures are never retried')
                     if running:time.sleep(2)
             atomic_json(root/'cleanup.json',dict(complete=True,owned_engines_exited=True,at=time.time()))
-            from runner.router_report import finalize
+            from runner.router.report import finalize
             finalize(root)
             state.update(state='complete',finished_at=time.time());atomic_json(root/'supervisor.json',state)
         except BaseException as error:
@@ -263,8 +263,8 @@ def status(root,same_count=False):
         if path.exists():result[name]=json.loads(path.read_text())
     if 'supervisor' in result:result['supervisor']['alive']=alive(result['supervisor'])
     if same_count:
-        from runner.matched_status import committed_records,match_records
-        from runner.reporting import aggregate
+        from runner.reporting.status import committed_records,match_records
+        from runner.reporting.aggregate import aggregate
         protocol=json.loads((root/'protocol.json').read_text())
         rows=[json.loads(line) for line in (Path(protocol['prepared'])/'manifest.jsonl').read_text().splitlines() if line.strip()]
         expected=[dict(prompt_id=r['id'],subtask=r['subtask']) for r in rows]
@@ -300,7 +300,7 @@ def main():
     elif a.command in ('status','status_same_count'):status(a.root,a.command=='status_same_count')
     else:
         idle(a.root)
-        from runner.router_report import finalize
+        from runner.router.report import finalize
         finalize(a.root)
 
 

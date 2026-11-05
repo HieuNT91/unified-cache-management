@@ -1,5 +1,5 @@
 """Nine-action collection identity, deterministic traversal and answer seeds."""
-from runner.output_budget import PROTOCOL as GENERATION_PROTOCOL
+from runner.runtime.output_budget import PROTOCOL as GENERATION_PROTOCOL
 
 VERSION = 'tp2-data-v3'
 RATIOS = (1, 5, 10, 20, 30, 40, 60, 80)
@@ -83,7 +83,7 @@ class Snapshot:
     """Pin committed receipts once; collection may continue publishing new ones."""
     def __init__(self, root, include_probes=True):
         from pathlib import Path
-        from runner.setups import file_hash
+        from runner.cache.setups import file_hash
         from scripts.longbench_a800_data import load, stage, roles, device_role
         self.root = Path(root).resolve()
         self.settings, self.plan, self.rows = load(self.root)
@@ -117,7 +117,7 @@ class Snapshot:
                 raise ValueError('Unexpected committed answer identity')
 
     def record(self, role, case, row, seed=None):
-        from runner.corpus_records import accepted, record_dir
+        from runner.corpus.records import accepted, record_dir
         from scripts.longbench_a800_data import read
         if (role, case, row['id'], seed) not in self.receipts:
             return None
@@ -131,7 +131,7 @@ class Snapshot:
         return result
 
     def unchanged(self):
-        from runner.setups import file_hash
+        from runner.cache.setups import file_hash
         if any(file_hash(self.root/name) != sha for name, sha in self.pins.items()):
             raise ValueError('Snapshot provenance changed during read')
 
@@ -147,6 +147,6 @@ def answer_metrics(record):
              'token_sha256', 'evaluation_protocol', 'gpu_uuids', 'input_sha256')
     result = {k: record[k] for k in names if k in record}
     # metrics() needs only emptiness for the RULER null-prediction counter.
-    from runner.reporting import ruler_preprocess
+    from runner.reporting.aggregate import ruler_preprocess
     result['null_prediction'] = not ruler_preprocess(record.get('scored_text', record.get('prediction', '')))
     return result

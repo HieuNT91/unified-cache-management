@@ -1,5 +1,5 @@
-from runner.layout import request_metadata, METADATA_KEY, PROMPT_PROTOCOL
-from runner.layout import stamp_sample
+from runner.inputs.layout import request_metadata, METADATA_KEY, PROMPT_PROTOCOL
+from runner.inputs.layout import stamp_sample
 """Bounded cache lifecycle, policy changes and concurrent collection reporting."""
 import copy
 from concurrent.futures import ThreadPoolExecutor
@@ -10,11 +10,11 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-import runner.generation  # Keep mock targets stable across sys.modules fixtures.
-from runner import sweep
-from runner.identity import BlockHasher, block_keys, shard_name
-from runner.setups import bytes_per_shard, atomic_json, file_hash
-from runner.temporary import TemporaryStore, configure_sparse, request_phase
+import runner.runtime.generation  # Keep mock targets stable across sys.modules fixtures.
+from runner.runtime import sweep
+from runner.inputs.identity import BlockHasher, block_keys, shard_name
+from runner.cache.setups import bytes_per_shard, atomic_json, file_hash
+from runner.cache.temporary import TemporaryStore, configure_sparse, request_phase
 from ucm.sparse.prophetkv.lifecycle import seed_value
 
 
@@ -279,7 +279,7 @@ class SweepTests(unittest.TestCase):
                     if shutdown_fails:raise RuntimeError('shutdown failed')
                 llm=NS(llm_engine=NS(engine_core=NS(shutdown=shutdown)),
                        collective_rpc=Mock(side_effect=RuntimeError('worker setup failed')))
-                with patch.dict('sys.modules',{'runner.worker':worker}), \
+                with patch.dict('sys.modules',{'runner.runtime.worker':worker}), \
                         patch.object(sweep,'start_engine',return_value=llm), \
                         self.assertRaises(RuntimeError):
                     sweep.execute_phase(self.args,selected,sweep.configurations()[1:],{},group,
@@ -341,9 +341,9 @@ class SweepTests(unittest.TestCase):
             if len(parts)==4 and parts[2]=='read':
                 atomic_json(group/'scheduler.json',dict(request_id=rid,requests_blend_meta=0,requests_meta=0))
             return NS(outputs=[NS(token_ids=[97,10],text='B',finish_reason='stop')],num_cached_tokens=0),.2,.4
-        with patch.dict('sys.modules',{'runner.worker':worker}), \
+        with patch.dict('sys.modules',{'runner.runtime.worker':worker}), \
                 patch.object(sweep,'start_engine',side_effect=start), \
-                patch('runner.generation.generate',side_effect=generate),patch('runner.generation.verify_diagnostics') as verify:
+                patch('runner.runtime.generation.generate',side_effect=generate),patch('runner.runtime.generation.verify_diagnostics') as verify:
             sweep.execute_phase(self.args,selected,configs[:1],reporters,group,self.cache,['GPU-a','GPU-b'])
             self.assertFalse(list(self.cache.iterdir()))  # baseline made no cache lookup/population
             sweep.execute_phase(self.args,selected,configs[1:],reporters,group,self.cache,['GPU-a','GPU-b'])

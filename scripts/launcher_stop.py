@@ -58,8 +58,8 @@ def receipts(state, root, controller):
     paths += sorted((state/'processes').glob('*.json'))
     paths += sorted((state/'sessions').glob('*/ownership.json'))
     found = {}
-    worker = {'router_control.py': 'runner.router_sweep',
-              'corpus_control.py': 'runner.corpus_collect'}.get(controller)
+    worker = {'router_control.py': 'runner.router.sweep',
+              'corpus_control.py': 'runner.corpus.collect'}.get(controller)
     for path in paths:
         if not path.exists():
             continue

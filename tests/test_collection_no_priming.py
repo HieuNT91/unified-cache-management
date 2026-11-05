@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from runner.corpus_runtime import Engine
-from runner.setups import atomic_json, file_hash
+from runner.corpus.runtime import Engine
+from runner.cache.setups import atomic_json, file_hash
 
 
 class NoPrimingTests(unittest.TestCase):
@@ -33,12 +33,12 @@ class NoPrimingTests(unittest.TestCase):
                 self.assertEqual(kwargs, {'phase': 'populate'})
                 self.assertIn(':populate:', rid)
                 events.append(tokens)
-            with patch('runner.corpus_runtime.validate'), patch('runner.sweep.PromptCache', return_value=cache), \
-                    patch('runner.generation.generate', side_effect=generate) as gen, \
-                    patch('runner.corpus_runtime.retirement', side_effect=lambda *a: events.append('retire')), \
-                    patch('runner.corpus_runtime.arm_tree') as arm, \
-                    patch('runner.corpus_runtime.verify_retired') as retired, \
-                    patch('runner.corpus_runtime.clean_capture', side_effect=lambda *a: events.append('clean')):
+            with patch('runner.corpus.runtime.validate'), patch('runner.runtime.sweep.PromptCache', return_value=cache), \
+                    patch('runner.runtime.generation.generate', side_effect=generate) as gen, \
+                    patch('runner.corpus.runtime.retirement', side_effect=lambda *a: events.append('retire')), \
+                    patch('runner.corpus.runtime.arm_tree') as arm, \
+                    patch('runner.corpus.runtime.verify_retired') as retired, \
+                    patch('runner.corpus.runtime.clean_capture', side_effect=lambda *a: events.append('clean')):
                 engine.begin(row)
             self.assertEqual(events, [sample['token_ids'][:64], 'retire', sample['token_ids'][64:320],
                                       'retire', 'ready', 'unchanged', 'clean'])
@@ -52,8 +52,8 @@ class NoPrimingTests(unittest.TestCase):
     def test_baseline_begin_does_not_submit_a_discarded_answer(self):
         with tempfile.TemporaryDirectory() as temp:
             engine, row, _ = self.fixture(Path(temp), cached=False)
-            with patch('runner.corpus_runtime.validate'), patch('runner.generation.generate') as generate, \
-                    patch('runner.sweep.PromptCache') as cache:
+            with patch('runner.corpus.runtime.validate'), patch('runner.runtime.generation.generate') as generate, \
+                    patch('runner.runtime.sweep.PromptCache') as cache:
                 engine.begin(row)
             generate.assert_not_called(); cache.assert_not_called()
             self.assertEqual(engine.construction, {})
@@ -63,8 +63,8 @@ class NoPrimingTests(unittest.TestCase):
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temp:
                 engine, row, _ = self.fixture(Path(temp)); cache = Mock(chunks=[])
                 getattr(cache, operation).side_effect = RuntimeError(operation)
-                with patch('runner.corpus_runtime.validate'), patch('runner.sweep.PromptCache', return_value=cache), \
-                        patch('runner.generation.generate') as generate, patch('runner.corpus_runtime.arm_tree') as arm:
+                with patch('runner.corpus.runtime.validate'), patch('runner.runtime.sweep.PromptCache', return_value=cache), \
+                        patch('runner.runtime.generation.generate') as generate, patch('runner.corpus.runtime.arm_tree') as arm:
                     with self.assertRaisesRegex(RuntimeError, operation): engine.begin(row)
                 generate.assert_not_called(); arm.assert_not_called()
 

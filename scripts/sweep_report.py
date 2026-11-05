@@ -9,15 +9,15 @@ import sys
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from runner.reporting import COLUMNS, aggregate
-from runner.setups import atomic_json, manifest_entries
-from runner.sweep import configurations
+from runner.reporting.aggregate import COLUMNS, aggregate
+from runner.cache.setups import atomic_json, manifest_entries
+from runner.runtime.sweep import configurations
 
 
 def collect(output, manifest, percentages, final=False, shards=2, same_count=False):
     if final and same_count:
         raise ValueError('Matched status is a live snapshot, not a final report')
-    from runner.resume import resolve_scope, active_configurations
+    from runner.reporting.resume import resolve_scope, active_configurations
     report_root, group_root, continuation = resolve_scope(output)
     configs=active_configurations(percentages, scope=continuation) if continuation else configurations(percentages)
     rows=manifest_entries(manifest)
@@ -55,7 +55,7 @@ def collect(output, manifest, percentages, final=False, shards=2, same_count=Fal
         raise RuntimeError('Reports differ from continuation fingerprint')
     matching = None
     if same_count:
-        from runner.matched_status import match_records
+        from runner.reporting.status import match_records
         records = {}
         for config in configs:
             name = config['name']

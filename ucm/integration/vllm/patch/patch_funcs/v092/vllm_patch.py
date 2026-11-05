@@ -668,7 +668,7 @@ def _patch_scheduler() -> None:
             create_request_queue,
         )
         from vllm.v1.core.sched.scheduler import Scheduler
-        from runner.thinking_budget import install_scheduler_hook
+        from runner.runtime.thinking_budget import install_scheduler_hook
         install_scheduler_hook()
         from vllm.v1.core.sched.utils import check_stop
         from vllm.v1.engine import (
@@ -1978,7 +1978,7 @@ def _patch_gpu_model_runner() -> None:
                 self.apply_grammar_bitmask(scheduler_output, logits)
 
             # Sample the next token and get logprobs if needed.
-            from runner.thinking_budget import enforce_logits
+            from runner.runtime.thinking_budget import enforce_logits
             enforce_logits(self, logits)
             sampling_metadata = self.input_batch.sampling_metadata
             if spec_decode_metadata is None:

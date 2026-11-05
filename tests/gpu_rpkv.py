@@ -21,10 +21,10 @@ def main():
     os.environ.update(CUDA_VISIBLE_DEVICES=','.join(args.gpu_uuids),ENABLE_SPARSE='TRUE',VLLM_USE_V1='1',
         VLLM_WORKER_MULTIPROC_METHOD='spawn',VLLM_ALLOW_INSECURE_SERIALIZATION='1',
         VLLM_ATTENTION_BACKEND='FLASH_ATTN',PLATFORM='cuda',VLLM_USE_REROPE='0')
-    from runner.config import validate_sample
-    from runner.layout import token_hash
-    from runner.setups import atomic_json,file_hash,check_environment
-    from runner.corpus_runtime import Engine
+    from runner.inputs.config import validate_sample
+    from runner.inputs.layout import token_hash
+    from runner.cache.setups import atomic_json,file_hash,check_environment
+    from runner.corpus.runtime import Engine
     sample=validate_sample(json.loads(args.input.read_text()))
     if not sample.get('evaluation_protocol') or len(sample['token_ids'])<32768:
         parser.error('Use a prepared original RULER sample spanning multiple prefill steps')

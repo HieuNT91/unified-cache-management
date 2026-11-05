@@ -14,10 +14,10 @@ import numpy as np
 from scripts.longbench_a800_data import ACTIONS, SCHEDULE, assign_folds
 from scripts.router_dataset import save, load, validate
 from scripts import train_router as training
-from runner.longbench_features import FEATURES
-from runner.setups import fingerprint, file_hash
-from runner.corpus_train import search
-from runner.tree_policy import load as load_tree, decide
+from runner.router.longbench_features import FEATURES
+from runner.cache.setups import fingerprint, file_hash
+from runner.corpus.train import search
+from runner.router.tree_policy import load as load_tree, decide
 
 ROOT=Path(__file__).resolve().parents[1]
 SMALL_GRID=[dict(family='cost',depth=d,min_leaf=2,lam=w,penalty=0.) for d,w in ((1,1),(2,5),(3,20))]
@@ -87,7 +87,7 @@ class PortableTests(unittest.TestCase):
                 self.assertEqual(meta['weighting'],'equal-prompt')
                 self.assertEqual(len(assign_folds(rows)),count)
                 if mode=='both':
-                    with patch('runner.corpus_train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
+                    with patch('runner.corpus.train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
                         report=training.train(rows,inventory,meta,root/'fit200')
                     self.assertEqual(report['samples'],3103)
                     self.assertEqual(len(report['policies']),3)
@@ -113,7 +113,7 @@ class PortableTests(unittest.TestCase):
         from test_a800_longbench import fixture
         from scripts.router_dataset import export_collection
         from scripts.longbench_a800_data import read
-        from runner.setups import atomic_json
+        from runner.cache.setups import atomic_json
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);fixture(root)
             path=root/'longbench-data.json'
@@ -158,7 +158,7 @@ class PortableTests(unittest.TestCase):
                 rows,inventory,meta=training.select_data(mode,ruler,lb)
                 output=root/mode
                 # Exercise real fold fitting/compiler/export/evaluation with a small grid.
-                with patch('runner.corpus_train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
+                with patch('runner.corpus.train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
                     report=training.train(rows,inventory,meta,output)
                 self.assertEqual(report['samples'],count);self.assertEqual(report['primary'],'router1')
                 self.assertEqual(len(report['policies']),3)
@@ -182,7 +182,7 @@ class PortableTests(unittest.TestCase):
                         if row['dataset']=='longbench-v2':
                             row['probe_overhead_seconds']*=100
                             for outcome in row['outcomes'].values():outcome['ttft_seconds']*=100
-                    with patch('runner.corpus_train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
+                    with patch('runner.corpus.train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
                         training.train(scaled,inventory,meta,root/'scaled')
                     for name in report['policies']:
                         self.assertEqual(load_tree(output/(name+'.json'))['tree'],load_tree(root/'scaled'/(name+'.json'))['tree'])
@@ -193,7 +193,7 @@ class PortableTests(unittest.TestCase):
         scores=[[1.,1.] for _ in range(9)]+[[1.,0.]]
         inventory=[ACTIONS[0],ACTIONS[1]]
         grid=[dict(family='loss',depth=1,min_leaf=1,shrinkage=0,threshold=.5)]
-        with patch('runner.corpus_train.GRID',grid):
+        with patch('runner.corpus.train.GRID',grid):
             _,table,_=search(samples,features,scores,[[1.,.01]]*10,[0.]*10,inventory,count=1,
                               feature_names=FEATURES,folds=[i%5 for i in range(10)],score_weighting='prompt')
         self.assertAlmostEqual(table[0]['macro_score'],.9)
@@ -204,7 +204,7 @@ class PortableTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); path=bundle(root,'longbench-v2')
             rows,inv,meta=training.select_data('longbench-v2',longbench=path)
-            with patch('runner.corpus_train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
+            with patch('runner.corpus.train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
                 training.train(rows,inv,meta,root/'fit')
             args=['train_router.py','--dataset','longbench-v2','--longbench-data',str(path),
                   '--tree',str(root/'fit/router1.json'),'--output',str(root/'evaluation')]

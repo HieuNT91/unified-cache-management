@@ -1,5 +1,5 @@
-from runner.layout import request_metadata, METADATA_KEY, PROMPT_PROTOCOL
-from runner.layout import stamp_sample
+from runner.inputs.layout import request_metadata, METADATA_KEY, PROMPT_PROTOCOL
+from runner.inputs.layout import stamp_sample
 """Persistent setup contracts, tested with disk artifacts and CPU-only fake engines."""
 import copy
 import io
@@ -14,10 +14,11 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from runner import setups
-from runner.config import validate_sample, validate_preparation, engine_config
-from runner.identity import BlockHasher, block_keys, setup_seed
-from runner.setup_store import SetupStore
+import runner.runtime.generation  # Load before fixtures temporarily replace sys.modules.
+from runner.cache import setups
+from runner.inputs.config import validate_sample, validate_preparation, engine_config
+from runner.inputs.identity import BlockHasher, block_keys, setup_seed
+from runner.cache.setup_store import SetupStore
 
 
 class SetupTests(unittest.TestCase):
@@ -59,7 +60,7 @@ class SetupTests(unittest.TestCase):
 
     def build(self):
         with patch.object(setups, 'construct_missing', side_effect=self.fake_build), \
-                patch('runner.preparation.tokenize_sample', side_effect=AssertionError('Imported tokens must not be tokenized')), \
+                patch('runner.inputs.preparation.tokenize_sample', side_effect=AssertionError('Imported tokens must not be tokenized')), \
                 patch('sys.stdout', new=io.StringIO()):
             setups.build_setup(self.args)
         descriptor = setups.read_descriptor(self.args.output)
@@ -218,7 +219,7 @@ class SetupTests(unittest.TestCase):
         with patch.object(setups, 'snapshot', side_effect=AssertionError('baseline KV lookup')), \
                 patch.object(setups, 'check_environment', return_value=['GPU-a','GPU-b']), \
                 patch.object(setups, 'execute_collection') as execute, \
-                patch('runner.reporting.AggregationReporter.finish'):
+                patch('runner.reporting.aggregate.AggregationReporter.finish'):
             setups.run_collection(self.run_args(method='baseline'))
             cfg = execute.call_args.args[4]
             self.assertNotIn('kv_transfer_config', cfg)
@@ -233,7 +234,7 @@ class SetupTests(unittest.TestCase):
                 ('selective_prophetkv',.2,None,5), ('baseline',.2,None,None)]:
             args = self.run_args(method=method, ratio=ratio, layers=layers, num_layers=count,
                 prompt_ids=['b'], max_output_tokens=256, dry_run=True)
-            with patch('runner.preparation.tokenize_sample', side_effect=AssertionError('retokenized')), \
+            with patch('runner.inputs.preparation.tokenize_sample', side_effect=AssertionError('retokenized')), \
                     patch.object(setups, 'construct_missing', side_effect=AssertionError('reconstructed')), \
                     patch('sys.stdout', new=io.StringIO()) as stdout:
                 setups.run_collection(args)
@@ -298,7 +299,7 @@ class SetupTests(unittest.TestCase):
     def test_readiness_and_connector_hash_share_one_implementation(self):
         descriptor, inventory = self.build()
         from ucm.integration.vllm.ucm_connector import RequestHasher
-        from runner.cache import verify_cache
+        from runner.cache.lifecycle import verify_cache
         fp = descriptor['fingerprint']
         config = NS(model_config=NS(model='/different/path'), parallel_config=NS(tensor_parallel_size=2),
             kv_transfer_config=NS(kv_connector_extra_config={'persistent_setup':{'fingerprint':fp}}))
@@ -375,7 +376,7 @@ class SetupTests(unittest.TestCase):
 
     def test_collection_executes_sequentially_with_one_engine_and_never_populates(self):
         worker=NS(setup=Mock(),arm=Mock(),drain=Mock(),retire=Mock())
-        worker_patch=patch.dict(sys.modules, {'runner.worker':worker})
+        worker_patch=patch.dict(sys.modules, {'runner.runtime.worker':worker})
         worker_patch.start()
         self.addCleanup(worker_patch.stop)
         self.manifest.write_text('\n'.join(json.dumps(row) for row in [
@@ -409,7 +410,7 @@ class SetupTests(unittest.TestCase):
             return result,.1,.2
         with patch.object(setups,'start_engine',return_value=llm) as start, \
                 patch.object(setups,'check_environment',return_value=['GPU-a','GPU-b']), \
-                patch('runner.generation.generate',side_effect=generate), patch('runner.generation.verify_diagnostics') as verify, \
+                patch('runner.runtime.generation.generate',side_effect=generate), patch('runner.runtime.generation.verify_diagnostics') as verify, \
                 patch.object(setups,'construct_missing',side_effect=AssertionError('population')), \
                 patch('sys.stdout',new=io.StringIO()):
             setups.run_collection(self.run_args())
@@ -438,7 +439,7 @@ class SetupTests(unittest.TestCase):
 
     def test_real_construction_loop_skips_complete_chunks_and_retires_before_completion(self):
         worker=NS(setup=Mock(),arm=Mock(),drain=Mock(),retire=Mock())
-        worker_patch=patch.dict(sys.modules, {'runner.worker':worker})
+        worker_patch=patch.dict(sys.modules, {'runner.runtime.worker':worker})
         worker_patch.start()
         self.addCleanup(worker_patch.stop)
         # Prepare artifacts without a GPU, then call the actual builder loop.
@@ -458,7 +459,7 @@ class SetupTests(unittest.TestCase):
             return None,0.,0.
         progress=dict(attempts=[])
         with patch.object(setups,'check_environment'), patch.object(setups,'start_engine',return_value=llm) as start, \
-                patch('runner.generation.generate',side_effect=generate) as gen:
+                patch('runner.runtime.generation.generate',side_effect=generate) as gen:
             setups.construct_missing(self.args.output,descriptor,samples,missing,self.args,progress)
         self.assertEqual(gen.call_count,1)
         start.assert_called_once()

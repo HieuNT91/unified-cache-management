@@ -12,14 +12,14 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from runner.corpus import relative
-from runner.corpus_records import accepted, NATIVE_ANSWER_VALIDATION
-from runner.setups import atomic_json, file_hash, fingerprint
-from runner.tree_collection import SCHEMA, RATIOS, actions, inventory
-from runner.tree_prophetkv import PROTOCOL, budget
-from runner.tree_profiles import validate
-from runner.thinking_budget import KEY
-from runner.output_budget import RULER_PROTOCOL, LONGBENCH_PROTOCOL, validate_sample_policy, validate_policy
+from runner.corpus.dataset import relative
+from runner.corpus.records import accepted, NATIVE_ANSWER_VALIDATION
+from runner.cache.setups import atomic_json, file_hash, fingerprint
+from runner.tree.collection import SCHEMA, RATIOS, actions, inventory
+from runner.tree.prophetkv import PROTOCOL, budget
+from runner.router.profiles import validate
+from runner.runtime.thinking_budget import KEY
+from runner.runtime.output_budget import RULER_PROTOCOL, LONGBENCH_PROTOCOL, validate_sample_policy, validate_policy
 from scripts.collection_v3 import declaration, seeds, answer_metrics
 from scripts import longbench_a800_control as control
 from scripts.longbench_a800_data import read, freeze
@@ -114,7 +114,7 @@ def adopt(args):
             raise ValueError('Explicit answer seeds are supported only for LongBench v2 tree runs')
         settings['answer_seeds'] = list(selected_seeds)
     seeds(settings)  # Validate before adopting inputs or creating any run files.
-    from runner.tree_collection import chunk_size, runtime_sample
+    from runner.tree.collection import chunk_size, runtime_sample
     if getattr(args, 'kv_chunk_size', None) is not None:
         settings['kv_chunk_size'] = args.kv_chunk_size
     chunk_size(settings)
@@ -245,7 +245,7 @@ def stage(base, role):
 
 
 def report(base, final=False):
-    from runner.reporting import aggregate
+    from runner.reporting.aggregate import aggregate
     base = Path(base); settings, plan, _ = load(base); protocol, rows = stage(base, ROLE)
     methods = {}
     expected = [dict(prompt_id=f'{r["id"]}/seed-{seed}', subtask=r['subtask'])

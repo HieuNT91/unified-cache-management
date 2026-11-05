@@ -156,7 +156,7 @@ class ServerEnvTests(unittest.TestCase):
                     env=dict(self.env,UCM_ENV_FILE=str(config)),capture_output=True,text=True)
                 self.assertEqual(result.returncode,17,result.stderr)
                 args=json.loads(result.stdout)
-                self.assertEqual(args[:2],['-m','runner.resume'])
+                self.assertEqual(args[:2],['-m','runner.reporting.resume'])
                 self.assertEqual(args[args.index('--validation')+1],'fast')
 
     def test_a800_single_group_waits_for_each_shard_and_never_uses_gpu_b(self):
@@ -169,13 +169,13 @@ if args[0]=='-c':
 def event(kind,**data):
     with open(os.environ['EVENT_LOG'],'a') as out:
         out.write(json.dumps(dict(kind=kind,devices=os.environ.get('CUDA_VISIBLE_DEVICES'),**data))+'\\n')
-if args[:2]==['-m','runner.resume']:
+if args[:2]==['-m','runner.reporting.resume']:
     root=Path(args[args.index('--output')+1])
     devices=args[args.index('--single-group-gpus')+1].split(',')
     assert args[args.index('--exclude-percentages')+1]=='15'
     (root/'continuation.json').write_text(json.dumps(dict(execution_mode='sequential',gpu_uuids=[devices,devices])))
     event('prepare')
-elif args[:2]==['-m','runner.sweep']:
+elif args[:2]==['-m','runner.runtime.sweep']:
     shard=int(args[args.index('--shard')+1]);event('start',shard=shard)
     time.sleep(.1)
     if os.environ.get('FAIL_SHARD0')=='1' and shard==0:sys.exit(7)

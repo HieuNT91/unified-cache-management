@@ -5,9 +5,9 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from runner.identity import BlockHasher, block_keys, shard_name
-from runner.setups import bytes_per_shard
-from runner.temporary import TemporaryStore, TreeTemporaryStore
+from runner.inputs.identity import BlockHasher, block_keys, shard_name
+from runner.cache.setups import bytes_per_shard
+from runner.cache.temporary import TemporaryStore, TreeTemporaryStore
 from ucm.sparse.prophetkv.lifecycle import seed_value
 
 
@@ -100,7 +100,7 @@ class TreeTemporaryStoreTests(unittest.TestCase):
     def test_connector_opts_in_only_temporary_tree_and_binds_namespace(self):
         from ucm.integration.vllm.persistent_connector import PersistentBlendConnector
         from ucm.integration.vllm.blend_connector import UCMBlendConnector
-        from runner.setup_store import SetupStore
+        from runner.cache.setup_store import SetupStore
         connector = PersistentBlendConnector.__new__(PersistentBlendConnector)
         connector.global_rank = 0
         backend = Mock()
@@ -131,7 +131,7 @@ class TreeTemporaryStoreTests(unittest.TestCase):
         # Real PromptCache readiness/snapshot and real TP hash geometry; only
         # D2H and publication are simulated. No sleeping or GPU is required.
         from test_sweep import SweepTests
-        from runner.sweep import PromptCache
+        from runner.runtime.sweep import PromptCache
         for policy in (TemporaryStore, TreeTemporaryStore):
             with self.subTest(policy=policy.__name__):
                 fixture = SweepTests()

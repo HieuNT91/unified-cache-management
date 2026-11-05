@@ -57,7 +57,7 @@ training code or fits trees. Run it only after training has finalized:
 ```bash
 cd /home/thnguyen/spark/unified-cache-management/.worktrees/prophetkv-clean
 CUDA_VISIBLE_DEVICES='' /home/thnguyen/unified-cache-management/.envs/cacheblend/bin/python \
-  -m runner.router_export \
+  -m runner.router.export \
   --cohort /absolute/path/to/original/frozen/router_cohort.json \
   --training-root /home/thnguyen/spark/unified-cache-management/.results/adaptive-router32b-ruler13-yarn4-all64-train15-test100-20260928 \
   --output /absolute/export/path/router13-native-trees.json

@@ -14,8 +14,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from runner.config import validate_sample
-from runner.setups import atomic_json, bytes_per_shard, file_hash, fingerprint, setup_lock
+from runner.inputs.config import validate_sample
+from runner.cache.setups import atomic_json, bytes_per_shard, file_hash, fingerprint, setup_lock
 
 INPUT = 114688
 
@@ -46,7 +46,7 @@ def layout(tokenizer, content, query, protected):
                  if b > offset + begin and a < offset + begin + len(query)]
     if not positions:
         raise ValueError('Empty question')
-    from runner.layout import boundaries_for, stamp_sample
+    from runner.inputs.layout import boundaries_for, stamp_sample
     bounds = boundaries_for(len(ids), positions[0])
     return stamp_sample(dict(token_ids=ids, tokens=len(ids), boundaries=bounds,
                 fresh_suffix_tokens=len(ids)-bounds[-2], chat_tokens=len(ids),
@@ -86,7 +86,7 @@ def prepare_prompt(tokenizer, row, template, limit=INPUT):
 def prepare(args):
     if os.environ.get('CUDA_VISIBLE_DEVICES') != '':
         raise ValueError("CPU preparation requires CUDA_VISIBLE_DEVICES=''")
-    from runner.preparation import check_model
+    from runner.inputs.preparation import check_model
     from transformers import AutoTokenizer
     check_model(args.model)
     rows = json.loads(args.data.read_text())
@@ -97,13 +97,13 @@ def prepare(args):
                 tokenizer_files={p.name:file_hash(p) for p in args.model.iterdir() if p.is_file() and
                                  p.suffix in ('.json','.txt','.jinja','.model','.tiktoken')},
                 template_sha256=file_hash(template_path), adapter_sha256=file_hash(Path(__file__)),
-                chunker_sha256=file_hash(ROOT/'runner/cache.py'), input_limit=INPUT, output_limit=16384)
+                chunker_sha256=file_hash(ROOT/'runner/cache/lifecycle.py'), input_limit=INPUT, output_limit=16384)
     if getattr(args, 'collection_v3', False):
-        from runner.output_budget import PROTOCOL
+        from runner.runtime.output_budget import PROTOCOL
         from scripts.collection_v3 import declaration
         spec.update(declaration('longbench-v2', getattr(args, 'answers_per_question', 4)))
         spec.update(collection_protocol='tp2-data-v3', generation_protocol=PROTOCOL,
-                    budget_adapter_sha256=file_hash(ROOT/'runner/output_budget.py'))
+                    budget_adapter_sha256=file_hash(ROOT/'runner/runtime/output_budget.py'))
     args.output = args.output.resolve()
     with setup_lock(args.output, build=True):
         receipt_path = args.output/'preparation.json'
@@ -126,8 +126,8 @@ def prepare(args):
                           source_id=row['_id'], source_row_sha256=fingerprint(row),
                           source_metadata={k:row[k] for k in ('domain','sub_domain','difficulty','length')})
             if getattr(args, 'collection_v3', False):
-                from runner.output_budget import make_policy, LONGBENCH_PROTOCOL
-                from runner.thinking_budget import KEY
+                from runner.runtime.output_budget import make_policy, LONGBENCH_PROTOCOL
+                from runner.runtime.thinking_budget import KEY
                 sample[KEY] = make_policy(tokenizer, opening_in_prompt=sample['formatted_text'].endswith('<think>\n'))
                 sample['evaluation_protocol'] = LONGBENCH_PROTOCOL
             validate_sample(sample)
@@ -166,7 +166,7 @@ def prepare(args):
 def disk(args):
     # One prompt per group, not a retained cache for all 503 inputs. Account for
     # temporary writes by reserving a second full payload, plus 16 GiB scratch.
-    from runner.setups import manifest_entries
+    from runner.cache.setups import manifest_entries
     rows = manifest_entries(args.prepared/'manifest.jsonl')
     maximum = max(json.loads(row['prepared'].read_text())['boundaries'][-2] for row in rows)
     payload = maximum * 262144 * args.groups  # Qwen3-32B BF16, across all TP ranks

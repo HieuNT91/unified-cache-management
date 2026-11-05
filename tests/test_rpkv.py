@@ -5,10 +5,10 @@ import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
-from runner.layout import (PROMPT_PROTOCOL, METADATA_KEY, boundaries_for, stamp_sample,
+from runner.inputs.layout import (PROMPT_PROTOCOL, METADATA_KEY, boundaries_for, stamp_sample,
                            request_metadata, validate_request_metadata, validate_layout)
-from runner.config import validate_sample, engine_config
-from runner.identity import BlockHasher
+from runner.inputs.config import validate_sample, engine_config
+from runner.inputs.identity import BlockHasher
 
 
 def sample(length=449):
@@ -142,7 +142,7 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(c.store.mock_calls,[])
 
     def test_generation_transport_has_identical_tokens_and_task_decoding(self):
-        from runner import generation
+        from runner.runtime import generation
         s=sample();received=[]
         engine=NS(has_unfinished_requests=Mock(side_effect=[False,True,False]))
         engine.add_request=lambda rid,prompt,params:received.append((rid,prompt,params))

@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 import tempfile
 import numpy as np
-from runner.corpus_records import record_dir
-from runner.setups import file_hash, fingerprint
+from runner.corpus.records import record_dir
+from runner.cache.setups import file_hash, fingerprint
 from scripts.collection_v3 import ACTIONS, RATIOS, Snapshot, seeds, validate_declaration, answer_metrics
 from scripts import export_features as ef
 
@@ -178,9 +178,9 @@ def export_portable(base, output):
 
 
 def validate_portable(data):
-    from runner.longbench_features import FEATURES, DEFINITIONS
-    from runner.layout import PROMPT_PROTOCOL
-    from runner.thinking_budget import KEY, validate_thinking_outcome
+    from runner.router.longbench_features import FEATURES, DEFINITIONS
+    from runner.inputs.layout import PROMPT_PROTOCOL
+    from runner.runtime.thinking_budget import KEY, validate_thinking_outcome
     from scripts.longbench_a800_data import validate_rows
     provenance = data['provenance']
     validate_declaration(provenance)

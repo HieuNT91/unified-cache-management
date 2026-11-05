@@ -2,9 +2,9 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from runner.setups import atomic_json, file_hash, fingerprint
-from runner.longbench_features import DEFINITIONS
-from runner.corpus_records import NATIVE_ANSWER_VALIDATION, PROBE_ANSWER_VALIDATION
+from runner.cache.setups import atomic_json, file_hash, fingerprint
+from runner.router.longbench_features import DEFINITIONS
+from runner.corpus.records import NATIVE_ANSWER_VALIDATION, PROBE_ANSWER_VALIDATION
 
 RATIOS = (1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90)
 ACTIONS = [dict(id='nocache', method='baseline', ratio=None)] + [
@@ -135,7 +135,7 @@ def prepare(base):
             if enabled(settings):
                 value.update(domain=sample['source_metadata']['domain'], sub_domain=sample['source_metadata']['sub_domain'])
         if settings.get('execution_profile') == 'ruler-thinking' or (enabled(settings) and dataset == 'longbench-v2'):
-            from runner.thinking_budget import KEY, validate_sample_policy
+            from runner.runtime.thinking_budget import KEY, validate_sample_policy
             validate_sample_policy(sample)
             value[KEY] = sample[KEY]
         rows.append(value)
@@ -183,8 +183,8 @@ def validate_rows(settings, rows):
     if len(rows) != expected or len({r['id'] for r in rows}) != expected:
         raise ValueError('Incomplete/duplicate dataset membership')
     if enabled(settings):
-        from runner.output_budget import validate_policy as validate_total, RULER_PROTOCOL, LONGBENCH_PROTOCOL
-        from runner.thinking_budget import KEY
+        from runner.runtime.output_budget import validate_policy as validate_total, RULER_PROTOCOL, LONGBENCH_PROTOCOL
+        from runner.runtime.thinking_budget import KEY
         expected_protocol = RULER_PROTOCOL if settings.get('execution_profile') == 'ruler-thinking' else LONGBENCH_PROTOCOL if settings['dataset'] == 'longbench-v2' else None
         if expected_protocol:
             for row in rows:
@@ -200,9 +200,9 @@ def validate_rows(settings, rows):
         from scripts.ruler import TASKS
         start = ruler_start(settings)
         if settings.get('execution_profile') == 'ruler-thinking':
-            from runner.thinking_budget import PROTOCOL, KEY, validate_policy
+            from runner.runtime.thinking_budget import PROTOCOL, KEY, validate_policy
             if enabled(settings):
-                from runner.output_budget import RULER_PROTOCOL as PROTOCOL
+                from runner.runtime.output_budget import RULER_PROTOCOL as PROTOCOL
             if any(r.get('evaluation_protocol') != PROTOCOL for r in rows):
                 raise ValueError('Thinking RULER evaluation identity mismatch')
             for row in rows:

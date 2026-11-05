@@ -1,5 +1,5 @@
-from runner.layout import request_metadata, METADATA_KEY, PROMPT_PROTOCOL
-from runner.layout import stamp_sample
+from runner.inputs.layout import request_metadata, METADATA_KEY, PROMPT_PROTOCOL
+from runner.inputs.layout import stamp_sample
 """Native router CPU acceptance: policies, arithmetic, lifecycle, relocation and full reports."""
 import copy
 import json
@@ -14,12 +14,12 @@ import unittest
 from unittest.mock import Mock,patch
 import numpy as np
 
-import runner.generation  # Load before fixtures temporarily replace sys.modules.
-from runner.router_policy import (ACTIONS,FEATURES,DEFINITIONS,SCHEMA,digest,validate,decide,
+import runner.runtime.generation  # Load before fixtures temporarily replace sys.modules.
+from runner.router.policy import (ACTIONS,FEATURES,DEFINITIONS,SCHEMA,digest,validate,decide,
                                   features_from_arrays,load_policy)
-from runner.router_export import compile_policy,source_action
-from runner.setups import atomic_json,file_hash,fingerprint
-from runner.router_sweep import CASES,paired_check,accepted,record_dir
+from runner.router.export import compile_policy,source_action
+from runner.cache.setups import atomic_json,file_hash,fingerprint
+from runner.router.sweep import CASES,paired_check,accepted,record_dir
 NS=types.SimpleNamespace
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -83,7 +83,7 @@ class PolicyTests(unittest.TestCase):
             with self.assertRaises(ValueError):load_policy(path)
 
     def test_profile_cli_and_manual_overrides(self):
-        from runner.config import engine_config
+        from runner.inputs.config import engine_config
         with tempfile.TemporaryDirectory() as td:
             policy=write_policy(td)
             cfg=engine_config('/model','router',cache_dir='/cache',end_token=99,router_policy=policy)
@@ -103,7 +103,7 @@ class PolicyTests(unittest.TestCase):
             self.assertNotEqual(subprocess.run(cmd+['--ratio','.01'],capture_output=True).returncode,0)
 
     def test_export_refuses_unfinished_training(self):
-        from runner.router_export import export
+        from runner.router.export import export
         with tempfile.TemporaryDirectory() as td:
             with self.assertRaises(FileNotFoundError):export(td,Path(td)/'never.json',Path(td)/'cohort.json')
             self.assertFalse((Path(td)/'never.json').exists())
@@ -127,7 +127,7 @@ class FeaturesTests(unittest.TestCase):
             with self.assertRaises(ValueError):features_from_arrays(layers,bad,64,128)
 
     def test_exported_ranks_corruption_and_disagreement(self):
-        from runner.router_measure import extract_features
+        from runner.router.measure import extract_features
         with tempfile.TemporaryDirectory() as td:
             arrays=[]
             for rank in range(4):
@@ -166,7 +166,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(json.loads((Path(td)/'scheduler.json').read_text()),dict(request_id=rid,requests_blend_meta=0,requests_meta=0))
 
     def test_routing_two_requests_retirement_export_sync_timing(self):
-        from runner.router_measure import measure
+        from runner.router.measure import measure
         events=[];worker=NS(arm=Mock(),router_mode=Mock(),router_export=Mock(),drain=Mock(),retire=Mock())
         with tempfile.TemporaryDirectory() as td:
             out=Path(td)
@@ -189,7 +189,7 @@ class LifecycleTests(unittest.TestCase):
             def generate(engine,tokens,budget,rid,thinking=False,**metadata):
                 events.append(('generate',budget,rid))
                 return NS(outputs=[NS(token_ids=[7])]),.02,.1
-            with patch.dict(sys.modules,{'runner.worker':worker}),patch('runner.generation.generate',side_effect=generate),patch('runner.generation.verify_diagnostics'):
+            with patch.dict(sys.modules,{'runner.runtime.worker':worker}),patch('runner.runtime.generation.generate',side_effect=generate),patch('runner.runtime.generation.verify_diagnostics'):
                 result,ttft,elapsed,routing=measure(llm,sample(),'a'*32+':p:read:measured',payload('baseline'),'router1',out,
                     unchanged=lambda:events.append(('immutable',)))
             self.assertEqual([e[1] for e in events if e[0]=='generate'],[1,256])
@@ -229,7 +229,7 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaises(ValueError):groups(','.join(g[:4]),','.join(g[:4]))
 
     def test_resume_hashes_identity_and_partial_records(self):
-        from runner.router_sweep import accepted
+        from runner.router.sweep import accepted
         row=dict(id='a',ordinal=0,sha256='input');protocol=dict(groups=[['GPU-a'],['GPU-b']])
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);self.assertIsNone(accepted(root,'baseline',row,protocol))
@@ -244,7 +244,7 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaises(ValueError):accepted(root,'baseline',row,protocol,full=False)
 
     def test_synthetic_9100_record_reporting_and_plots(self):
-        from runner.router_report import summarize,publish
+        from runner.router.report import summarize,publish
         rows=[dict(id=f'{t}-{i}',subtask=f'task{t}',ordinal=i) for t in range(13) for i in range(100)]
         records=[]
         for case in CASES:
@@ -271,7 +271,7 @@ class WorkflowTests(unittest.TestCase):
 
 class NativeExecutionTests(unittest.TestCase):
     def test_seven_configurations_native_worker_resume_and_engine_exit(self):
-        from runner import router_sweep as sweep
+        from runner.router import sweep
         events=[];worker=NS(setup=Mock(),arm=Mock(),drain=Mock(),retire=Mock(),router_mode=Mock(),
                             router_export=Mock(),router_dense_receipt=Mock())
         class Tokenizer:
@@ -324,10 +324,10 @@ class NativeExecutionTests(unittest.TestCase):
                 atomic_json(Path(os.environ['PROPHETKV_SCHEDULER_RECEIPT']),dict(request_id=rid,requests_blend_meta=0,requests_meta=0))
                 return NS(num_cached_tokens=0 if not engine.current['cached'] or rid.endswith('|router-dense') else 64,
                           outputs=[NS(token_ids=[7],text='answer',finish_reason='stop')]),.02,.04
-            with patch.dict(sys.modules,{'runner.worker':worker}),patch.object(sweep,'start_engine',side_effect=start), \
+            with patch.dict(sys.modules,{'runner.runtime.worker':worker}),patch.object(sweep,'start_engine',side_effect=start), \
                  patch.object(sweep,'check_environment',return_value=['GPU-a']*4),patch('scripts.router_inputs.load_prepared',return_value=[row]), \
-                 patch.object(sweep,'PromptCache',Cache),patch('runner.cache.wait_for_cache',return_value={'verified_shards':8}), \
-                 patch('runner.generation.generate',side_effect=generate),patch('runner.generation.verify_diagnostics'):
+                 patch.object(sweep,'PromptCache',Cache),patch('runner.cache.lifecycle.wait_for_cache',return_value={'verified_shards':8}), \
+                 patch('runner.runtime.generation.generate',side_effect=generate),patch('runner.runtime.generation.verify_diagnostics'):
                 for case in CASES:sweep.run_group(root,0,case,'fixture')
                 self.assertEqual(sum(e[0]=='start' for e in events),7)
                 self.assertEqual(sum(e[0]=='shutdown' for e in events),7)
@@ -356,7 +356,7 @@ class NativeExecutionTests(unittest.TestCase):
                 with patch.object(control,'load_run',return_value=(protocol,rows)),patch.object(control,'accepted',return_value=None), \
                      patch.object(control.subprocess,'Popen',side_effect=launch),patch.object(control,'identity',return_value={'start':'1','cmd':'00'}), \
                      patch.object(control,'group_alive',return_value=False),patch.object(control,'terminate_owned'), \
-                     patch.object(control.signal,'signal'),patch.object(control.time,'sleep'),patch('runner.router_report.finalize') as final:
+                     patch.object(control.signal,'signal'),patch.object(control.time,'sleep'),patch('runner.router.report.finalize') as final:
                     if failure==75:
                         control.supervise(root)
                         self.assertEqual(len(starts),15);final.assert_called_once()
@@ -367,14 +367,14 @@ class NativeExecutionTests(unittest.TestCase):
 
     def test_duplicate_supervisor_and_group_receipts_block_launch(self):
         from scripts.router_control import idle
-        from runner.router_process import identity
+        from runner.router.process import identity
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);atomic_json(root/'supervisor.json',dict(pid=os.getpid(),identity=identity(os.getpid())))
             with self.assertRaises(ValueError):idle(root)
 
     def test_readonly_persistent_router_configuration(self):
         from test_setups import SetupTests
-        from runner import setups
+        from runner.cache import setups
         helper=SetupTests();helper.setUp()
         try:
             helper.args.tp=4
@@ -393,7 +393,7 @@ class NativeExecutionTests(unittest.TestCase):
 
 class ExportAndWatchdogTests(unittest.TestCase):
     def test_finalized_export_replays_all_saved_features_without_importing_training_code(self):
-        from runner.router_export import export
+        from runner.router.export import export
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);atomic_json(root/'protocol.json',{'fixture':'synthetic finalized training data'})
             cohort=root/'cohort.json';atomic_json(cohort,dict(training_protocol_sha256=file_hash(root/'protocol.json')))
@@ -438,7 +438,7 @@ class ExportAndWatchdogTests(unittest.TestCase):
                  patch.object(control,'identity',return_value={'start':'1','cmd':'00'}),patch.object(control,'group_alive',return_value=False), \
                  patch.object(control,'terminate_owned') as stop,patch.object(control.signal,'signal'), \
                  patch.object(control.time,'sleep'),patch.object(control.time,'monotonic',side_effect=lambda:next(ticks)), \
-                 patch('runner.router_report.finalize') as final:
+                 patch('runner.router.report.finalize') as final:
                 with self.assertRaises(RuntimeError):control.supervise(Path(td))
                 self.assertEqual(len(starts),2);self.assertEqual(stop.call_count,2);final.assert_not_called()
             state=json.loads((Path(td)/'supervisor.json').read_text())

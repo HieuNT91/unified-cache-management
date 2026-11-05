@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from runner.reporting import (AggregationReporter, OutputAnalyzer, aggregate,
+from runner.reporting.aggregate import (AggregationReporter, OutputAnalyzer, aggregate,
                               evaluation_metadata, extract_choice, score_answer)
 
 

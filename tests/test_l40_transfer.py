@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from runner.tree_profiles import config
+from runner.router.profiles import config
 from ucm.sparse.prophetkv.lifecycle import TrackedStore
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -3,7 +3,7 @@ import json
 import re
 from pathlib import Path
 
-from runner.setups import file_hash, fingerprint
+from runner.cache.setups import file_hash, fingerprint
 
 
 SCHEMA = 'ruler-thinking-extension-30-to-200-v1'

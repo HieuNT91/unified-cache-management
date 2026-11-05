@@ -51,7 +51,7 @@ case "${1:-}" in
                 0) ;;
                 *) echo 'RESUME_SINGLE_GROUP must be 0 or 1.' >&2; exit 2 ;;
             esac
-            CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" -m runner.resume \
+            CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" -m runner.reporting.resume \
                 --model "$MODEL_PATH" --manifest "$PREPARED_DIR/manifest.jsonl" \
                 --output "$EXPERIMENT_DIR" --cache-root "$CACHE_ROOT" --tp 4 --shards 2 \
                 --validation "${RESUME_VALIDATION:-fast}" "${prepare_flags[@]}"

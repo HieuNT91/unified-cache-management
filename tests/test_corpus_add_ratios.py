@@ -14,10 +14,10 @@ from unittest.mock import patch
 
 import numpy as np
 
-from runner.corpus import selection
-from runner.corpus_records import accepted, publish, record_dir, protocol_identity
-from runner.setups import atomic_json, file_hash
-from runner.tree_policy import DEFAULT_ACTIONS
+from runner.corpus.dataset import selection
+from runner.corpus.records import accepted, publish, record_dir, protocol_identity
+from runner.cache.setups import atomic_json, file_hash
+from runner.router.tree_policy import DEFAULT_ACTIONS
 from scripts import corpus_add_ratios as extension
 from test_corpus import archives, tiny_sample
 
@@ -89,7 +89,7 @@ class AddRatiosTests(unittest.TestCase):
                     folder = record_dir(root, case, pid)
                     folder.mkdir(parents=True)
                     record.update(archives(folder), internal_tokens=1)
-                    from runner.router_policy import features_from_arrays
+                    from runner.router.policy import features_from_arrays
                     prefix, end = sample['boundaries'][1], sample['boundaries'][-2]
                     record['features'] = features_from_arrays(np.full((64, end), 1/end, np.float64),
                                                               np.full(end-prefix, 1/end, np.float32), prefix, end)
@@ -102,7 +102,7 @@ class AddRatiosTests(unittest.TestCase):
         atomic_json(root/f'partial-{n}-validation.json', dict(status='partial-complete', tranche_complete=True,
             scheduled_samples=n, accepted_answers={a['id']: n for a in DEFAULT_ACTIONS}, accepted_probes=n, answers=4*n))
         with patch('scripts.corpus_inputs.prepared_rows', return_value=rows), patch('scripts.corpus_inputs.TASKS', tasks), \
-                patch('runner.tree_profiles.validate'), patch.object(extension, 'environment_check'):
+                patch('runner.router.profiles.validate'), patch.object(extension, 'environment_check'):
             corpus = extension.prepare(root)
         return corpus, rows
 
@@ -137,8 +137,8 @@ class AddRatiosTests(unittest.TestCase):
 
     def collect(self, corpus, group=0, events=None, attempt='fixture'):
         events = [] if events is None else events
-        with patch('runner.corpus_runtime.Engine', self.fake_engine(events)), \
-                patch('runner.setups.check_environment', return_value=corpus.protocol['groups'][group]):
+        with patch('runner.corpus.runtime.Engine', self.fake_engine(events)), \
+                patch('runner.cache.setups.check_environment', return_value=corpus.protocol['groups'][group]):
             extension.collect(corpus.root, group, attempt)
         return events
 
@@ -160,7 +160,7 @@ class AddRatiosTests(unittest.TestCase):
             self.assertFalse((corpus.state/'records').exists())
             self.assertFalse((corpus.state/'frozen-code').exists())
             initial = extension.read(corpus.root/corpus.outcome(rows[0], extension.EXTRA[0])['initialization'])
-            self.assertIn('runner/corpus_runtime.py', initial['execution_code'])
+            self.assertIn('runner/corpus/runtime.py', initial['execution_code'])
             self.assertEqual(pins, {name: file_hash(name) for name in pins})
             self.assertEqual(corpus.pending(0), [])
             self.assertEqual(self.collect(corpus, attempt='empty'), [])
@@ -170,8 +170,8 @@ class AddRatiosTests(unittest.TestCase):
             corpus, rows = self.fixture(Path(td), groups=2)
             self.assertEqual(corpus.pending(0), [rows[0]])
             self.assertEqual(corpus.pending(1), [rows[1]])
-            with patch('runner.setups.check_environment', return_value=corpus.protocol['groups'][1]), \
-                    patch('runner.corpus_runtime.Engine') as engine:
+            with patch('runner.cache.setups.check_environment', return_value=corpus.protocol['groups'][1]), \
+                    patch('runner.corpus.runtime.Engine') as engine:
                 with self.assertRaisesRegex(ValueError, 'UUID'):
                     extension.collect(corpus.root, 0, 'bad')
                 engine.assert_not_called()
@@ -257,7 +257,7 @@ class AddRatiosTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             corpus, _ = self.fixture(Path(td))
             atomic_json(corpus.state/'processes'/'worker.json', dict(pid=os.getpid(), identity=None))
-            with patch('runner.router_process.alive', return_value=True):
+            with patch('runner.router.process.alive', return_value=True):
                 with self.assertRaisesRegex(ValueError, 'remain alive'):
                     extension.finalize(corpus.root)
             (corpus.state/'processes'/'worker.json').unlink()
@@ -317,7 +317,7 @@ class AddRatiosTests(unittest.TestCase):
             atomic_json(root/'partial-13-validation.json', dict(status='partial-complete', tranche_complete=True,
                 scheduled_samples=13, accepted_answers={a['id']:13 for a in DEFAULT_ACTIONS}, accepted_probes=13, answers=52))
             atomic_json(root/'cleanup.json', dict(complete=True, owned_engines_exited=True))
-            from runner.router_process import identity
+            from runner.router.process import identity
             atomic_json(root/'supervisor.json', dict(pid=os.getpid(), identity=identity(os.getpid()), state='partial-complete'))
             with self.assertRaisesRegex(ValueError, 'still alive'):
                 extension.detach(root)
@@ -357,8 +357,8 @@ class AddRatiosTests(unittest.TestCase):
             corpus, _ = self.fixture(Path(td))
             engine = self.fake_engine([])
             with patch.object(engine, 'end', return_value={'deleted_shards': 0}), \
-                    patch('runner.corpus_runtime.Engine', engine), \
-                    patch('runner.setups.check_environment', return_value=corpus.protocol['groups'][0]):
+                    patch('runner.corpus.runtime.Engine', engine), \
+                    patch('runner.cache.setups.check_environment', return_value=corpus.protocol['groups'][0]):
                 with self.assertRaisesRegex(ValueError, 'cannot be committed'):
                     extension.collect(corpus.root, 0, 'failure')
             for case in extension.EXTRA:
@@ -385,8 +385,8 @@ class AddRatiosTests(unittest.TestCase):
                         patch('scripts.corpus_control.check_hardware'), \
                         patch('scripts.router_control.cleanup_caches'), \
                         patch('scripts.router_control.terminate_owned') as terminate, \
-                        patch('runner.router_process.identity', return_value={'start': '1', 'cmd': 'fixture'}), \
-                        patch('runner.router_process.group_alive', return_value=False), \
+                        patch('runner.router.process.identity', return_value={'start': '1', 'cmd': 'fixture'}), \
+                        patch('runner.router.process.group_alive', return_value=False), \
                         patch.object(extension, 'assert_engines_exited'), \
                         patch.object(extension, 'finalize') as finalize, \
                         patch.object(extension.subprocess, 'Popen', Child), \

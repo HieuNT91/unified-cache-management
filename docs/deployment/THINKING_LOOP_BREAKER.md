@@ -1,6 +1,6 @@
 # Qwen3-32B thinking loop breaker
 
-New answer requests through `runner.generation.generate` with a validated
+New answer requests through `runner.runtime.generation.generate` with a validated
 `ruler_thinking_budget` policy automatically enable the loop breaker. This covers
 RULER's separate thinking/answer budgets and collection v3's RULER/LongBench v2
 15,000-thinking / 16,384-total policy on vLLM 0.9.2. It uses the existing worker

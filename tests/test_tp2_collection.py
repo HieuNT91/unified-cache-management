@@ -11,9 +11,9 @@ import numpy as np
 
 from scripts import longbench_a800_control as control
 from scripts import longbench_a800_data as data
-from runner.corpus import load_attention, reduction_matches, selection
-from runner.longbench_features import features, HEAD_LAYERS
-from runner.setups import atomic_json, file_hash
+from runner.corpus.dataset import load_attention, reduction_matches, selection
+from runner.router.longbench_features import features, HEAD_LAYERS
+from runner.cache.setups import atomic_json, file_hash
 from test_a800_longbench import fixture
 
 
@@ -90,7 +90,7 @@ class TP2Tests(unittest.TestCase):
             self.assertFalse(reduction_matches([layers[0],layers[0]],scores*2,prefix))
 
     def test_tp2_config_and_init_reject_missing_or_duplicate_rank(self):
-        from runner.tree_profiles import config,validate_initialization,allocation
+        from runner.router.profiles import config,validate_initialization,allocation
         for dataset in ('ruler','longbench-v2'):
             cfg=config('/m',dataset,True,'/c',tp=2)
             self.assertEqual(cfg['tensor_parallel_size'],2)
@@ -103,7 +103,7 @@ class TP2Tests(unittest.TestCase):
             with self.assertRaises(ValueError):validate_initialization([receipts[0]]*2,dataset,tp=2)
 
     def test_server_tp2_auto_cache_preserves_execution_limits(self):
-        from runner.tree_profiles import config,allocation
+        from runner.router.profiles import config,allocation
         for dataset,hardware in [('longbench-v2','server'),('ruler','l20-tp2')]:
             for cached in (False,True):
                 with self.subTest(dataset=dataset,cached=cached):
@@ -118,7 +118,7 @@ class TP2Tests(unittest.TestCase):
                     self.assertEqual('kv_transfer_config' in cfg,cached)
 
     def test_auto_cache_capacity_and_rope_checks_on_every_rank(self):
-        from runner.tree_profiles import validate_initialization,allocation
+        from runner.router.profiles import validate_initialization,allocation
         for dataset,hardware in [('longbench-v2','server'),('ruler','l20-tp2')]:
             p=allocation(dataset)
             receipts=[dict(rank=r,kv_tokens=p['kv_tokens'],kv_blocks=p['kv_blocks']+500,block_size=64,
@@ -136,7 +136,7 @@ class TP2Tests(unittest.TestCase):
                 with self.assertRaises(ValueError):validate_initialization(bad,dataset,hardware,tp=2)
 
     def test_tp4_and_local_cache_allocations_remain_fixed(self):
-        from runner.tree_profiles import config,allocation,validate_initialization
+        from runner.router.profiles import config,allocation,validate_initialization
         for dataset,hardware in [('longbench-v2','server'),('ruler','server'),('ruler','rtx4500ada')]:
             p=allocation(dataset,hardware)
             cfg=config('/m',dataset,True,'/c',hardware=hardware)
@@ -232,7 +232,7 @@ class TP2Tests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'100 or 200'):control.configure(args)
 
     def test_engine_tp2_warmup_requires_four_shards_and_retirement_two_ranks(self):
-        from runner.corpus_runtime import Engine
+        from runner.corpus.runtime import Engine
         from contextlib import ExitStack
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp);prepared=base/'inputs'
@@ -241,16 +241,16 @@ class TP2Tests(unittest.TestCase):
             protocol=dict(tp=2,groups=[['a','b']],dataset='ruler',model='/m',prepared=str(prepared),cache_root=str(base/'cache'))
             llm=Mock();llm.collective_rpc.return_value=[]
             with ExitStack() as stack:
-                stack.enter_context(patch.dict(sys.modules, {'runner.worker': NS(setup=Mock())}))
+                stack.enter_context(patch.dict(sys.modules, {'runner.runtime.worker': NS(setup=Mock())}))
                 for name in ('validate','validate_initialization'):
-                    stack.enter_context(patch('runner.corpus_runtime.'+name))
-                stack.enter_context(patch('runner.corpus_runtime.start_engine',return_value=llm))
+                    stack.enter_context(patch('runner.corpus.runtime.'+name))
+                stack.enter_context(patch('runner.corpus.runtime.start_engine',return_value=llm))
                 stack.enter_context(patch('scripts.router_control.code_hashes',return_value={'run.py':'updated-source'}))
-                stack.enter_context(patch('runner.reporting.OutputAnalyzer'))
-                stack.enter_context(patch('runner.generation.generate'))
+                stack.enter_context(patch('runner.reporting.aggregate.OutputAnalyzer'))
+                stack.enter_context(patch('runner.runtime.generation.generate'))
                 stack.enter_context(patch('ucm.sparse.prophetkv.lifecycle.delete_retired_files'))
-                ready=stack.enter_context(patch('runner.cache.wait_for_cache',return_value=dict(verified_shards=4)))
-                retire=stack.enter_context(patch('runner.corpus_runtime.retirement'))
+                ready=stack.enter_context(patch('runner.cache.lifecycle.wait_for_cache',return_value=dict(verified_shards=4)))
+                retire=stack.enter_context(patch('runner.corpus.runtime.retirement'))
                 engine=Engine(base/'results',protocol,0,'cached','ok',[dict(id='p',prepared='sample.json')])
                 self.assertEqual(data.read(engine.session/'initialization.json')['execution_code'],{'run.py':'updated-source'})
                 self.assertEqual(ready.call_args.args[0].tensor_parallel_size,2)
@@ -291,7 +291,7 @@ class TP2Tests(unittest.TestCase):
             self.assertIn(failed['log'],str(caught.exception))
 
     def test_worker_saves_failure_before_shutdown_and_keeps_original_error(self):
-        from runner.corpus_runtime import Engine
+        from runner.corpus.runtime import Engine
         for fail_begin in (True, False):
             for secondary_failures in (False, True):
                 with self.subTest(begin=fail_begin,secondary=secondary_failures), tempfile.TemporaryDirectory() as tmp:
@@ -313,8 +313,8 @@ class TP2Tests(unittest.TestCase):
                     with patch.object(control,'stage',return_value=(protocol,[row])), \
                          patch.object(control,'pending',return_value=[row]), \
                          patch.object(control,'accepted',return_value=None), \
-                         patch('runner.setups.check_environment',return_value=['a','b']), \
-                         patch('runner.corpus_runtime.Engine',return_value=engine), \
+                         patch('runner.cache.setups.check_environment',return_value=['a','b']), \
+                         patch('runner.corpus.runtime.Engine',return_value=engine), \
                          patch.object(control,'publish') as publish:
                         with self.assertRaises(RuntimeError) as caught:
                             control.worker(base,'ruler','cached','attempt',0)
@@ -324,7 +324,7 @@ class TP2Tests(unittest.TestCase):
                     publish.assert_not_called()
 
     def test_failure_inventory_survives_cache_cleanup_and_records_missing_extra(self):
-        from runner.corpus_runtime import Engine
+        from runner.corpus.runtime import Engine
         import shutil
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp);cache=base/'cache';session=base/'sessions'/'attempt'
@@ -350,7 +350,7 @@ class TP2Tests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()),receipt)
 
     def test_owned_cleanup_after_root_relocation_preserves_archived_cache_and_results(self):
-        from runner.setups import fingerprint
+        from runner.cache.setups import fingerprint
         from scripts.router_control import cleanup_caches
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp);root=base/'ruler';cache=base/'cache'

@@ -8,10 +8,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from runner.corpus_records import publish, record_dir
-from runner.reporting import OutputAnalyzer
-from runner.setups import atomic_json, file_hash
-from runner.thinking_budget import KEY, BudgetState
+from runner.corpus.records import publish, record_dir
+from runner.reporting.aggregate import OutputAnalyzer
+from runner.cache.setups import atomic_json, file_hash
+from runner.runtime.thinking_budget import KEY, BudgetState
 import json
 from scripts.collection_v3 import ACTIONS
 from scripts.ruler import TASKS
@@ -127,7 +127,7 @@ class L20ReportTests(unittest.TestCase):
                         sequence_id=source['id'], accuracy=1., timings={'ttft_seconds': 2.},
                         thinking_tokens=0, answer_tokens=1, control_tokens=0, output_tokens=1,
                         output_cap_reached=False, unfinished_thinking=False)
-        with patch('runner.corpus_records.accepted', side_effect=result):
+        with patch('runner.corpus.records.accepted', side_effect=result):
             _, tables, matching = breakdown.report(self.base, same_count=True)
         self.assertEqual(matching['matched_samples'], 1)
         self.assertEqual(tables['overall'][self.cases[0]]['accuracy_percent'], 100.)
@@ -158,7 +158,7 @@ class L20ReportTests(unittest.TestCase):
                             sequence_id=source['id'], accuracy=1., timings={'ttft_seconds': 2.},
                             thinking_tokens=0, answer_tokens=1, control_tokens=0, output_tokens=1,
                             output_cap_reached=False, unfinished_thinking=False)
-            with patch('runner.corpus_records.accepted', side_effect=accepted):
+            with patch('runner.corpus.records.accepted', side_effect=accepted):
                 _, tables, matching = breakdown.report(args.root, same_count=True)
             self.assertEqual(matching['matched_samples'], 1)
             self.assertEqual(tables['overall']['tree-prophetkv-5']['accuracy_percent'], 100.)

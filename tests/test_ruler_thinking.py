@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import Mock, patch
 import weakref
 
-from runner.thinking_budget import (KEY, PROFILE, PROTOCOL, THINKING_CAP, WINDOW,
+from runner.runtime.thinking_budget import (KEY, PROFILE, PROTOCOL, THINKING_CAP, WINDOW,
     BudgetState, make_policy, enforce_logits, stopping_hook, request_state)
 from scripts.ruler import TASKS, CAPS, format_thinking_sample, generator_command
 
@@ -122,7 +122,7 @@ class ThinkingTests(unittest.TestCase):
         self.assertEqual(stop(probe,WINDOW),'legacy');original.assert_called_once()
 
     def test_generate_wire_serialization_latency_and_probe_exclusion(self):
-        from runner import generation
+        from runner.runtime import generation
         from vllm import SamplingParams
         from vllm.v1.serial_utils import MsgpackDecoder,MsgpackEncoder
         s=sample();p=s[KEY]
@@ -180,7 +180,7 @@ class ThinkingTests(unittest.TestCase):
             self.assertEqual(thinking[thinking.index(flag)+1],value)
 
     def test_profile_full_capacity_equal_ranks_and_legacy(self):
-        from runner.tree_profiles import config,validate,validate_initialization
+        from runner.router.profiles import config,validate,validate_initialization
         validate(sample(),PROFILE)
         for cached in (False,True):
             cfg=config('/m',PROFILE,cached,'/c',hardware='l20-tp2',tp=2)
@@ -197,7 +197,7 @@ class ThinkingTests(unittest.TestCase):
         self.assertEqual(config('/m','longbench-v2',False,'/c',tp=2)['max_model_len'],131072)
 
     def test_answer_only_credit_nulls_and_full_stream_accounting(self):
-        from runner.reporting import OutputAnalyzer,scoring_text,score_answer,metrics
+        from runner.reporting.aggregate import OutputAnalyzer,scoring_text,score_answer,metrics
         p=sample()[KEY];tok=Tokenizer();analysis=OutputAnalyzer(tok)
         tokens=closed(p,tok.encode('TARGET'),[3])
         state=BudgetState(p).consume(tokens)
@@ -214,7 +214,7 @@ class ThinkingTests(unittest.TestCase):
 
     def test_thinking_configure_prepare_scope_shards_and_pinned_policies(self):
         from scripts import longbench_a800_control as control, longbench_a800_data as data
-        from runner.setups import atomic_json,file_hash
+        from runner.cache.setups import atomic_json,file_hash
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);prepared=root/'inputs'
             args=NS(root=root,role='ruler',model=Path('/m'),data=Path('/ruler'),prepared=prepared,
@@ -272,8 +272,8 @@ class ThinkingTests(unittest.TestCase):
     def test_synthetic390_export_import_training_and_provenance(self):
         from scripts import router_dataset as portable,train_router as training
         from scripts.longbench_a800_data import ACTIONS
-        from runner.setups import fingerprint
-        from runner.tree_policy import load as load_tree
+        from runner.cache.setups import fingerprint
+        from runner.router.tree_policy import load as load_tree
         from test_portable_training import synthetic_rows,SMALL_GRID,bundle
         rows=synthetic_rows('ruler',390)
         for row in rows:
@@ -296,7 +296,7 @@ class ThinkingTests(unittest.TestCase):
                 with self.assertRaises(ValueError):portable.validate(bad)
             selected,inventory,meta=training.select_data('ruler',path)
             self.assertEqual(meta['dataset_provenance']['ruler'],provenance)
-            with patch('runner.corpus_train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
+            with patch('runner.corpus.train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
                 report=training.train(selected,inventory,meta,root/'synthetic-fit')
             self.assertEqual(report['samples'],390);self.assertEqual(len(report['policies']),3)
             tree=load_tree(root/'synthetic-fit/router1.json')
@@ -319,7 +319,7 @@ class ThinkingTests(unittest.TestCase):
         from vllm import SamplingParams
         from vllm.v1.request import Request,RequestStatus
         from vllm.v1.core.sched import scheduler,utils
-        from runner.thinking_budget import install_scheduler_hook
+        from runner.runtime.thinking_budget import install_scheduler_hook
         p=make_policy(Tokenizer(),' Answer:',30)
         prior_utils,prior_scheduler=utils.check_stop,scheduler.check_stop
         try:
@@ -337,9 +337,9 @@ class ThinkingTests(unittest.TestCase):
             utils.check_stop=prior_utils;scheduler.check_stop=prior_scheduler
 
     def test_admission_checks_expanded_window_and_phase_overflow(self):
-        from runner.thinking_budget import validate_sample_policy
+        from runner.runtime.thinking_budget import validate_sample_policy
         from scripts.corpus_control import check_hardware
-        from runner.setups import atomic_json
+        from runner.cache.setups import atomic_json
         s=sample();s['token_ids']=[65]*(WINDOW-s['max_output_tokens'])
         validate_sample_policy(s)
         s['token_ids'].append(65)
@@ -358,7 +358,7 @@ class ThinkingTests(unittest.TestCase):
         from scripts.longbench_a800_report import report
         from scripts.longbench_a800_data import ACTIONS
         from scripts.router_dataset import example
-        from runner.reporting import OutputAnalyzer
+        from runner.reporting.aggregate import OutputAnalyzer
         tok=Tokenizer();s=sample();p=s[KEY]
         ids=closed(p,tok.encode('TARGET'),[3])
         state=BudgetState(p).consume(ids)

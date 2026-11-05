@@ -9,7 +9,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from runner.setups import atomic_json, file_hash
+from runner.cache.setups import atomic_json, file_hash
 
 
 def main():

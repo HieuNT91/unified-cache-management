@@ -8,8 +8,8 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
-from runner.corpus_records import record_dir
-from runner.setups import atomic_json, file_hash, fingerprint
+from runner.corpus.records import record_dir
+from runner.cache.setups import atomic_json, file_hash, fingerprint
 from scripts import longbench_a800_control as control
 from scripts import longbench_a800_data as data
 from scripts import router_control, corpus_control
@@ -36,8 +36,8 @@ class SourceUpdateTests(unittest.TestCase):
             self.assertEqual(control.pending(features, [row], self.root/'features', ['probe']), [row])
             # Exercise the real stage/accepted path; narrow only the worker shard.
             with patch.object(control, 'ordered_rows', return_value=[row]), \
-                    patch('runner.corpus_runtime.Engine') as engine, \
-                    patch('runner.setups.check_environment') as devices:
+                    patch('runner.corpus.runtime.Engine') as engine, \
+                    patch('runner.cache.setups.check_environment') as devices:
                 control.worker(self.root, 'ruler', 'baseline', 'updated')
             engine.assert_not_called(); devices.assert_not_called()
         self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before})
@@ -94,7 +94,7 @@ class SourceUpdateTests(unittest.TestCase):
         settings = dict(code={'old.py': 'old'}, cohort_sha256=fingerprint('rpkv-original-ruler-13x500-seed42'),
                         prepared=str(prepared), policy=str(policy_path))
         atomic_json(self.root/'settings.json', settings)
-        from runner.layout import PROMPT_PROTOCOL
+        from runner.inputs.layout import PROMPT_PROTOCOL
         from scripts.ruler import EVALUATION_PROTOCOL
         policy = dict(prompt_protocol=PROMPT_PROTOCOL, evaluation_protocol=EVALUATION_PROTOCOL)
         with patch.object(router_control, 'code_hashes', return_value={'new.py': 'new'}), \

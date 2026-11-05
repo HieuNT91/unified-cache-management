@@ -47,7 +47,7 @@ case "${1:-}" in
         cd "$CODE_ROOT"
         resume_flags=()
         if [[ "$1" == resume ]]; then
-            CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" -m runner.resume \
+            CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" -m runner.reporting.resume \
                 --model "$MODEL_PATH" --manifest "$PREPARED_DIR/manifest.jsonl" \
                 --output "$EXPERIMENT_DIR" --cache-root "$CACHE_ROOT" --tp 4 --shards 2 --percentages "${percentages[@]}" --context-length 65536 \
                 --validation "${RESUME_VALIDATION:-fast}"

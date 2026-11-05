@@ -13,8 +13,8 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from runner.reporting import aggregate
-from runner.setups import file_hash, fingerprint
+from runner.reporting.aggregate import aggregate
+from runner.cache.setups import file_hash, fingerprint
 from scripts.collection_v3 import answer_metrics, seeds
 
 
@@ -48,7 +48,7 @@ def metadata(base, pins):
 
 
 def records(base, role, rows, protocol, cases, pins, selected_seeds=None, selected_ids=None):
-    from runner.corpus_records import accepted
+    from runner.corpus.records import accepted
     row_map = {r['id']: r for r in rows}
     scheduled_seeds = seeds(protocol)
     # Freeze commit boundaries before reading; in-flight results are excluded.
@@ -78,7 +78,7 @@ def records(base, role, rows, protocol, cases, pins, selected_seeds=None, select
 
 
 def copied_baseline(base, settings, rows, protocol, data, pins):
-    from runner.thinking_budget import KEY
+    from runner.runtime.thinking_budget import KEY
     source = base/'baseline-source'
     role, original, original_rows, original_protocol, cases = metadata(source, pins)
     if 'nocache' not in cases:
@@ -131,7 +131,7 @@ def snapshot(base):
 
 
 def report(base, same_count=False):
-    from runner.matched_status import match_records
+    from runner.reporting.status import match_records
     expected, data = snapshot(base)
     imported = (Path(base)/'baseline-source').exists() and 'nocache' in data and any(
         case.startswith('tree-prophetkv-') for case in data)

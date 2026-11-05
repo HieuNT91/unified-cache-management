@@ -9,12 +9,12 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from runner.corpus_records import protocol_identity
-from runner.matched_status import committed_records, match_records
-from runner.reporting import COLUMNS, aggregate
-from runner.router_process import alive
-from runner.setups import atomic_json
-from runner.tree_policy import actions
+from runner.corpus.records import protocol_identity
+from runner.reporting.status import committed_records, match_records
+from runner.reporting.aggregate import COLUMNS, aggregate
+from runner.router.process import alive
+from runner.cache.setups import atomic_json
+from runner.router.tree_policy import actions
 
 
 def collect(root, prepared=None, same_count=False):

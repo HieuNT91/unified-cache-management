@@ -9,7 +9,7 @@ import unicodedata
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 
-from runner.setups import atomic_json, file_hash, fingerprint, setup_lock
+from runner.cache.setups import atomic_json, file_hash, fingerprint, setup_lock
 from scripts.ruler import format_sample, definitions, query_span
 
 SOURCES = Path(__file__).with_name('corpus_sources.json')

@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import numpy as np
 from scripts import export_features as ef
-from runner.longbench_features import features as legacy_features
+from runner.router.longbench_features import features as legacy_features
 
 
 def write(path, value):

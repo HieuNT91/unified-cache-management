@@ -90,10 +90,10 @@ git add -- \
   docs/deployment/README.md docs/deployment/COLLECTION_V3.md \
   docs/deployment/A800_COLLECTION_V3.md docs/deployment/L20_COLLECTION_V3.md \
   docs/deployment/L40_COLLECTION_V3.md docs/protocols/ruler.md \
-  docs/protocols/longbench-v2.md runner/config.py \
-  runner/corpus_records.py runner/corpus_runtime.py \
-  runner/generation.py runner/reporting.py \
-  runner/thinking_budget.py runner/output_budget.py \
+  docs/protocols/longbench-v2.md runner/inputs/config.py \
+  runner/corpus/records.py runner/corpus/runtime.py \
+  runner/runtime/generation.py runner/reporting/aggregate.py \
+  runner/runtime/thinking_budget.py runner/runtime/output_budget.py \
   scripts/collection_v3.py scripts/collection_v3_export.py \
   scripts/collection_v3_report.py scripts/export_features.py \
   scripts/longbench_a800_control.py scripts/longbench_a800_data.py \

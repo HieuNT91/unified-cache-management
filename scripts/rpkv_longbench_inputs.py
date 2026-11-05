@@ -7,8 +7,8 @@ from pathlib import Path
 import random
 import sys
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
-from runner.config import validate_sample
-from runner.setups import atomic_json,file_hash,fingerprint
+from runner.inputs.config import validate_sample
+from runner.cache.setups import atomic_json,file_hash,fingerprint
 from scripts.longbench_v2 import prepare_prompt,render
 
 

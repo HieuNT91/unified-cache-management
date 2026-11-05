@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from runner.setups import file_hash
+from runner.cache.setups import file_hash
 from scripts import export_features as exporter
 from test_baseline_breakdown import fixture, commit
 

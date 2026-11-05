@@ -11,9 +11,9 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
-from runner.setups import atomic_json, file_hash, fingerprint
-from runner.longbench_features import FEATURES
-from runner.thinking_budget import KEY, PROFILE, PROTOCOL, make_policy
+from runner.cache.setups import atomic_json, file_hash, fingerprint
+from runner.router.longbench_features import FEATURES
+from runner.runtime.thinking_budget import KEY, PROFILE, PROTOCOL, make_policy
 from scripts import longbench_a800_data as data, longbench_a800_control as control
 from scripts import ruler_extension as extension, router_dataset as portable
 from scripts.ruler import TASKS, CAPS, EVALUATION_PROTOCOL

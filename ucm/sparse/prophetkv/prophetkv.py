@@ -40,7 +40,7 @@ class ProphetKV(Blend):
             raise RuntimeError('One request per worker is supported')
         rid,count=next(iter(scheduler_output.num_scheduled_tokens.items()))
         worker_request=requests[rid]
-        from runner.router_guard import is_dense_request
+        from runner.router.guard import is_dense_request
         if is_dense_request(rid):
             if (self.request_state.pending is not None or self.prefill_state is not None
                     or getattr(self.connector, 'router_dense_id', None) != rid):
@@ -55,7 +55,7 @@ class ProphetKV(Blend):
             self.request=self.request_state.take(rid)
             b=self.request.boundaries
             layout = getattr(dispatch, 'request_layout', None)
-            from runner.layout import validate_request_metadata
+            from runner.inputs.layout import validate_request_metadata
             validate_request_metadata(layout, rid, list(worker_request.prompt_token_ids))
             if layout['phase'] != 'read' or tuple(layout['boundaries']) != b or tuple(layout['question_positions']) != self.request.question_positions:
                 raise RuntimeError('Scheduler/worker request layouts disagree')

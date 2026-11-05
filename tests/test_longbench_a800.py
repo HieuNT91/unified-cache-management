@@ -12,8 +12,8 @@ from unittest.mock import Mock, patch
 import numpy as np
 import torch
 
-from runner.longbench_features import FEATURES, HEAD_LAYERS, DEFINITIONS, features
-from runner.setups import atomic_json, file_hash
+from runner.router.longbench_features import FEATURES, HEAD_LAYERS, DEFINITIONS, features
+from runner.cache.setups import atomic_json, file_hash
 from scripts.longbench_a800_data import ACTIONS, SCHEDULE, protocol_for
 from scripts.longbench_a800_report import summarize
 from scripts import longbench_a800_control as control
@@ -123,6 +123,7 @@ class WorkflowTests(unittest.TestCase):
                 atomic_json(base/path, {})
             events = []
             with patch.object(control, 'execute_phase', side_effect=lambda b, r, p, s: events.append(p)), \
+                 patch.object(control, 'load', return_value=({'dataset': 'longbench-v2'}, {}, [row(0)])), \
                  patch.object(control, 'stage', return_value=({'scheduled_actions': SCHEDULE['primary']}, [row(0)])), \
                  patch.object(control, 'wait_extra', side_effect=lambda b: events.append('wait-extra')), \
                  patch('scripts.longbench_a800_report.report', side_effect=lambda *a, **k: events.append('complete-controls')), \
@@ -137,6 +138,7 @@ class WorkflowTests(unittest.TestCase):
             base = Path(tmp); (base/'primary').mkdir()
             atomic_json(base/'primary/protocol.json', {})
             with patch.object(control, 'execute_phase') as execute, \
+                 patch.object(control, 'load', return_value=({'dataset': 'longbench-v2'}, {}, [row(0)])), \
                  patch.object(control, 'stage', return_value=({'scheduled_actions': SCHEDULE['primary']}, [row(0)])), \
                  patch.object(control, 'wait_extra', side_effect=RuntimeError('failed')), \
                  patch.object(control.signal, 'signal'):
@@ -151,8 +153,8 @@ class WorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, \
              patch.object(control, 'stage', return_value=(protocol, [row(0)])), \
              patch.object(control, 'accepted', side_effect=prior), patch.object(control, 'publish') as pub, \
-             patch('runner.corpus_runtime.Engine', return_value=engine), \
-             patch('runner.setups.check_environment', return_value=['A']*2):
+             patch('runner.corpus.runtime.Engine', return_value=engine), \
+             patch('runner.cache.setups.check_environment', return_value=['A']*2):
             base = Path(tmp); (base/'primary').mkdir()
             control.worker(base, 'primary', 'cached', 'attempt')
         engine.probe.assert_not_called()

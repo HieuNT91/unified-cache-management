@@ -8,6 +8,6 @@ export PLATFORM=cuda
 export VLLM_USE_REROPE=0
 if [[ "${1:-}" == sweep ]]; then
     shift
-    exec "${PYTHON_BIN:-python3}" -m runner.sweep "$@"
+    exec "${PYTHON_BIN:-python3}" -m runner.runtime.sweep "$@"
 fi
 exec "${PYTHON_BIN:-python3}" "$ROOT/run.py" "$@"

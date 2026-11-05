@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from runner.config import validate_sample
+from runner.inputs.config import validate_sample
 
 
 def main():

@@ -21,7 +21,7 @@ class F3Recorder:
     DEPTH_FRACTION = 0.25
 
     def __init__(self, tokens, head_dim, num_layers, W=16):
-        from runner.layout import token_hash
+        from runner.inputs.layout import token_hash
         self.key = token_hash(list(tokens)); self.T = len(tokens); self.D = head_dim; self.W = W
         if not 64 <= self.T <= 4096 or self.T % 64 or head_dim <= 0 or num_layers <= 0 or W != 16:
             raise ValueError('F3 requires an original block-aligned chunk and W=16')
@@ -86,7 +86,7 @@ def tree_need(s, u):
 
 def select_tree(links, scores, boundaries, ratio):
     """Source tree arithmetic and stable ties; S4 consumes the declared budget."""
-    from runner.tree_prophetkv import budget
+    from runner.tree.prophetkv import budget
     count, forced = budget(boundaries, ratio)
     prefix, end = boundaries[1], boundaries[-2]
     links = _np.asarray(links, dtype=_np.float64).copy()

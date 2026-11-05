@@ -1,5 +1,31 @@
 # Testing and evidence limits
 
+## AdaTreeV1 runner packages (2026-11-05)
+
+The 41 retained runner implementation modules now live in seven functional packages.
+Before removing the unused comparison helper and its three dedicated tests,
+all 458 CPU tests across 48 modules passed, including baseline, router,
+Tree-ProphetKV, collection, setup/sweep/resume, thinking budgets, launchers,
+reporting and source-update handling. Each test module ran in its own process.
+The initial run exposed three existing fixture errors in `test_longbench_a800`
+and `test_setups`; both reproduced against the prior commit in an isolated
+source snapshot. Supplying the mocked legacy settings and loading generation
+before temporary `sys.modules` fixtures fixed them; all 30 tests in those two
+modules passed on rerun.
+
+After deleting the comparison helper and its dedicated test module, all 64 tests
+in `test_cpu`, `test_reporting`, `test_matched_status`, `test_router` and
+`test_tree_prophetkv` passed on rerun. No active code references to the deleted
+helper remain; syntax and staged diff checks also passed.
+
+Python and shell syntax checks, five direct module CLI help checks, package/worker
+resolution, repository-root/source-identity checks and `git diff --check` passed.
+All moved implementation ASTs match the originals after normalizing import paths,
+resource paths and repository-root depth. The legacy runtime JSON is byte-identical.
+No GPU tests, real-data jobs, SSH or remote execution ran. See the
+[package map and dependency audit](../../runner/README.md) for retained optional
+modules and the removed historical-output comparison helper.
+
 ## AdaTreeV1 method cleanup (2026-11-05)
 
 Trajectory and naive-reuse methods and the legacy GPU orchestration/recovery

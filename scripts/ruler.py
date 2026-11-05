@@ -13,8 +13,8 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from runner.config import validate_sample
-from runner.setups import atomic_json, file_hash, fingerprint, setup_lock
+from runner.inputs.config import validate_sample
+from runner.cache.setups import atomic_json, file_hash, fingerprint, setup_lock
 
 REVISION = 'c3f5e3b4f87f97e048793bb510a3a6b19a46bf3a'
 TASKS = ('niah_single_1','niah_single_2','niah_single_3','niah_multikey_1',
@@ -156,7 +156,7 @@ def model_template(tokenizer, base):
 
 
 def format_sample(tokenizer, row, task, *, template=None):
-    from runner.layout import boundaries_for, stamp_sample
+    from runner.inputs.layout import boundaries_for, stamp_sample
     if task not in TASKS or not isinstance(row.get('answer_prefix'), str) or not row['answer_prefix']:
         raise ValueError('Expected original RULER row with a separate answer_prefix')
     # Upstream splits its fully formatted string into input + answer_prefix.
@@ -194,8 +194,8 @@ def format_sample(tokenizer, row, task, *, template=None):
 
 def format_thinking_sample(tokenizer, row, task, *, template=None, collection_v3=False):
     """Keep the upstream row intact; replace only validated chat boundaries."""
-    from runner.layout import boundaries_for, stamp_sample
-    from runner.thinking_budget import KEY, PROTOCOL, WINDOW, make_policy
+    from runner.inputs.layout import boundaries_for, stamp_sample
+    from runner.runtime.thinking_budget import KEY, PROTOCOL, WINDOW, make_policy
     if task not in TASKS or not isinstance(row.get('answer_prefix'), str) or not row['answer_prefix']:
         raise ValueError('Expected original RULER answer_prefix')
     sentinel = 'RPKV_TEMPLATE_CONTENT_9fd17'
@@ -223,7 +223,7 @@ def format_thinking_sample(tokenizer, row, task, *, template=None, collection_v3
     if not positions:
         raise ValueError('Missing complete question span')
     if collection_v3:
-        from runner.output_budget import make_policy, RULER_PROTOCOL as PROTOCOL
+        from runner.runtime.output_budget import make_policy, RULER_PROTOCOL as PROTOCOL
         policy = make_policy(tokenizer, row['answer_prefix'], thinking_tail.endswith('<think>\n'))
     else:
         policy = make_policy(tokenizer, row['answer_prefix'], CAPS[task], thinking_tail.endswith('<think>\n'))
@@ -260,7 +260,7 @@ def generator_command(args, task, target, tokenizer=None):
 
 
 def prepare(args):
-    from runner.preparation import check_model
+    from runner.inputs.preparation import check_model
     from transformers import AutoTokenizer
     if os.environ.get('CUDA_VISIBLE_DEVICES') != '':
         raise ValueError("CPU preparation requires CUDA_VISIBLE_DEVICES=''")
@@ -274,7 +274,7 @@ def prepare(args):
     asset_root = args.ruler/'scripts/data/synthetic/json'
     from importlib.metadata import version
     thinking = getattr(args, 'thinking', False)
-    from runner.thinking_budget import PROTOCOL, THINKING_CAP, WINDOW, SAMPLING
+    from runner.runtime.thinking_budget import PROTOCOL, THINKING_CAP, WINDOW, SAMPLING
     spec = dict(protocol=PROTOCOL if thinking else EVALUATION_PROTOCOL,revision=REVISION,tasks=list(TASKS),samples=args.samples,
         max_seq_length=INPUT,output_caps=CAPS,seed=getattr(args,'seed',42),
         task_parameters=custom,templates=templates,
@@ -285,17 +285,17 @@ def prepare(args):
         assets={name:file_hash(asset_root/name) for name in
             ('squad.json','hotpotqa.json','PaulGrahamEssays.json','english_words.json')},
         versions={n:version(n) for n in ('transformers','numpy','wonderwords','nltk','scipy','PyYAML')},
-        adapter=file_hash(Path(__file__)),chunker=file_hash(ROOT/'runner/layout.py'))
+        adapter=file_hash(Path(__file__)),chunker=file_hash(ROOT/'runner/inputs/layout.py'))
     if thinking:
         spec.update(execution_profile='ruler-thinking', thinking_cap=THINKING_CAP, engine_window=WINDOW,
                     sampling=SAMPLING, phase_policies='per-sample ruler_thinking_budget; prefixes expanded by upstream',
-                    thinking_adapter=file_hash(ROOT/'runner/thinking_budget.py'))
+                    thinking_adapter=file_hash(ROOT/'runner/runtime/thinking_budget.py'))
     if getattr(args, 'collection_v3', False):
-        from runner.output_budget import RULER_PROTOCOL, THINKING_CAP as TOTAL_THINKING_CAP, OUTPUT_CAP
+        from runner.runtime.output_budget import RULER_PROTOCOL, THINKING_CAP as TOTAL_THINKING_CAP, OUTPUT_CAP
         spec['collection_protocol'] = 'tp2-data-v3'
         if thinking:
             spec.update(protocol=RULER_PROTOCOL, thinking_cap=TOTAL_THINKING_CAP, output_caps=None, output_limit=OUTPUT_CAP,
-                        thinking_adapter=file_hash(ROOT/'runner/output_budget.py'))
+                        thinking_adapter=file_hash(ROOT/'runner/runtime/output_budget.py'))
     spec = json.loads(json.dumps(spec))
     with setup_lock(args.output,build=True):
         sp = args.output/'spec.json'

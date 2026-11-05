@@ -1,4 +1,4 @@
-from runner.layout import stamp_sample
+from runner.inputs.layout import stamp_sample
 """Continuation preserves committed answers, rejects drift, and avoids reruns."""
 import copy
 import json
@@ -12,9 +12,10 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from runner import resume, sweep
-from runner.config import VERSIONS, engine_config
-from runner.setups import atomic_json, file_hash, fingerprint
+from runner.reporting import resume
+from runner.runtime import sweep
+from runner.inputs.config import VERSIONS, engine_config
+from runner.cache.setups import atomic_json, file_hash, fingerprint
 from scripts.sweep_report import collect
 from scripts import sweep_control
 
@@ -45,7 +46,7 @@ class ResumeTests(unittest.TestCase):
             self.args.shard = shard
             _, entries, identity = sweep.load_inputs(self.args)
             self.entries.update({i:(entry,sample) for i,entry,sample in entries})
-            legacy = json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())[-1]
+            legacy = json.loads((resume.ROOT/'runner/reporting/legacy_sweep_runtimes.json').read_text())[-1]
             legacy_identity = fingerprint(dict(self.args.identity_spec, runtime=legacy['runtime']))
             cache = self.cache/('sweep-'+str(shard)*32); cache.mkdir(); (cache/'old').write_text('cache')
             group = self.output/f'group-{shard}'
@@ -209,7 +210,7 @@ class ResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'artifact changed'):resume.prepare(self.args)
 
     def test_resume_preserves_original_vendor_hashes_and_repeats(self):
-        released=next(row for row in json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())
+        released=next(row for row in json.loads((resume.ROOT/'runner/reporting/legacy_sweep_runtimes.json').read_text())
                       if row['commit'].startswith('501fc70'))
         vendor={'ucm/vendor/RULER/scripts/data/synthetic/niah.py':'vendor-digest',
                 'ucm/.cache/vendor/RULER/scripts/data/synthetic/niah.py':'vendor-digest'}
@@ -229,7 +230,7 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual(file_hash(self.output/name),digest)
 
     def test_vendor_compatibility_rejects_changed_missing_or_extra_files_and_inputs(self):
-        released=next(row for row in json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())
+        released=next(row for row in json.loads((resume.ROOT/'runner/reporting/legacy_sweep_runtimes.json').read_text())
                       if row['commit'].startswith('501fc70'))
         name='ucm/vendor/RULER/generator.py'
         spec=copy.deepcopy(self.args.identity_spec)
@@ -247,7 +248,7 @@ class ResumeTests(unittest.TestCase):
                 resume.compatible_identity(candidate,original)
 
     def test_vendor_compatibility_does_not_admit_arbitrary_local_runtime_files(self):
-        released=json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())[-1]
+        released=json.loads((resume.ROOT/'runner/reporting/legacy_sweep_runtimes.json').read_text())[-1]
         spec=copy.deepcopy(self.args.identity_spec)
         spec['runtime']['ucm/local.py']='unreviewed'
         original=fingerprint(dict(spec,runtime={**released['runtime'],'ucm/local.py':'unreviewed'}))
@@ -255,7 +256,7 @@ class ResumeTests(unittest.TestCase):
             resume.compatible_identity(spec,original)
 
     def test_hidden_vendor_layout_requires_exact_hashes_for_each_copy(self):
-        released=json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())[-1]
+        released=json.loads((resume.ROOT/'runner/reporting/legacy_sweep_runtimes.json').read_text())[-1]
         hidden='ucm/.cache/vendor/RULER/generator.py'
         visible='ucm/vendor/RULER/generator.py'
         for paths in ((hidden,), (visible,hidden)):
@@ -327,7 +328,7 @@ class ResumeTests(unittest.TestCase):
                 raise AssertionError('Fast mode hashed a diagnostic payload')
             return file_hash(path)
         with patch.object(Path,'read_text',read),patch.object(resume,'file_hash',side_effect=digest), \
-                patch('runner.generation.verify_diagnostics',side_effect=AssertionError('Unexpected saved replay')):
+                patch('runner.runtime.generation.verify_diagnostics',side_effect=AssertionError('Unexpected saved replay')):
             scope=resume.prepare(self.args)
         self.assertEqual(scope['validation']['mode'],'fast')
         self.assertFalse(scope['validation']['diagnostic_replay'])
@@ -357,7 +358,7 @@ class ResumeTests(unittest.TestCase):
     def test_fast_upgrade_accepts_old_continuation_cohort_and_repeated_resume(self):
         scope=resume.prepare(self.args)
         # Emulate the released resume runtime (also used by the config/.env release).
-        runtime=next(row for row in json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())
+        runtime=next(row for row in json.loads((resume.ROOT/'runner/reporting/legacy_sweep_runtimes.json').read_text())
                      if row['commit'].startswith('16c1f75'))
         old_current=fingerprint(dict(self.args.identity_spec,runtime=runtime['runtime']))
         old_fingerprint=fingerprint(dict(original=scope['original_identity'],current=old_current,
@@ -397,7 +398,7 @@ class ResumeTests(unittest.TestCase):
         command=['bash','-c',
                  'exec 9>"$1/sweep.lock"; flock -n 9 || exit 1; '
                  'export UCM_SWEEP_COORDINATOR_PID=$$; shift; "$@"; rc=$?; exit "$rc"',
-                 'coordinator',str(self.output),sys.executable,'-m','runner.resume',
+                 'coordinator',str(self.output),sys.executable,'-m','runner.reporting.resume',
                  '--model',str(self.model),'--manifest',str(self.manifest),'--output',str(self.output),
                  '--cache-root',str(self.cache),'--tp','2','--percentages','1','5']
         result=subprocess.run(command,cwd=resume.ROOT,capture_output=True,text=True,
@@ -448,9 +449,9 @@ class ResumeTests(unittest.TestCase):
         for name,digest in self.original.items():self.assertEqual(file_hash(self.output/name),digest)
 
     def test_stop_target_discovery_excludes_other_experiments(self):
-        table={100:dict(command=['python','-m','runner.sweep','--output',str(self.output)],parent=1,start='1'),
+        table={100:dict(command=['python','-m','runner.runtime.sweep','--output',str(self.output)],parent=1,start='1'),
                101:dict(command=['engine'],parent=100,start='2'),
-               102:dict(command=['python','-m','runner.sweep','--output',str(self.root/'unrelated')],parent=1,start='3')}
+               102:dict(command=['python','-m','runner.runtime.sweep','--output',str(self.root/'unrelated')],parent=1,start='3')}
         found=sweep_control.owned_processes(self.output,table)
         self.assertEqual(set(found),{100,101})
         with patch.object(sweep_control,'process_table',return_value=table):
@@ -460,7 +461,7 @@ class ResumeTests(unittest.TestCase):
     def test_stop_real_cpu_child_preserves_unrelated_child(self):
         # Ordinary sleeping CPU subprocesses, no model or CUDA workload.
         child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)',
-                                'runner.sweep','--output',str(self.output)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                                'runner.runtime.sweep','--output',str(self.output)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         unrelated=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)'])
         self.addCleanup(lambda: (unrelated.kill(),unrelated.wait()) if unrelated.poll() is None else None)
         self.addCleanup(lambda: (child.kill(),child.wait()) if child.poll() is None else None)

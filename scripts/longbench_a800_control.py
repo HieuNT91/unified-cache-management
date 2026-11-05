@@ -15,9 +15,9 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from runner.setups import atomic_json, file_hash
-from runner.router_process import identity, alive, group_alive
-from runner.corpus_records import accepted, publish, record_dir
+from runner.cache.setups import atomic_json, file_hash
+from runner.router.process import identity, alive, group_alive
+from runner.corpus.records import accepted, publish, record_dir
 from scripts.router_control import code_hashes, environment, terminate_owned, cleanup_caches
 from scripts.corpus_control import idle, check_hardware
 from scripts.longbench_a800_data import read, freeze, load, stage, SCHEDULE, ACTIONS, publish_protocols, scheduled, ruler_samples
@@ -76,7 +76,7 @@ def configure(args):
     if l40:
         settings['hardware_preflight'] = 'user-managed'
     if thinking:
-        from runner.thinking_budget import PROTOCOL, THINKING_CAP, WINDOW, SAMPLING
+        from runner.runtime.thinking_budget import PROTOCOL, THINKING_CAP, WINDOW, SAMPLING
         from scripts.ruler import CAPS
         settings.update(execution_profile='ruler-thinking', evaluation_protocol=PROTOCOL,
                         thinking_cap=THINKING_CAP, answer_caps=CAPS, engine_window=WINDOW, sampling=SAMPLING)
@@ -85,7 +85,7 @@ def configure(args):
         settings.update(declaration(dataset, answers if answers is not None else (4 if dataset == 'longbench-v2' else 1), thinking),
                         schema='tp2-data-config-v3', groups=selected)
         if thinking:
-            from runner.output_budget import RULER_PROTOCOL, THINKING_CAP, OUTPUT_CAP
+            from runner.runtime.output_budget import RULER_PROTOCOL, THINKING_CAP, OUTPUT_CAP
             settings.update(evaluation_protocol=RULER_PROTOCOL, thinking_cap=THINKING_CAP, output_cap=OUTPUT_CAP)
             del settings['answer_caps']
     if extend_from:
@@ -130,8 +130,8 @@ def pending(protocol, rows, root, cases):
 
 
 def worker(base, role, phase, attempt, group=0, *, stage_loader=None):
-    from runner.corpus_runtime import Engine
-    from runner.setups import check_environment
+    from runner.corpus.runtime import Engine
+    from runner.cache.setups import check_environment
     target = 'features' if phase == 'features' else role
     protocol, rows = (stage_loader or stage)(base, target)
     root = Path(base)/target
@@ -196,8 +196,8 @@ def hardware(protocol):
             raise ValueError('Local tree validation requires an explicit single TP4 group')
         return check_hardware(protocol)
     if protocol.get('hardware_profile') in ('l40-tp2', 'l40-tp4'):
-        from runner.tensor_parallel import protocol_tp
-        from runner.tree_profiles import hardware_profile
+        from runner.runtime.tensor_parallel import protocol_tp
+        from runner.router.profiles import hardware_profile
         tp = 2 if protocol['hardware_profile'] == 'l40-tp2' else 4
         if (protocol_tp(protocol) != tp or len(protocol['groups']) != 8//tp
                 or protocol.get('execution_profile') != 'ruler-thinking'

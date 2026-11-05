@@ -10,12 +10,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from runner.corpus import Corpus
-from runner.corpus_records import protocol_identity
-from runner.corpus_train import train
-from runner.corpus_training_data import ExtendedCorpus, open_corpus
-from runner.setups import atomic_json, file_hash
-from runner.tree_policy import DEFAULT_ACTIONS, load
+from runner.corpus.dataset import Corpus
+from runner.corpus.records import protocol_identity
+from runner.corpus.train import train
+from runner.corpus.training_data import ExtendedCorpus, open_corpus
+from runner.cache.setups import atomic_json, file_hash
+from runner.router.tree_policy import DEFAULT_ACTIONS, load
 from scripts import corpus_add_ratios as extension
 from scripts.corpus_inputs import TASKS
 import test_corpus_add_ratios as fixtures
@@ -35,8 +35,8 @@ class ExtensionTrainingTests(unittest.TestCase):
                 return record, ds
 
         for group in (0, 1):
-            with patch('runner.corpus_runtime.Engine', FastAddedActions), \
-                    patch('runner.setups.check_environment', return_value=collection.protocol['groups'][group]):
+            with patch('runner.corpus.runtime.Engine', FastAddedActions), \
+                    patch('runner.cache.setups.check_environment', return_value=collection.protocol['groups'][group]):
                 extension.collect(root, group, 'training-fixture')
         atomic_json(collection.state/'cleanup.json', dict(owned_engines_exited=True))
         extension.finalize(root)
@@ -65,11 +65,11 @@ class ExtensionTrainingTests(unittest.TestCase):
     def test_no_extension_uses_original_reader_and_direct_training_upgrades(self):
         with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()):
             root = Path(td)
-            with patch('runner.corpus_training_data.Corpus') as original:
+            with patch('runner.corpus.training_data.Corpus') as original:
                 open_corpus(root)
                 original.assert_called_once_with(root, None)
             collection, _ = self.completed(root)
-            from runner.corpus_training_data import training_view
+            from runner.corpus.training_data import training_view
             base = Corpus.__new__(Corpus)
             base.root, base.prepared = root, Path(collection.protocol['prepared'])
             self.assertIsInstance(training_view(base), ExtendedCorpus)
@@ -127,7 +127,7 @@ class ExtensionTrainingTests(unittest.TestCase):
             atomic_json(root/'protocol.json', protocol)
             (root/extension.STATE).mkdir(parents=True)
             tree = dict(actions=DEFAULT_ACTIONS, provenance={'corpus_protocol_sha256': protocol_identity(protocol)})
-            with patch('runner.corpus_training_data.Corpus') as original:
+            with patch('runner.corpus.training_data.Corpus') as original:
                 open_corpus(root, tree=tree)
                 original.assert_called_once_with(root, None)
 
@@ -172,7 +172,7 @@ class ExtensionTrainingTests(unittest.TestCase):
             self.assertEqual(extension.read(root/'cli-heldout/report.json')['overall']['actions'], {'prophetkv-10': 13})
 
     def test_both_action_scopes_fit_and_evaluate_exactly_all_samples(self):
-        from runner.corpus_eval import test_tree
+        from runner.corpus.eval import test_tree
         from scripts import corpus_control
         with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()):
             root = Path(td)

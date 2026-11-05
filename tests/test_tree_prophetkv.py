@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch._dynamo  # Initialize before fixtures snapshot/restore sys.modules.
 
-import runner.generation  # Load before fixtures temporarily replace sys.modules.
+import runner.runtime.generation  # Load before fixtures temporarily replace sys.modules.
 from ucm.sparse.prophetkv.tree_selection import F3Recorder, tree_need
 from ucm.sparse.prophetkv import tree_attention
 
@@ -222,7 +222,7 @@ print('six batched masked-attention/GQA interpreter cases passed; CPU only')
 class SelectionTests(unittest.TestCase):
     def test_s4_is_inside_exact_budget_and_ties_are_stable(self):
         from ucm.sparse.prophetkv.tree_selection import select_tree
-        from runner.tree_prophetkv import budget
+        from runner.tree.prophetkv import budget
         bounds = [0, 64, 128, 192, 448]
         for ratio in (8/128, .15, .2, 1.):
             count, forced = budget(bounds, ratio)
@@ -237,8 +237,8 @@ class SelectionTests(unittest.TestCase):
             with self.assertRaises(ValueError): budget(bounds, ratio)
 
     def test_config_and_policy_switch_isolation(self):
-        from runner.config import engine_config, METHODS
-        from runner.temporary import configure_sparse
+        from runner.inputs.config import engine_config, METHODS
+        from runner.cache.temporary import configure_sparse
         from ucm.sparse.prophetkv.layers import resolve_layers
         self.assertIn('tree-prophetkv', METHODS)
         with patch.dict('os.environ', {'UCM_TREE': '1', 'UCM_RMASK': '1'}):
@@ -260,7 +260,7 @@ class SelectionTests(unittest.TestCase):
 
 class EvidenceTests(unittest.TestCase):
     def fixture(self):
-        from runner.tree_prophetkv import METHOD, PROTOCOL, budget
+        from runner.tree.prophetkv import METHOD, PROTOCOL, budget
         from ucm.sparse.prophetkv.tree_selection import select_tree
         sample = dict(boundaries=[0, 64, 128, 384], question_positions=[200, 201])
         ratio = .2; b = sample['boundaries']
@@ -281,7 +281,7 @@ class EvidenceTests(unittest.TestCase):
         return sample, [dict(rank=r, diagnostics=copy.deepcopy(events)) for r in range(2)]
 
     def test_full_native_evidence_and_corruption(self):
-        from runner.generation import verify_diagnostics
+        from runner.runtime.generation import verify_diagnostics
         sample, workers = self.fixture()
         verify_diagnostics(workers, sample, 'tree-prophetkv', .2, 2, range(64))
         for field, value in [('unit_budget', 16), ('forced', []), ('f3_links', [0.]), ('f3_layers', [0]),
@@ -308,8 +308,8 @@ class PersistentTreeTests(unittest.TestCase):
         f.args.tree_prophetkv = True
         original = f.fake_build
         def fake_build(root, descriptor, samples, missing, args, progress):
-            from runner.setups import chunks_of, fingerprint
-            from runner.tree_prophetkv import write_f3
+            from runner.cache.setups import chunks_of, fingerprint
+            from runner.tree.prophetkv import write_f3
             original(root, descriptor, samples, missing, args, progress)
             for _, sample in samples:
                 for tokens in chunks_of(sample):
@@ -319,8 +319,8 @@ class PersistentTreeTests(unittest.TestCase):
 
     def test_fresh_setup_receipt_reuse_and_readonly_dry_run(self):
         import io, json
-        from runner import setups
-        from runner.tree_prophetkv import PROTOCOL, snapshot_f3
+        from runner.cache import setups
+        from runner.tree.prophetkv import PROTOCOL, snapshot_f3
         f = self.fixture; descriptor, _ = f.build()
         self.assertEqual(descriptor['preparation']['tree_protocol'], PROTOCOL)
         receipt = setups.check_receipt(f.args.output, descriptor)
@@ -337,8 +337,8 @@ class PersistentTreeTests(unittest.TestCase):
         self.assertEqual(snapshot_f3(f.args.output/'cache', descriptor['fingerprint'], samples), before)
 
     def test_missing_f3_resumes_without_rewriting_committed_kv(self):
-        from runner import setups
-        from runner.tree_prophetkv import f3_path
+        from runner.cache import setups
+        from runner.tree.prophetkv import f3_path
         f = self.fixture; descriptor, inventory = f.build()
         kv = setups.snapshot(f.args.output/'cache', inventory)
         tokens = setups.chunks_of(f.sample)[0]
@@ -348,7 +348,7 @@ class PersistentTreeTests(unittest.TestCase):
         self.assertEqual(setups.snapshot(f.args.output/'cache', inventory), kv)
 
     def test_plain_setup_rejected_and_cannot_be_upgraded_in_place(self):
-        from runner import setups
+        from runner.cache import setups
         f = self.fixture; f.args.tree_prophetkv = False; f.build()
         with self.assertRaisesRegex(ValueError, 'fresh setup'):
             setups.run_collection(f.run_args(method='tree-prophetkv', ratio=.2, dry_run=True))
@@ -357,8 +357,8 @@ class PersistentTreeTests(unittest.TestCase):
 
     def test_resume_rejects_changed_f3_even_when_kv_is_incomplete(self):
         import json
-        from runner import setups
-        from runner.tree_prophetkv import f3_path
+        from runner.cache import setups
+        from runner.tree.prophetkv import f3_path
         f = self.fixture; descriptor, inventory = f.build()
         complete = (f.args.output/'complete.json').read_bytes()
         path = f3_path(f.args.output/'cache', setups.chunks_of(f.sample)[0])
@@ -373,8 +373,8 @@ class PersistentTreeTests(unittest.TestCase):
         self.assertEqual(shard.read_bytes(), b'incomplete')
 
     def test_record_corruption_and_namespace_mismatch_fail_without_rewrite(self):
-        from runner import setups
-        from runner.tree_prophetkv import f3_path, read_f3, write_f3
+        from runner.cache import setups
+        from runner.tree.prophetkv import f3_path, read_f3, write_f3
         f = self.fixture; descriptor, _ = f.build()
         tokens = setups.chunks_of(f.sample)[0]; cache = f.args.output/'cache'
         with self.assertRaises(RuntimeError): read_f3(cache, 'another-setup', tokens)
@@ -391,7 +391,7 @@ class RuntimeTests(unittest.TestCase):
         import tempfile
         from ucm.sparse.prophetkv import runtime, attention
         from ucm.sparse.prophetkv.selection import RequestMetadata
-        from runner.tree_prophetkv import write_f3
+        from runner.tree.prophetkv import write_f3
         torch.manual_seed(7)
         layers = [NS(self_attn=NS(o_proj=lambda x:(x,None), head_dim=2),
             post_attention_layernorm=lambda x,r:(x,r), mlp=lambda x:x) for _ in range(64)]
@@ -434,7 +434,7 @@ class RuntimeTests(unittest.TestCase):
     def test_tree_population_never_prefix_reuses_existing_kv(self):
         from unittest.mock import Mock
         from test_rpkv import connector, request
-        from runner.layout import request_metadata
+        from runner.inputs.layout import request_metadata
         tokens = list(range(128)); rid = 'a'*32+':not-a-phase-name'
         req = NS(request_id=rid, prompt_token_ids=tokens, all_token_ids=tokens,
             num_prompt_tokens=128, num_tokens=128,
@@ -455,8 +455,8 @@ class RuntimeTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from ucm.sparse.prophetkv.tree_runtime import begin_population, record_layer
-        from runner.layout import request_metadata
-        from runner.tree_prophetkv import read_f3
+        from runner.inputs.layout import request_metadata
+        from runner.tree.prophetkv import read_f3
         from test_chunked_prefill import WorkerStateTests
         from ucm.sparse.prophetkv.prophetkv import ProphetKV
         tokens = list(range(64));rid='a'*32+':arbitrary-name'

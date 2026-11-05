@@ -8,8 +8,8 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from runner.setups import atomic_json
-from runner.tree_profiles import config, validate_initialization
+from runner.cache.setups import atomic_json
+from runner.router.profiles import config, validate_initialization
 from scripts.corpus_control import check_hardware
 
 
@@ -76,7 +76,7 @@ class L20ThinkingMemoryTests(unittest.TestCase):
             self.assertNotIn('free_mib',result['groups'][0][0])
 
     def test_engine_stops_before_warmup_when_measured_kv_is_insufficient(self):
-        from runner.corpus_runtime import Engine
+        from runner.corpus.runtime import Engine
         from collection_fixtures import fixture, GPUS
         from scripts.ruler import TASKS
         args=fixture(self.root/'engine',n=1)
@@ -86,10 +86,10 @@ class L20ThinkingMemoryTests(unittest.TestCase):
         llm=Mock()
         llm.collective_rpc.return_value=[dict(rank=r,kv_tokens=82304,kv_blocks=1285,block_size=64,
             rope=[dict(formula_bitwise_equal=True,table_positions=131072)]*64) for r in range(2)]
-        with patch.dict(sys.modules,{'runner.worker':NS(setup=Mock())}),patch.dict(os.environ,{}), \
-                patch('runner.corpus_runtime.start_engine',return_value=llm), \
+        with patch.dict(sys.modules,{'runner.runtime.worker':NS(setup=Mock())}),patch.dict(os.environ,{}), \
+                patch('runner.corpus.runtime.start_engine',return_value=llm), \
                 patch('scripts.router_control.code_hashes',return_value={}), \
-                patch('runner.generation.generate') as generate:
+                patch('runner.runtime.generation.generate') as generate:
             with self.assertRaisesRegex(ValueError,'capacity'):
                 Engine(args.root,protocol,0,'cached','insufficient',rows)
         generate.assert_not_called();llm.llm_engine.engine_core.shutdown.assert_called_once()

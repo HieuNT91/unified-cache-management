@@ -32,7 +32,7 @@ def owned_processes(output, table=None):
         if pid == os.getpid():
             continue
         command = row['command']
-        if 'runner.sweep' in command and '--output' in command:
+        if 'runner.runtime.sweep' in command and '--output' in command:
             value = command[command.index('--output')+1]
             # Launchers always supply an absolute path; direct callers may not.
             base = Path(f'/proc/{pid}/cwd')
@@ -84,7 +84,7 @@ def assert_stopped(output):
     live = [pid for pid, row in previous['processes'].items()
             if int(pid) in table and table[int(pid)]['start'] == row['start']]
     # The resume coordinator itself owns sweep.lock. Its worker children have
-    # not started yet. Any runner.sweep process here is an overlapping run.
+    # not started yet. Any runner.runtime.sweep process here is an overlapping run.
     coordinator = (os.getppid() if os.environ.get('UCM_SWEEP_COORDINATOR_PID') == str(os.getppid()) else None)
     live += [pid for pid in owned_processes(output, table) if pid != coordinator]
     if live:
@@ -114,7 +114,7 @@ def stop(output):
         if any(Path(c).name in ('l20_ruler.sh', 'a800_longbench.sh') for c in row['command']):
             send(pid, row, signal.SIGTERM)
     for pid, row in owned.items():
-        if 'runner.sweep' in row['command']:
+        if 'runner.runtime.sweep' in row['command']:
             send(pid, row, signal.SIGINT)
     for sig, seconds in ((None, 30), (signal.SIGTERM, 15), (signal.SIGKILL, 5)):
         for pid, row in owned.items():

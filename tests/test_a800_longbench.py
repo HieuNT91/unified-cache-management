@@ -10,11 +10,11 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-from runner.setups import atomic_json, file_hash
+from runner.cache.setups import atomic_json, file_hash
 from scripts import longbench_a800_data as data
 from scripts import longbench_a800_control as control
 from scripts.longbench_a800_report import summarize, report, records
-from runner.corpus_records import NATIVE_ANSWER_VALIDATION
+from runner.corpus.records import NATIVE_ANSWER_VALIDATION
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -113,8 +113,8 @@ class A800Tests(unittest.TestCase):
                     return {} if case == 'prophetkv-1' else None
                 with patch.object(control, 'stage', return_value=(protocol, [row])), \
                         patch.object(control, 'accepted', side_effect=accepted), patch.object(control, 'publish') as publish, \
-                        patch('runner.setups.check_environment', return_value=['test-gpu']*2), \
-                        patch('runner.corpus_runtime.Engine', return_value=engine):
+                        patch('runner.cache.setups.check_environment', return_value=['test-gpu']*2), \
+                        patch('runner.corpus.runtime.Engine', return_value=engine):
                     control.worker(self.root, role, phase, 'attempt')
                 self.assertEqual([c.args[1] for c in publish.call_args_list], expected)
                 if phase == 'features':
@@ -150,7 +150,7 @@ class A800Tests(unittest.TestCase):
         folder = self.root/'primary/records/nocache'/row['id']
         atomic_json(folder/'result.json', record(row, 'nocache'))
         protocol, _ = data.stage(self.root, 'primary')
-        from runner.corpus_records import protocol_identity
+        from runner.corpus.records import protocol_identity
         atomic_json(folder/'validated.json', dict(complete=True, protocol_sha256=protocol_identity(protocol),
                                                  files={'result.json': '0'*64}))
         with self.assertRaisesRegex(ValueError, 'pin or protocol'):

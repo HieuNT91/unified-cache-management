@@ -10,10 +10,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from runner.matched_status import committed_records, match_records
-from runner.reporting import aggregate
-from runner.setups import atomic_json, file_hash, fingerprint
-from runner.sweep import configurations
+from runner.reporting.status import committed_records, match_records
+from runner.reporting.aggregate import aggregate
+from runner.cache.setups import atomic_json, file_hash, fingerprint
+from runner.runtime.sweep import configurations
 from scripts.sweep_report import collect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -91,7 +91,7 @@ class MatchedStatusTests(unittest.TestCase):
 
     def test_native_router_matches_counts_and_metrics_including_empty(self):
         from scripts.router_control import status
-        from runner.router_sweep import CASES
+        from runner.router.sweep import CASES
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);protocol=dict(prepared=td)
             atomic_json(root/'protocol.json',protocol)
@@ -108,8 +108,8 @@ class MatchedStatusTests(unittest.TestCase):
 
     def test_corpus_and_inference_recompute_paired_metrics(self):
         from scripts.corpus_control import snapshot_report
-        from runner.corpus_records import protocol_identity
-        from runner.tree_policy import DEFAULT_ACTIONS,actions
+        from runner.corpus.records import protocol_identity
+        from runner.router.tree_policy import DEFAULT_ACTIONS,actions
         for kind in ('collection','inference'):
             with self.subTest(kind=kind),tempfile.TemporaryDirectory() as td:
                 root=Path(td)

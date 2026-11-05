@@ -9,7 +9,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from runner.setups import atomic_json, file_hash
+from runner.cache.setups import atomic_json, file_hash
 from scripts.corpus_inputs import original_rows
 from scripts.ruler import EVALUATION_PROTOCOL
 
@@ -47,7 +47,7 @@ class LightweightLoadingTests(unittest.TestCase):
                 self.assertIn('invalid choice', result.stderr)
 
     def test_worker_keeps_input_and_model_binding_at_use_time(self):
-        from runner.corpus_runtime import Engine
+        from runner.corpus.runtime import Engine
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             atomic_json(root/'config.json', {'model_type': 'qwen3'})
@@ -55,8 +55,8 @@ class LightweightLoadingTests(unittest.TestCase):
             row = dict(prepared='input.json', sha256=file_hash(root/'input.json'))
             engine = Engine.__new__(Engine)
             engine.protocol = dict(prepared=str(root), model=str(root), dataset='ruler')
-            with patch.dict(sys.modules, {'runner.worker': SimpleNamespace(drain=object())}), \
-                    patch('runner.corpus_runtime.validate'), patch('runner.generation.generate') as generate:
+            with patch.dict(sys.modules, {'runner.runtime.worker': SimpleNamespace(drain=object())}), \
+                    patch('runner.corpus.runtime.validate'), patch('runner.runtime.generation.generate') as generate:
                 with self.assertRaisesRegex(ValueError, 'Prepared model mismatch'):
                     engine.begin(row)
                 row['sha256'] = 'changed'
@@ -65,13 +65,13 @@ class LightweightLoadingTests(unittest.TestCase):
                 generate.assert_not_called()
 
     def test_resume_defaults_to_fast_without_saved_replay(self):
-        from runner import resume
+        from runner.reporting import resume
         from test_resume import ResumeTests
         fixture = ResumeTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         del fixture.args.validation
-        with patch('runner.generation.verify_diagnostics', side_effect=AssertionError('Unexpected replay')):
+        with patch('runner.runtime.generation.verify_diagnostics', side_effect=AssertionError('Unexpected replay')):
             receipt = resume.prepare(fixture.args)
         self.assertEqual(receipt['validation']['mode'], 'fast')
         self.assertFalse(receipt['validation']['diagnostic_replay'])

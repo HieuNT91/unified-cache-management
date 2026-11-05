@@ -3,9 +3,9 @@
 import argparse
 from pathlib import Path
 
-from runner.config import METHODS
-from runner.preparation import prepare
-from runner.single import run
+from runner.inputs.config import METHODS
+from runner.inputs.preparation import prepare
+from runner.runtime.single import run
 
 
 def main():
@@ -51,7 +51,7 @@ def main():
     setup_parser.add_argument('--dry-run', action='store_true')
     setup_parser.add_argument('--tree-prophetkv', action='store_true',
                               help='Build F3 metadata for tree-prophetkv in a fresh persistent setup')
-    from runner.setups import build_setup, run_collection
+    from runner.cache.setups import build_setup, run_collection
     setup_parser.set_defaults(func=build_setup)
     args = parser.parse_args()
     if args.model is not None:

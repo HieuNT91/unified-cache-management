@@ -1,4 +1,4 @@
-from runner.layout import stamp_sample
+from runner.inputs.layout import stamp_sample
 """CPU-only reusable corpus, pooled trainer, and shared live lifecycle contracts."""
 import copy
 import json
@@ -10,13 +10,13 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 import numpy as np
-from runner.tree_policy import actions,DEFAULT_ACTIONS,FEATURE_DEFINITIONS,SCHEMA,export,load,decide
-from runner.router_policy import FEATURES,digest,features_from_arrays
-from runner.corpus import selection,load_attention,match_answer,Corpus
-from runner.corpus_records import publish,accepted,record_dir,protocol_identity
-from runner.corpus_train import split,fold_ids,search,GRID,LOSS_GRID,COST_GRID,train,rank
-from runner.corpus_eval import replay,test_tree as evaluate,evaluation_ids
-from runner.setups import atomic_json,file_hash
+from runner.router.tree_policy import actions,DEFAULT_ACTIONS,FEATURE_DEFINITIONS,SCHEMA,export,load,decide
+from runner.router.policy import FEATURES,digest,features_from_arrays
+from runner.corpus.dataset import selection,load_attention,match_answer,Corpus
+from runner.corpus.records import publish,accepted,record_dir,protocol_identity
+from runner.corpus.train import split,fold_ids,search,GRID,LOSS_GRID,COST_GRID,train,rank
+from runner.corpus.eval import replay,test_tree as evaluate,evaluation_ids
+from runner.cache.setups import atomic_json,file_hash
 from scripts.corpus_inputs import TASKS,inventory,format_corpus,prepared_rows
 
 
@@ -214,7 +214,7 @@ class CorpusTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Corrupt'):accepted(root,'nocache',row,protocol)
 
     def test_profiles_uuid_groups_and_capacity(self):
-        from runner.tree_profiles import config
+        from runner.router.profiles import config
         from scripts.corpus_control import groups,check_hardware
         uuids=[f'GPU-{i:08x}-1111-2222-3333-444444444444' for i in range(8)]
         self.assertEqual(len(groups(','.join(uuids[:4]))),1)
@@ -238,7 +238,7 @@ class CorpusTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'cannot fit'):check_hardware(dict(model=td,dataset='longbench-v2',groups=[uuids[:4]]))
 
     def test_explicit_local_profile_preserves_precision_and_memory_gates(self):
-        from runner.tree_profiles import config
+        from runner.router.profiles import config
         from scripts.corpus_control import check_hardware
         cfg=config('/model','ruler',True,'/cache',9,'rtx4500ada')
         self.assertEqual(cfg['gpu_memory_utilization'],.95)
@@ -266,7 +266,7 @@ class CorpusTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'occupied'):check_hardware(settings)
 
     def test_collection_rejects_lost_yarn_delta_normalization(self):
-        from runner.corpus_runtime import Engine
+        from runner.corpus.runtime import Engine
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);session=root/'session';session.mkdir()
@@ -286,7 +286,7 @@ class CorpusTests(unittest.TestCase):
 
     def test_model_snapshot_symlinks_do_not_relax_corpus_containment(self):
         from scripts.corpus_control import model_artifact
-        from runner.corpus import relative
+        from runner.corpus.dataset import relative
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);snapshot=root/'snapshot';snapshot.mkdir()
             blob=root/'blob';blob.write_bytes(b'weights')
@@ -297,7 +297,7 @@ class CorpusTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'escapes corpus'):relative(snapshot,'weights.safetensors')
 
     def test_fake_live_control_across_datasets_and_dense(self):
-        from runner.corpus_runtime import infer_prompt
+        from runner.corpus.runtime import infer_prompt
         class FakeEngine:
             def __init__(self,dataset):self.events=[];self.dataset=dataset;self.sample={}
             def probe(self,folder):
@@ -317,7 +317,7 @@ class CorpusTests(unittest.TestCase):
                     self.assertEqual(engine.events,['probe','retire','features','router']+([] if dense else ['control']))
                     self.assertTrue(result['paired_validation']['output_tokens_equal'])
                     self.assertGreater(result['timings']['ttft_seconds'],1)
-        from runner.corpus_runtime import paired
+        from runner.corpus.runtime import paired
         with self.assertRaisesRegex(ValueError,'output'):
             paired(dict(prompt_id='a'),[],dict(prompt_id='b'),[])
 
@@ -371,7 +371,7 @@ class CorpusOperationalTests(unittest.TestCase):
 
     def test_capture_cleanup_on_export_error_and_missing_capture(self):
         import torch
-        from runner.corpus_worker import export as export_capture
+        from runner.corpus.worker import export as export_capture
         with tempfile.TemporaryDirectory() as td:
             sample=tiny_sample();layers=torch.ones((64,128),dtype=torch.float32)
             sparse=NS(router_capture=True,router_arrays=(layers,torch.ones(64),torch.ones(128)))
@@ -385,7 +385,7 @@ class CorpusOperationalTests(unittest.TestCase):
             self.assertFalse(sparse.router_capture)
 
     def test_missing_only_resume_uses_existing_probe(self):
-        from runner.corpus_collect import run_group
+        from runner.corpus.collect import run_group
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);rows=[dict(id='a',ordinal=0),dict(id='b',ordinal=1)]
@@ -394,7 +394,7 @@ class CorpusOperationalTests(unittest.TestCase):
             accepted_cases.remove(('b','prophetkv-40'))
             engine=Mock();engine.sample={};engine.answer.return_value=({'value':1},[]);engine.end.return_value={'deleted':True}
             def present(root,case,row,protocol):return {'existing':True} if (row['id'],case) in accepted_cases else None
-            with patch('scripts.corpus_control.load_run',return_value=(protocol,rows)),patch('runner.corpus_collect.check_environment',return_value=protocol['groups'][0]),patch('runner.corpus_collect.accepted',side_effect=present),patch('runner.corpus_collect.Engine',return_value=engine) as constructor,patch('runner.corpus_collect.load_attention',return_value={'saved':True}) as attention,patch('runner.corpus_collect.publish') as publication:
+            with patch('scripts.corpus_control.load_run',return_value=(protocol,rows)),patch('runner.corpus.collect.check_environment',return_value=protocol['groups'][0]),patch('runner.corpus.collect.accepted',side_effect=present),patch('runner.corpus.collect.Engine',return_value=engine) as constructor,patch('runner.corpus.collect.load_attention',return_value={'saved':True}) as attention,patch('runner.corpus.collect.publish') as publication:
                 run_group(root,0,'cached','resume')
                 self.assertEqual(constructor.call_args.args[-1],[rows[1]])
                 engine.probe.assert_not_called();engine.begin.assert_called_once_with(rows[1])
@@ -435,7 +435,7 @@ class CorpusOperationalTests(unittest.TestCase):
 
 class AdditionalTrainerTests(unittest.TestCase):
     def test_nonconstant_shared_tree_and_arbitrary_dense_position(self):
-        from runner.corpus_train import fit,choose,leaf,leaf_count
+        from runner.corpus.train import fit,choose,leaf,leaf_count
         x=np.zeros((80,5));x[:,0]=np.arange(80)/80
         # Two sparse losses; the second action is better on the opposite half.
         y=np.column_stack((np.r_[np.zeros(40),np.ones(40)],np.r_[np.ones(40),np.zeros(40)]))
@@ -455,7 +455,7 @@ class AdditionalTrainerTests(unittest.TestCase):
         self.assertEqual(policies[0]['tree']['action'],inventory[0]['id'])
 
     def test_exact_reduction_rejects_impossible_scores(self):
-        from runner.corpus import reduction_matches
+        from runner.corpus.dataset import reduction_matches
         means=[np.array([.1,.2,.3,.4],np.float32)*np.float32(i+1) for i in range(4)]
         scores=((means[0]+means[1])+(means[2]+means[3]))/np.float32(4)
         self.assertTrue(reduction_matches(means,scores,0))

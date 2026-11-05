@@ -6,7 +6,7 @@ from pathlib import Path
 from ucm.integration.vllm.blend_connector import (UCMBlendConnector,
     UCMBlendConnectorMetadata, BlendRequestDispatchMeta, ChunkMetaData, BlendStage)
 from ucm.sparse.prophetkv.lifecycle import namespace_from_id, seed_value, TrackedStore
-from runner.router_guard import is_dense_request
+from runner.router.guard import is_dense_request
 
 
 class PersistentBlendConnector(UCMBlendConnector):
@@ -33,16 +33,16 @@ class PersistentBlendConnector(UCMBlendConnector):
         max_load_blocks = self.launch_config.get('max_load_blocks')
         config = self.launch_config.get('persistent_setup')
         if config:
-            from runner.setup_store import SetupStore
+            from runner.cache.setup_store import SetupStore
             return SetupStore(store, config, self.global_rank, max_load_blocks=max_load_blocks)
         if self.launch_config.get("temporary_layouts"):
-            from runner.temporary import TemporaryStore, TreeTemporaryStore
+            from runner.cache.temporary import TemporaryStore, TreeTemporaryStore
             policy = TreeTemporaryStore if self.launch_config.get('tree_f3') is not None else TemporaryStore
             return policy(store, max_load_blocks=max_load_blocks)
         return TrackedStore(store, max_load_blocks=max_load_blocks)
 
     def get_num_new_matched_tokens(self, request, num_computed_tokens):
-        from runner.layout import METADATA_KEY, validate_request_metadata
+        from runner.inputs.layout import METADATA_KEY, validate_request_metadata
         metadata = (getattr(getattr(request, 'sampling_params', None), 'extra_args', None) or {}).get(METADATA_KEY)
         metadata = validate_request_metadata(metadata, request.request_id,
             list(request.prompt_token_ids), sparse=not is_dense_request(request.request_id))
@@ -63,7 +63,7 @@ class PersistentBlendConnector(UCMBlendConnector):
             raise RuntimeError('Previous scheduler request not retired')
         config = getattr(self, 'persistent_setup', None)
         if config:
-            from runner.identity import setup_seed
+            from runner.inputs.identity import setup_seed
             self._seed = self.request_hasher(setup_seed(config['fingerprint']))
             if config['readonly'] and metadata['phase'] != 'read':
                 raise RuntimeError('Population requests forbidden in read-only setup')
@@ -162,7 +162,7 @@ class PersistentBlendConnector(UCMBlendConnector):
             layout = metadata.request_meta[first[0]].request_layout
             if layout.get('request_id') != first[0] or layout.get('phase') not in ('populate', 'read'):
                 raise RuntimeError('Worker dispatch missing request layout')
-            from runner.temporary import TreeTemporaryStore
+            from runner.cache.temporary import TreeTemporaryStore
             if isinstance(self.store, TreeTemporaryStore):
                 self.store.begin_namespace(namespace_from_id(first[0]))
             if hasattr(self.store, 'writable'):

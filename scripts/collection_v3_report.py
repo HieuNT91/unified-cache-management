@@ -4,8 +4,8 @@ import fcntl
 import io
 import statistics
 from pathlib import Path
-from runner.reporting import metrics
-from runner.setups import atomic_json
+from runner.reporting.aggregate import metrics
+from runner.cache.setups import atomic_json
 from scripts.collection_v3 import ACTIONS, Snapshot, seeds, answer_metrics
 
 

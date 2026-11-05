@@ -80,9 +80,9 @@ def completion(root, protocol, count):
 
 def environment_check(protocol):
     from importlib.metadata import version
-    from runner.config import VERSIONS
+    from runner.inputs.config import VERSIONS
     from scripts.corpus_inputs import spec
-    from runner.preparation import check_model
+    from runner.inputs.preparation import check_model
     model = Path(protocol['model'])
     check_model(model)
     for package, wanted in VERSIONS.items():
@@ -105,7 +105,7 @@ def selected_rows(base, limit, tasks):
 
 
 def combined_actions(base):
-    from runner.tree_policy import actions
+    from runner.router.tree_policy import actions
     result = [*base, dict(id=EXTRA[0], method='prophetkv', ratio=.05),
               dict(id=EXTRA[1], method='prophetkv', ratio=.10)]
     actions(result)  # Reject duplicate IDs AND duplicate ratios.
@@ -113,7 +113,7 @@ def combined_actions(base):
 
 
 def derive(attention, sample, inventory):
-    from runner.corpus import selection
+    from runner.corpus.dataset import selection
     return dict(scores=attention['scores'], selections={a['id']: selection(
         attention['scores'], sample['boundaries'][1], a['ratio']) for a in inventory if a['id'] != 'nocache'})
 
@@ -121,14 +121,14 @@ def derive(attention, sample, inventory):
 def prepare(root):
     """Caller owns the base run lock; expensive CPU replay precedes any GPU work."""
     import numpy as np
-    from runner.corpus import Corpus, match_answer
-    from runner.corpus_records import accepted, record_dir, protocol_identity
-    from runner.setups import atomic_json
-    from runner.tree_profiles import validate
+    from runner.corpus.dataset import Corpus, match_answer
+    from runner.corpus.records import accepted, record_dir, protocol_identity
+    from runner.cache.setups import atomic_json
+    from runner.router.profiles import validate
     from scripts.corpus_inputs import TASKS
     from scripts.corpus_control import groups
     from scripts.router_control import code_hashes
-    from runner.generation import verify_diagnostics
+    from runner.runtime.generation import verify_diagnostics
     state = root/STATE
     if (state/'protocol.json').exists():
         corpus = Extension(root)
@@ -209,8 +209,8 @@ def prepare(root):
 
 class Extension:
     def __init__(self, root):
-        from runner.corpus_records import protocol_identity
-        from runner.tree_policy import actions
+        from runner.corpus.records import protocol_identity
+        from runner.router.tree_policy import actions
         self.root = Path(root)
         self.state = self.root/STATE
         self.protocol = read(self.state/'protocol.json')
@@ -232,8 +232,8 @@ class Extension:
 
     def attention(self, row, replay=False):
         import numpy as np
-        from runner.corpus import load_attention
-        from runner.corpus_records import accepted, record_dir
+        from runner.corpus.dataset import load_attention
+        from runner.corpus.records import accepted, record_dir
         pid = row['id']
         path = self.state/'derived'/f'{pid}.npz'
         provenance = self.protocol['derived'][pid]
@@ -259,8 +259,8 @@ class Extension:
         return attention
 
     def outcome(self, row, case, full=False):
-        from runner.corpus_records import accepted, record_dir
-        from runner.corpus import match_answer
+        from runner.corpus.records import accepted, record_dir
+        from runner.corpus.dataset import match_answer
         record = accepted(self.root, case, row, self.protocol)
         if record is not None:
             if (record.get('derived_mask_provenance') != self.protocol['derived'][row['id']] or
@@ -288,9 +288,9 @@ class Extension:
 
 
 def collect(root, group, attempt):
-    from runner.corpus_runtime import Engine
-    from runner.corpus_records import record_dir, publish
-    from runner.setups import atomic_json, check_environment
+    from runner.corpus.runtime import Engine
+    from runner.corpus.records import record_dir, publish
+    from runner.cache.setups import atomic_json, check_environment
     from scripts.router_control import code_hashes
     corpus = Extension(root)
     pending = corpus.pending(group)
@@ -340,11 +340,11 @@ def collect(root, group, attempt):
 
 
 def summarize(root, same_count=False, final=False):
-    from runner.corpus_records import protocol_identity
-    from runner.matched_status import committed_records, match_records
-    from runner.reporting import aggregate, COLUMNS, render_markdown
-    from runner.router_process import alive
-    from runner.setups import atomic_json
+    from runner.corpus.records import protocol_identity
+    from runner.reporting.status import committed_records, match_records
+    from runner.reporting.aggregate import aggregate, COLUMNS, render_markdown
+    from runner.router.process import alive
+    from runner.cache.setups import atomic_json
     if not (Path(root)/STATE/'protocol.json').exists():
         state = Path(root)/STATE/'supervisor.json'
         if not final and state.exists():
@@ -410,7 +410,7 @@ def summarize(root, same_count=False, final=False):
 
 
 def assert_engines_exited(state):
-    from runner.router_process import alive, group_alive
+    from runner.router.process import alive, group_alive
     for path in [*(state/'processes').glob('*.json'), *(state/'sessions').glob('*/ownership.json')]:
         receipt = read(path)
         if alive(receipt) or group_alive(receipt['pid']):
@@ -418,7 +418,7 @@ def assert_engines_exited(state):
 
 
 def finalize(root):
-    from runner.setups import atomic_json
+    from runner.cache.setups import atomic_json
     corpus = Extension(root)
     assert_engines_exited(corpus.state)
     if read(corpus.state/'cleanup.json').get('owned_engines_exited') is not True:
@@ -461,8 +461,8 @@ def base_exclusive(root):
 
 
 def supervise(root):
-    from runner.router_process import identity, group_alive
-    from runner.setups import atomic_json
+    from runner.router.process import identity, group_alive
+    from runner.cache.setups import atomic_json
     from scripts.corpus_control import check_hardware
     from scripts.router_control import environment, terminate_owned, cleanup_caches
     state_dir = root/STATE
@@ -533,8 +533,8 @@ def supervise(root):
 
 
 def detach(root, resume=False):
-    from runner.router_process import identity
-    from runner.setups import atomic_json
+    from runner.router.process import identity
+    from runner.cache.setups import atomic_json
     from scripts.corpus_control import idle, check_hardware
     from scripts.router_control import environment
     state = root/STATE

@@ -14,10 +14,10 @@ import time
 import uuid
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from runner.setups import atomic_json,file_hash,fingerprint
-from runner.tree_policy import actions,DEFAULT_ACTIONS,load
-from runner.corpus_records import accepted,record_dir,protocol_identity
-from runner.router_process import identity,alive,group_alive
+from runner.cache.setups import atomic_json,file_hash,fingerprint
+from runner.router.tree_policy import actions,DEFAULT_ACTIONS,load
+from runner.corpus.records import accepted,record_dir,protocol_identity
+from runner.router.process import identity,alive,group_alive
 from scripts.router_control import code_hashes,environment,idle as legacy_idle,terminate_owned,cleanup_caches
 from scripts.corpus_inputs import TASKS,prepare,prepared_rows
 
@@ -47,7 +47,7 @@ def read_rows(settings):
     prepared=Path(settings['prepared'])
     if settings['dataset']=='ruler':return prepared_rows(prepared)
     receipt=json.loads((prepared/'preparation.json').read_text())
-    from runner.corpus import relative
+    from runner.corpus.dataset import relative
     if file_hash(prepared/'manifest.jsonl')!=receipt['files']['manifest.jsonl']:
         raise ValueError('LongBench manifest changed')
     rows=[json.loads(line) for line in (prepared/'manifest.jsonl').read_text().splitlines()]
@@ -67,8 +67,8 @@ def model_artifact(root,name):
 
 
 def check_hardware(settings):
-    from runner.tree_profiles import hardware_profile,allocation
-    from runner.tensor_parallel import protocol_tp
+    from runner.router.profiles import hardware_profile,allocation
+    from runner.runtime.tensor_parallel import protocol_tp
     tp=protocol_tp(settings)
     profile=hardware_profile(settings.get('hardware_profile','server'),settings.get('execution_profile',settings['dataset']),tp)
     raw=subprocess.check_output(['nvidia-smi','--query-gpu=uuid,name,memory.total,memory.free','--format=csv,noheader,nounits'],text=True)
@@ -126,18 +126,18 @@ def configure(a):
         model=str(a.model),prepared=str(a.prepared),cache_root=str(a.cache_root),groups=groups(a.gpu_a,a.gpu_b),
         ruler=str(a.ruler) if a.ruler else None,data=str(a.data) if a.data else None,code=code_hashes(),
         watchdog_seconds=900,operational_retries=1)
-    from runner.tree_profiles import hardware_profile
+    from runner.router.profiles import hardware_profile
     hardware_profile(a.hardware_profile,a.dataset)
     if a.hardware_profile!='server':settings['hardware_profile']=a.hardware_profile
     if a.tree:
         tree=load(a.tree);settings.update(actions=tree['actions'],tree_sha256=file_hash(a.tree),tree=str(a.tree))
-        from runner.longbench_features import SCHEMA as LB_SCHEMA
+        from runner.router.longbench_features import SCHEMA as LB_SCHEMA
         if tree['schema']==LB_SCHEMA:
             settings['feature_profile']=tree['feature_definitions']
         if a.dataset=='ruler':
             if not a.corpus:raise ValueError('RULER tree inference requires --corpus for frozen held-out inputs')
-            from runner.corpus_training_data import open_corpus
-            from runner.corpus_eval import evaluation_ids
+            from runner.corpus.training_data import open_corpus
+            from runner.corpus.eval import evaluation_ids
             corpus=open_corpus(a.corpus,a.prepared,tree=tree)
             settings['selected_ids']=evaluation_ids(corpus,tree)
             settings['heldout_inputs']={pid:corpus.rows[pid]['sha256'] for pid in settings['selected_ids']}
@@ -146,7 +146,7 @@ def configure(a):
         if a.dataset!='ruler':raise ValueError('LongBench is evaluation-only; collection/training forbidden')
         settings['actions']=json.loads(a.actions.read_text()) if a.actions else DEFAULT_ACTIONS
         if getattr(a,'feature_profile','legacy')=='coverage-five':
-            from runner.longbench_features import DEFINITIONS
+            from runner.router.longbench_features import DEFINITIONS
             settings['feature_profile']=DEFINITIONS
     actions(settings['actions']);a.root.mkdir(parents=True,exist_ok=True)
     with (a.root/'launch.lock').open('a') as lock:
@@ -216,7 +216,7 @@ def snapshot_report(root,final=False,same_count=False):
     cases=['nocache','router'] if protocol['kind']=='inference' else list(actions(protocol['actions']))
     matching=None
     if same_count:
-        from runner.matched_status import committed_records,match_records
+        from runner.reporting.status import committed_records,match_records
         committed=committed_records(root,cases,protocol_identity(protocol))
         committed,matching=match_records(committed,[dict(prompt_id=r['id'],subtask=r['subtask']) for r in rows])
         selected={c:{r['prompt_id']:r for r in rs} for c,rs in committed.items()}
@@ -252,7 +252,7 @@ def snapshot_report(root,final=False,same_count=False):
         status='complete' if final and tranche_complete and len(rows)==expected else 'partial-complete' if final else 'partial',
         hardware=protocol['hardware'],kind=protocol['kind'],dataset=protocol['dataset'])
     if matching is not None:report['matching']=matching
-    from runner.corpus_eval import summarize
+    from runner.corpus.eval import summarize
     report['methods']={c:summarize([r for r in paired_rows if r['action']==c]) for c in cases if any(r['action']==c for r in paired_rows)}
     if protocol['kind']=='inference':
         from collections import Counter
@@ -276,7 +276,7 @@ def snapshot_report(root,final=False,same_count=False):
         key='live_total_ttft_seconds' if protocol['kind']=='inference' else 'fixed_action_ttft_seconds'
         r[key]=r.pop('estimated_router_ttft_seconds')
     if protocol['dataset']=='ruler':
-        from runner.reporting import ruler_preprocess
+        from runner.reporting.aggregate import ruler_preprocess
         report['ruler_evaluation']={}
         for case,records in by_case.items():
             report['ruler_evaluation'][case]={}
@@ -343,7 +343,7 @@ def supervise(root):
         atomic_json(root/'supervisor.json',state);running={};session=uuid.uuid4().hex
         def launch(group,phase,retry):
             attempt=f'{session}-{retry}'
-            cmd=[sys.executable,'-u','-m','runner.corpus_collect','--root',str(root),'--group',str(group),'--phase',phase,'--attempt',attempt]
+            cmd=[sys.executable,'-u','-m','runner.corpus.collect','--root',str(root),'--group',str(group),'--phase',phase,'--attempt',attempt]
             with (root/f'{phase}-group{group}-{attempt}.log').open('a') as log:
                 child=subprocess.Popen(cmd,cwd=ROOT,env=environment(','.join(protocol['groups'][group])),stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
             receipt=dict(pid=child.pid,identity=identity(child.pid),phase=phase,group=group,retry=retry,started_at=time.time(),command=cmd)
@@ -415,19 +415,19 @@ def main():
         if a.limit_per_task is None:a.limit_per_task=500
         result=configure(a)
     elif a.command in ('train','replay','test','snapshot'):
-        from runner.corpus_training_data import open_corpus
+        from runner.corpus.training_data import open_corpus
         requested_tree=load(a.tree) if a.command in ('test','snapshot') and a.tree else None
         corpus=open_corpus(a.root,a.prepared,tree=requested_tree,action_scope=a.action_scope)
         if corpus.protocol['kind']!='collection' or corpus.protocol['dataset']!='ruler':raise ValueError('Training/offline replay only accepts RULER corpus collections')
         if a.command=='train':
-            from runner.corpus_train import train
+            from runner.corpus.train import train
             result=train(corpus,a.train_samples,a.output,a.seed,a.trainer,a.policy_count,
                          action_scope=a.action_scope,evaluation=a.evaluation)
         elif a.command=='replay':
-            from runner.corpus_eval import replay
+            from runner.corpus.eval import replay
             result=replay(corpus,[json.loads(line) for line in a.decisions.read_text().splitlines()],a.output)
         elif a.command=='test':
-            from runner.corpus_eval import test_tree
+            from runner.corpus.eval import test_tree
             snapshot=json.loads(a.evaluation_snapshot.read_text()) if a.evaluation_snapshot else None
             result=test_tree(corpus,load(a.tree),a.output,snapshot,evaluation=a.evaluation)
         else:

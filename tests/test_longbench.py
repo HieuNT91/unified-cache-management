@@ -3,7 +3,7 @@ from pathlib import Path
 import unittest
 
 from scripts.longbench_v2 import prepare_prompt, render
-from runner.reporting import evaluation_metadata, score_answer
+from runner.reporting.aggregate import evaluation_metadata, score_answer
 
 
 class Tokenizer:

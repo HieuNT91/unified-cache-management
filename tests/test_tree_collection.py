@@ -10,11 +10,11 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
 
-import runner.cache  # Load before fixtures replace sys.modules temporarily.
-from runner.layout import stamp_sample
-from runner.setups import atomic_json, file_hash
-from runner.output_budget import LONGBENCH_PROTOCOL, make_policy
-from runner.thinking_budget import KEY
+import runner.cache.lifecycle  # Load before fixtures replace sys.modules temporarily.
+from runner.inputs.layout import stamp_sample
+from runner.cache.setups import atomic_json, file_hash
+from runner.runtime.output_budget import LONGBENCH_PROTOCOL, make_policy
+from runner.runtime.thinking_budget import KEY
 from scripts.collection_v3 import declaration
 from scripts import tree_prophetkv_data as collection
 from scripts import longbench_a800_control as control
@@ -56,7 +56,7 @@ def fixture(root, dataset='ruler'):
 
 class TreeCollectionTests(unittest.TestCase):
     def test_local_generation_progress_reports_first_and_final_token_counts(self):
-        from runner.generation import generate
+        from runner.runtime.generation import generate
         class Engine:
             active = False
             count = 0
@@ -68,14 +68,14 @@ class TreeCollectionTests(unittest.TestCase):
         progress = Mock()
         with patch.dict(sys.modules, {'vllm': NS(SamplingParams=lambda **kw:NS(**kw)),
                                      'vllm.inputs': NS(TokensPrompt=lambda **kw:kw)}), \
-                patch('runner.generation.time.perf_counter', return_value=1.):
+                patch('runner.runtime.generation.time.perf_counter', return_value=1.):
             generate(Engine(), [65], 3, 'progress-test', progress=progress)
         values = [c.args[0] for c in progress.call_args_list]
         self.assertEqual([v['output_tokens'] for v in values], [1,3])
         self.assertEqual([v['finished'] for v in values], [False,True])
 
     def test_local_validation_is_explicit_tp4_subset_with_full_windows(self):
-        from runner.tree_profiles import config
+        from runner.router.profiles import config
         for dataset in ('ruler','longbench-v2'):
             with self.subTest(dataset=dataset), tempfile.TemporaryDirectory() as temp:
                 args = fixture(Path(temp),dataset)
@@ -117,7 +117,7 @@ class TreeCollectionTests(unittest.TestCase):
                 self.assertEqual([sum(r['ordinal'] % len(settings['groups']) == g for r in rows)
                                   for g in range(len(settings['groups']))], [13]*5 if dataset == 'ruler' else [252,251])
                 protocol, _ = collection.stage(args.root, 'tree')
-                from runner.tree_collection import inventory
+                from runner.tree.collection import inventory
                 self.assertEqual(list(inventory(protocol)), ['tree-prophetkv-5', 'tree-prophetkv-20'])
                 for stage in ('features', 'ruler', 'primary'):
                     with self.assertRaises(ValueError): collection.stage(args.root, stage)
@@ -156,8 +156,8 @@ class TreeCollectionTests(unittest.TestCase):
             engine = Mock(); engine.answer.return_value = ({}, []); engine.end.return_value = {}
             for finished in (False, True):
                 engine.reset_mock()
-                with patch('runner.corpus_runtime.Engine', return_value=engine) as ctor, \
-                        patch('runner.setups.check_environment', return_value=GPUS[:2]), \
+                with patch('runner.corpus.runtime.Engine', return_value=engine) as ctor, \
+                        patch('runner.cache.setups.check_environment', return_value=GPUS[:2]), \
                         patch.object(control, 'accepted', return_value={} if finished else None), \
                         patch.object(control, 'publish') as publish:
                     control.worker(args.root, 'tree', 'cached', 'attempt', 0, stage_loader=lambda *_:(protocol, rows))
@@ -205,15 +205,15 @@ class TreeCollectionTests(unittest.TestCase):
                 self.assertFalse(Path('/fresh result').exists())
 
     def test_tree_engine_config_keeps_tp2_memory_and_worker_method(self):
-        from runner.tree_collection import configure_engine, actions, SCHEMA
-        from runner.tree_prophetkv import PROTOCOL
-        from runner.tree_profiles import config
-        from runner.corpus_worker import tree_mode
+        from runner.tree.collection import configure_engine, actions, SCHEMA
+        from runner.tree.prophetkv import PROTOCOL
+        from runner.router.profiles import config
+        from runner.corpus.worker import tree_mode
         definitions = actions([5, 20, 40, 60])
         protocol = dict(schema=SCHEMA, tree_protocol=PROTOCOL, percentages=[5,20,40,60],
             actions=definitions, scheduled_actions=[a['id'] for a in definitions],
             phase_order=['cached'], answer_validation='native-answer-diagnostics-v1')
-        from runner.tree_policy import inventory
+        from runner.router.tree_policy import inventory
         self.assertEqual(list(inventory(protocol)), protocol['scheduled_actions'])
         for profile, hardware, window in (('ruler-thinking', 'l20-tp2', 82304), ('longbench-v2', 'server', 131072)):
             cfg = config('/model', profile, True, '/cache', hardware=hardware, tp=2)
@@ -225,7 +225,7 @@ class TreeCollectionTests(unittest.TestCase):
             self.assertTrue(all(s['method'] == 'tree-prophetkv' for s in extra['ucm_sparse_config'].values()))
         sparse = NS(router_arrays=None, router_capture=False, model=NS(layers=[]), connector=NS(store=NS(operations={})))
         configure = Mock()
-        modules = {'runner.worker': NS(configure=configure),
+        modules = {'runner.runtime.worker': NS(configure=configure),
             'ucm.sparse.state': NS(get_ucm_sparse=lambda:sparse),
             'vllm.distributed': NS(get_tensor_model_parallel_rank=lambda:0,get_tp_group=lambda:NS(barrier=Mock())),
             'ucm.sparse.prophetkv.attention': NS(install=Mock())}
@@ -235,9 +235,9 @@ class TreeCollectionTests(unittest.TestCase):
             with self.assertRaises(ValueError): tree_mode(None, 'request:read', definitions[0], capture=True)
 
     def test_f3_cache_readiness_immutability_retirement_and_warmup(self):
-        from runner.tree_collection import TreePromptCache, retire_warmup
-        from runner.sweep import PromptCache
-        from runner.tree_prophetkv import write_f3, f3_path
+        from runner.tree.collection import TreePromptCache, retire_warmup
+        from runner.runtime.sweep import PromptCache
+        from runner.tree.prophetkv import write_f3, f3_path
         with tempfile.TemporaryDirectory() as temp:
             cache = Path(temp)
             sample = dict(token_ids=list(range(576)), boundaries=[0,64,320,576])
@@ -269,17 +269,17 @@ class TreeCollectionTests(unittest.TestCase):
             engine, row, sample = NoPrimingTests().fixture(Path(temp))
             engine.tree_cached = True; engine.protocol['percentages'] = [5,20,40,60]
             cache = Mock(chunks=[sample['token_ids'][:64],sample['token_ids'][64:320]])
-            with patch('runner.corpus_runtime.validate'), patch('runner.tree_collection.TreePromptCache', return_value=cache) as ctor, \
-                    patch('runner.generation.generate') as generate, patch('runner.corpus_runtime.retirement'), \
-                    patch('runner.corpus_runtime.clean_capture'):
+            with patch('runner.corpus.runtime.validate'), patch('runner.tree.collection.TreePromptCache', return_value=cache) as ctor, \
+                    patch('runner.runtime.generation.generate') as generate, patch('runner.corpus.runtime.retirement'), \
+                    patch('runner.corpus.runtime.clean_capture'):
                 engine.begin(row)
             ctor.assert_called_once(); cache.ready.assert_called_once(); cache.unchanged.assert_called_once()
             self.assertEqual(generate.call_count, 2)
             self.assertTrue(all(c.kwargs == {'phase':'populate'} for c in generate.call_args_list))
 
     def test_real_engine_constructor_enables_f3_and_retires_warmup(self):
-        from runner.corpus_runtime import Engine
-        from runner.tree_prophetkv import write_f3
+        from runner.corpus.runtime import Engine
+        from runner.tree.prophetkv import write_f3
         with tempfile.TemporaryDirectory() as temp:
             args = fixture(Path(temp)); self.adopt(args)
             protocol, rows = collection.stage(args.root, 'tree')
@@ -290,14 +290,14 @@ class TreeCollectionTests(unittest.TestCase):
                 self.assertEqual(kwargs, {'phase':'populate'})
                 f3 = configs[0]['kv_transfer_config']['kv_connector_extra_config']['tree_f3']
                 write_f3(Path(f3['cache_dir']), f3['namespace'], tokens, [0.]*len(tokens))
-            with patch.dict(sys.modules, {'runner.worker':NS(setup=Mock())}), \
-                    patch('runner.corpus_runtime.start_engine', side_effect=start), \
-                    patch('runner.corpus_runtime.validate_initialization'), \
+            with patch.dict(sys.modules, {'runner.runtime.worker':NS(setup=Mock())}), \
+                    patch('runner.corpus.runtime.start_engine', side_effect=start), \
+                    patch('runner.corpus.runtime.validate_initialization'), \
                     patch('scripts.router_control.code_hashes', return_value={}), \
-                    patch('runner.reporting.OutputAnalyzer'), \
-                    patch('runner.generation.generate', side_effect=warmup) as generate, \
-                    patch('runner.cache.wait_for_cache', return_value={'verified_shards':4}), \
-                    patch('runner.corpus_runtime.retirement') as retired:
+                    patch('runner.reporting.aggregate.OutputAnalyzer'), \
+                    patch('runner.runtime.generation.generate', side_effect=warmup) as generate, \
+                    patch('runner.cache.lifecycle.wait_for_cache', return_value={'verified_shards':4}), \
+                    patch('runner.corpus.runtime.retirement') as retired:
                 engine = Engine(args.root/'tree', protocol, 0, 'cached', 'test', rows[:1])
             self.assertEqual(list((engine.cache/'tree-f3').iterdir()), [])
             generate.assert_called_once(); retired.assert_called_once_with(llm, 2)
@@ -331,10 +331,10 @@ class TreeCollectionTests(unittest.TestCase):
             self.assertEqual(len(children), 2)
 
     def test_seeded_records_are_accepted_and_reported_with_distinct_denominators(self):
-        from runner.corpus_records import publish, accepted
-        from runner.reporting import OutputAnalyzer
-        from runner.layout import sample_provenance
-        from runner.thinking_budget import BudgetState
+        from runner.corpus.records import publish, accepted
+        from runner.reporting.aggregate import OutputAnalyzer
+        from runner.inputs.layout import sample_provenance
+        from runner.runtime.thinking_budget import BudgetState
         with tempfile.TemporaryDirectory() as temp:
             args = fixture(Path(temp), 'longbench-v2'); self.adopt(args)
             protocol, rows = collection.stage(args.root, 'tree'); row = rows[0]

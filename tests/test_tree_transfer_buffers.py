@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from runner.setups import bytes_per_shard
-from runner.tree_collection import SCHEMA, actions, configure_engine
-from runner.tree_prophetkv import PROTOCOL
-from runner.tree_profiles import config
+from runner.cache.setups import bytes_per_shard
+from runner.tree.collection import SCHEMA, actions, configure_engine
+from runner.tree.prophetkv import PROTOCOL
+from runner.router.profiles import config
 
 
 def configured(hardware='l20-tp2', dataset='ruler-thinking', tp=2):

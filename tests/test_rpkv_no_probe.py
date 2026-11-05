@@ -6,9 +6,9 @@ import tempfile
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock,patch
-from runner.corpus_records import (NATIVE_ANSWER_VALIDATION,PROBE_ANSWER_VALIDATION,
+from runner.corpus.records import (NATIVE_ANSWER_VALIDATION,PROBE_ANSWER_VALIDATION,
     accepted,publish,answer_validation)
-from runner.setups import atomic_json,file_hash
+from runner.cache.setups import atomic_json,file_hash
 
 ACTIONS=[dict(id='nocache',method='baseline',ratio=None),dict(id='prophetkv-1',method='prophetkv',ratio=.01),dict(id='prophetkv-5',method='prophetkv',ratio=.05)]
 
@@ -24,7 +24,7 @@ def diagnostics():
 class NoProbeTests(unittest.TestCase):
 
     def test_engine_answer_keeps_diagnostics_retirement_and_cache_checks(self):
-        from runner.corpus_runtime import Engine
+        from runner.corpus.runtime import Engine
         engine=Engine.__new__(Engine);engine.tp=4;engine.protocol=dict(actions=ACTIONS,answer_validation=NATIVE_ANSWER_VALIDATION)
         engine.sample=dict(token_ids=[1]*384,boundaries=[0,64,128,384],thinking=False,max_output_tokens=128)
         engine.cached=True;engine.pc=Mock();engine.rid=lambda _: 'r';engine.scheduler='scheduler';engine.llm=Mock()
@@ -32,7 +32,7 @@ class NoProbeTests(unittest.TestCase):
         engine.row=dict(subtask='niah_single_1',scoring='ruler_all',references=['x'])
         engine.analyzer=Mock();engine.analyzer.analyze.return_value=dict(thinking_tokens=0,answer_tokens=1)
         output=NS(outputs=[NS(token_ids=[3],text='x')],num_cached_tokens=64)
-        with patch.dict('sys.modules',{'runner.worker':NS(drain=object(),router_dense_receipt=object())}),patch('runner.generation.generate',return_value=(output,.2,.3)) as generate,patch('runner.corpus_runtime.clean_capture'),patch('runner.corpus_runtime.arm_tree'),patch('runner.corpus_runtime.verify_retired',return_value=[]) as retire,patch('runner.corpus_runtime.match_answer') as replay:
+        with patch.dict('sys.modules',{'runner.runtime.worker':NS(drain=object(),router_dense_receipt=object())}),patch('runner.runtime.generation.generate',return_value=(output,.2,.3)) as generate,patch('runner.corpus.runtime.clean_capture'),patch('runner.corpus.runtime.arm_tree'),patch('runner.corpus.runtime.verify_retired',return_value=[]) as retire,patch('runner.corpus.runtime.match_answer') as replay:
             record,_=engine.answer(ACTIONS[2],'prophetkv-5')
             self.assertEqual(record['answer_validation'],NATIVE_ANSWER_VALIDATION)
             self.assertEqual(record['accuracy'],1);generate.assert_called_once();retire.assert_called_once();engine.pc.unchanged.assert_called_once();replay.assert_not_called()

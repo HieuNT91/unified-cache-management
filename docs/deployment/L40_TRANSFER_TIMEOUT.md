@@ -27,7 +27,7 @@ server chỉ bằng tests CPU.
 
 ## Phần sửa giới hạn ở transfer
 
-`runner/tree_profiles.py` đặt `max_load_blocks=64` cho cached `l40-tp2`.
+`runner/router/profiles.py` đặt `max_load_blocks=64` cho cached `l40-tp2`.
 `PersistentBlendConnector` truyền giới hạn vào store wrapper. `TrackedStore`
 submit tối đa64 block/lô, chờ xong lô trước rồi mới submit lô sau. Tác vụ trong
 log thành16 lô nếu hash không trùng. Mỗi block vẫn có đầy đủ128 pointers và đúng

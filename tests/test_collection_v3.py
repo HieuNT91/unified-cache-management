@@ -13,10 +13,10 @@ from unittest.mock import Mock, patch
 from contextlib import redirect_stdout
 import numpy as np
 
-from runner.setups import atomic_json, file_hash
-from runner.corpus_records import accepted, publish, record_dir
-from runner.thinking_budget import KEY, BudgetState, validate_thinking_outcome
-from runner import output_budget as budget
+from runner.cache.setups import atomic_json, file_hash
+from runner.corpus.records import accepted, publish, record_dir
+from runner.runtime.thinking_budget import KEY, BudgetState, validate_thinking_outcome
+from runner.runtime import output_budget as budget
 from scripts import collection_v3 as v3
 from scripts import longbench_a800_data as data
 from scripts import longbench_a800_control as control
@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def fixture(root, dataset='longbench-v2', thinking=False, answers=4):
-    from runner.longbench_features import DEFINITIONS
+    from runner.router.longbench_features import DEFINITIONS
     settings = dict(schema='tp2-data-config-v3', dataset=dataset, tp=2, seed=42,
                     model='/missing/model', data='/missing/data', prepared='/missing/prepared', cache_root='/missing/cache',
                     samples_per_task=500, code={}, hardware_profile='l40-tp2' if thinking else 'server')
@@ -81,7 +81,7 @@ def commit(root, row, case, seed=None):
                   answer_validation=protocol['answer_validation'])
     folder = record_dir(root/role, case, row['id'], seed)
     if case == 'probe':
-        from runner.longbench_features import features
+        from runner.router.longbench_features import features
         folder.mkdir(parents=True, exist_ok=True)
         local = np.full((64, 320), 1/320, np.float32)
         mean = np.zeros(320, np.float32)
@@ -108,7 +108,7 @@ def commit(root, row, case, seed=None):
         if KEY in row:
             p = row[KEY]; tokens = [65, p['close_id']] + p['transition_ids'] + p['prefix_ids'] + [65, 3]
             state = BudgetState(p).consume(tokens)
-            from runner.reporting import OutputAnalyzer
+            from runner.reporting.aggregate import OutputAnalyzer
             result.update(OutputAnalyzer(Tokenizer()).analyze(tokens, [], True), **state.metrics(Tokenizer()))
             result[KEY] = p; result['output_token_ids'] = tokens; result['max_output_tokens'] = 16384
             result['timings']['first_answer_content_seconds'] = result['timings']['ttft_seconds']+.1
@@ -158,8 +158,8 @@ class CollectionTests(unittest.TestCase):
         before = file_hash(record_dir(self.root/'primary', 'nocache', row['id'], 0)/'validated.json')
         engine = Mock(); engine.answer.return_value = ({}, []); engine.end.return_value = {}
         with patch.object(control, 'stage', return_value=(protocol, [row])), \
-                patch('runner.setups.check_environment', return_value=protocol['groups'][0]), \
-                patch('runner.corpus_runtime.Engine', return_value=engine), patch.object(control, 'publish') as published:
+                patch('runner.cache.setups.check_environment', return_value=protocol['groups'][0]), \
+                patch('runner.corpus.runtime.Engine', return_value=engine), patch.object(control, 'publish') as published:
             control.worker(self.root, 'primary', 'baseline', 'attempt')
         self.assertEqual([c.kwargs['seed'] for c in engine.answer.call_args_list], [1, 3])
         self.assertEqual([c.kwargs['seed'] for c in published.call_args_list], [1, 3])
@@ -175,8 +175,8 @@ class CollectionTests(unittest.TestCase):
         commit(self.root, row, 'prophetkv-1', 0)
         engine = Mock(); engine.answer.return_value = ({}, []); engine.end.return_value = {}
         with patch.object(control, 'stage', return_value=(protocol, [row])), \
-                patch('runner.setups.check_environment', return_value=protocol['groups'][0]), \
-                patch('runner.corpus_runtime.Engine', return_value=engine), patch.object(control, 'publish'):
+                patch('runner.cache.setups.check_environment', return_value=protocol['groups'][0]), \
+                patch('runner.corpus.runtime.Engine', return_value=engine), patch.object(control, 'publish'):
             control.worker(self.root, 'primary', 'cached', 'attempt')
         self.assertEqual([(c.args[1], c.kwargs['seed']) for c in engine.answer.call_args_list],
                          [(a['id'], seed) for a in v3.ACTIONS[1:] for seed in range(4) if (a['id'], seed) != ('prophetkv-1', 0)])
@@ -204,7 +204,7 @@ class CollectionTests(unittest.TestCase):
         atomic_json(self.root/'settings.json', settings)
         manifest, files = [], {}
         policy = budget.make_policy(Tokenizer())
-        from runner.layout import stamp_sample
+        from runner.inputs.layout import stamp_sample
         sample = stamp_sample(dict(token_ids=[65]*576, thinking=True, boundaries=[0, 64, 320, 576], question_positions=[320],
                                    max_output_tokens=16384, evaluation_protocol=budget.LONGBENCH_PROTOCOL, **{KEY: policy}), 'template')
         for row in source_rows:
@@ -369,7 +369,7 @@ class CollectionTests(unittest.TestCase):
 
 class BudgetTests(unittest.TestCase):
     def test_natural_forced_closure_total_cap_and_prefix_scoring(self):
-        from runner.reporting import OutputAnalyzer
+        from runner.reporting.aggregate import OutputAnalyzer
         tokenizer = Tokenizer()
         for prefix in ('', ' Answer:'):
             p = budget.make_policy(tokenizer, prefix)
@@ -392,7 +392,7 @@ class BudgetTests(unittest.TestCase):
 
     def test_logits_forced_close_and_scheduler_total_budget(self):
         import torch
-        from runner.thinking_budget import enforce_logits, stopping_hook
+        from runner.runtime.thinking_budget import enforce_logits, stopping_hook
         p = budget.make_policy(Tokenizer())
         tokens = [65]*15000
         request = NS(sampling_params=NS(extra_args={KEY: p}), output_token_ids=tokens,
@@ -409,7 +409,7 @@ class BudgetTests(unittest.TestCase):
         self.assertTrue(stop(request, 82304)); self.assertEqual(request.status, 'eos')
 
     def test_seed_submission_and_probe_populate_exclusion(self):
-        from runner.generation import generate
+        from runner.runtime.generation import generate
         s = format_thinking_sample(Tokenizer(), raw_row(), 'qa_1', collection_v3=True)
         p = s[KEY]
         class Engine:
@@ -429,9 +429,9 @@ class BudgetTests(unittest.TestCase):
             self.assertNotIn(KEY, engine.params.extra_args)
 
     def test_engine_preserves_seed_scores_cache_and_request_retirement(self):
-        from runner.corpus_runtime import Engine
-        from runner.reporting import OutputAnalyzer
-        from runner.corpus_records import NATIVE_ANSWER_VALIDATION
+        from runner.corpus.runtime import Engine
+        from runner.reporting.aggregate import OutputAnalyzer
+        from runner.corpus.records import NATIVE_ANSWER_VALIDATION
         engine = Engine.__new__(Engine)
         engine.tp = 2; engine.protocol = dict(actions=v3.ACTIONS, answer_validation=NATIVE_ANSWER_VALIDATION)
         engine.sample = format_thinking_sample(Tokenizer(), raw_row(), 'qa_1', collection_v3=True)
@@ -444,10 +444,10 @@ class BudgetTests(unittest.TestCase):
             tokens = [65, 2]+p['transition_ids']+p['prefix_ids']+[66+seed, 3]
             return NS(outputs=[NS(token_ids=tokens, text='raw')], num_cached_tokens=64,
                       ruler_thinking_state=BudgetState(p).consume(tokens), first_answer_content_seconds=.3), .2, .4
-        with patch.dict(sys.modules, {'runner.worker': NS(drain=object(), router_dense_receipt=object())}), \
-                patch('runner.generation.generate', side_effect=generate) as generated, \
-                patch('runner.generation.verify_diagnostics'), patch('runner.corpus_runtime.clean_capture'), \
-                patch('runner.corpus_runtime.arm_tree'), patch('runner.corpus_runtime.verify_retired') as retired:
+        with patch.dict(sys.modules, {'runner.runtime.worker': NS(drain=object(), router_dense_receipt=object())}), \
+                patch('runner.runtime.generation.generate', side_effect=generate) as generated, \
+                patch('runner.runtime.generation.verify_diagnostics'), patch('runner.corpus.runtime.clean_capture'), \
+                patch('runner.corpus.runtime.arm_tree'), patch('runner.corpus.runtime.verify_retired') as retired:
             records = [engine.answer(v3.ACTIONS[2], v3.ACTIONS[2]['id'], seed=seed)[0] for seed in range(2)]
         self.assertEqual([r['seed'] for r in records], [0, 1])
         self.assertEqual([r['accuracy'] for r in records], [1., 0.])

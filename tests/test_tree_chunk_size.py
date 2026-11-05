@@ -10,11 +10,11 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
-import runner.generation  # Keep patch targets stable across sys.modules fixtures.
-from runner.layout import stamp_sample, request_metadata
-from runner.setups import atomic_json, file_hash
-from runner.tree_collection import runtime_sample, TreePromptCache
-from runner.corpus_runtime import Engine
+import runner.runtime.generation  # Keep patch targets stable across sys.modules fixtures.
+from runner.inputs.layout import stamp_sample, request_metadata
+from runner.cache.setups import atomic_json, file_hash
+from runner.tree.collection import runtime_sample, TreePromptCache
+from runner.corpus.runtime import Engine
 from scripts import tree_prophetkv_data as collection
 from test_tree_collection import fixture, ROOT
 from test_collection_no_priming import NoPrimingTests
@@ -51,8 +51,8 @@ class ChunkSizeTests(unittest.TestCase):
                     row['sha256']=file_hash(root/'sample.json')
                     pins=(file_hash(root/'sample.json'),(root/'sample.json').stat().st_mtime_ns)
                     engine.tree_cached=True; engine.protocol.update(kv_chunk_size=size,percentages=[5,20,40,60])
-                    with patch('runner.corpus_runtime.validate'), patch('runner.generation.generate') as generate, \
-                            patch('runner.corpus_runtime.retirement'), patch('runner.corpus_runtime.clean_capture'), \
+                    with patch('runner.corpus.runtime.validate'), patch('runner.runtime.generation.generate') as generate, \
+                            patch('runner.corpus.runtime.retirement'), patch('runner.corpus.runtime.clean_capture'), \
                             patch.object(TreePromptCache,'ready',return_value={}), patch.object(TreePromptCache,'unchanged'):
                         engine.begin(row)
                     chunks=[call.args[1] for call in generate.call_args_list]
@@ -92,8 +92,8 @@ class ChunkSizeTests(unittest.TestCase):
                             bounds=cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts'][rows[0]['id']]
                             self.assertEqual(bounds,list(range(0,9728,size))+[9728,10048])
                             raise RuntimeError('captured before GPU')
-                        with patch.dict(sys.modules,{'runner.worker':NS(setup=None)}), \
-                                patch('runner.corpus_runtime.start_engine',side_effect=capture), \
+                        with patch.dict(sys.modules,{'runner.runtime.worker':NS(setup=None)}), \
+                                patch('runner.corpus.runtime.start_engine',side_effect=capture), \
                                 self.assertRaisesRegex(RuntimeError,'captured before GPU'):
                             Engine(args.root/'tree',protocol,0,'cached','fixture',rows[:1])
                         collection.adopt(args)
