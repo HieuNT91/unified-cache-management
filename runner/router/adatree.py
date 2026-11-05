@@ -1,0 +1,184 @@
+"""Fixed AdaTreeV1 routing receipts and native answer validation."""
+
+SCHEMA = 'adatree-v1-native-tailspread-v1'
+METHOD = 'adatree-v1'
+
+
+def answer_details(result, sample, tokenizer, ttft_seconds):
+    """Preserve the prepared thinking policy's answer channel and budget audit."""
+    from runner.reporting.aggregate import OutputAnalyzer
+    from runner.runtime.thinking_budget import KEY, validate_thinking_outcome
+    from runner.runtime.output_budget import PROTOCOL as TOTAL
+    state = getattr(result, 'ruler_thinking_state', None)
+    if (KEY in sample) != (state is not None):
+        raise RuntimeError('AdaTreeV1 answer is missing its prepared thinking-policy state')
+    tokens = list(result.outputs[0].token_ids)
+    metrics = OutputAnalyzer(tokenizer).analyze(tokens, [] if state is not None else sample['token_ids'], sample['thinking'])
+    capped = len(tokens) >= sample['max_output_tokens']
+    timing = {}
+    if state is not None:
+        if state.policy != sample[KEY] or state.phase != 'done':
+            raise RuntimeError('AdaTreeV1 thinking-policy state is incomplete or changed')
+        metrics.update(state.metrics(tokenizer))
+        timing['first_answer_content_seconds'] = result.first_answer_content_seconds
+        capped = (metrics['answer_cap_reached'] if sample[KEY]['protocol'] == TOTAL
+                  else metrics['thinking_cap_reached'] or metrics['answer_cap_reached'])
+        validate_thinking_outcome(dict(metrics, output_cap_reached=capped,
+            ttft_seconds=ttft_seconds, **timing), sample[KEY])
+    return dict(metrics=metrics, output_cap_reached=capped, timings=timing)
+
+
+def validate_routing(workers, sample, request_id, tp):
+    """Check all ranks and replay the selected native TreeKV action."""
+    from runner.runtime.generation import verify_diagnostics
+    from ucm.sparse.prophetkv.adatree import route_features
+    if sorted(worker.get('rank', -1) for worker in workers) != list(range(tp)):
+        raise RuntimeError('Missing AdaTreeV1 tensor-parallel rank')
+    common = None
+    for worker in workers:
+        events = [event for event in worker['diagnostics'] if event['kind'] == 'adatree_v1']
+        selections = [event for event in worker['diagnostics'] if event['kind'] == 'prophetkv_selection']
+        if len(events) != 1 or len(selections) != 1:
+            raise RuntimeError('AdaTreeV1 requires exactly one integrated routing event and native probe')
+        event = events[0]
+        features = event.get('features')
+        if not isinstance(features, dict) or set(features) != {'G5_mean', 'S60_p90'}:
+            raise RuntimeError('Invalid AdaTreeV1 feature receipt')
+        try:
+            action = route_features(**features)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError('Invalid AdaTreeV1 feature values') from error
+        ratio = int(action.rsplit('-', 1)[1]) / 100
+        if (event.get('schema') != SCHEMA or event.get('request_id') != request_id
+                or event.get('action') != action or event.get('ratio') != ratio
+                or event.get('independent_probes') != 0 or event.get('feature_mask_only') is not True
+                or selections[0].get('request_id') != request_id):
+            raise RuntimeError('Invalid AdaTreeV1 decision receipt')
+        current = dict(features=features, action=action, ratio=ratio)
+        if common is not None and current != common:
+            raise RuntimeError('Tensor-parallel ranks disagree on AdaTreeV1 features or action')
+        common = current
+    if common is None:
+        raise RuntimeError('Missing AdaTreeV1 routing event')
+    verify_diagnostics(workers, sample, 'tree-prophetkv', common['ratio'], tp, range(64))
+    return dict(schema=SCHEMA, **common, request_id=request_id, independent_probes=0,
+                feature_mask_only=True, included_in_native_probe=True)
+
+
+def answer(engine, seed):
+    import time
+    import uuid
+    from runner.cache.setups import atomic_json
+    from runner.corpus.records import NATIVE_ANSWER_VALIDATION
+    from runner.corpus.runtime import clean_capture
+    from runner.runtime.generation import generate
+    from runner.runtime.worker import arm, configure, drain
+    from runner.router.measure import verify_retired
+    from runner.reporting.aggregate import evaluation_metadata, score_answer, scoring_text
+    from runner.runtime.thinking_budget import KEY, validate_thinking_outcome
+    from runner.runtime.output_budget import PROTOCOL as TOTAL
+
+    rid = engine.rid('read:adatree-v1-' + uuid.uuid4().hex)
+    clean_capture(engine.llm, engine.tp)
+    started = time.perf_counter()
+    sync = engine.llm.collective_rpc(configure, kwargs=dict(method=METHOD, ratio=None))
+    if sorted(value.get('rank', -1) for value in sync) != list(range(engine.tp)):
+        raise RuntimeError('Missing AdaTreeV1 configuration rank')
+    engine.llm.collective_rpc(arm, kwargs=dict(request_id=rid,
+        boundaries=engine.sample['boundaries'], question_positions=engine.sample['question_positions']))
+    sync_seconds = time.perf_counter() - started
+
+    def progress(value):
+        atomic_json(engine.session/'answer-progress.json', dict(value, method=METHOD, seed=seed, at=time.time()))
+
+    output, ttft, elapsed = generate(engine.llm.llm_engine, engine.sample['token_ids'],
+        engine.sample['max_output_tokens'], rid, engine.sample['thinking'],
+        sample=engine.sample, seed=seed, progress=progress)
+    diagnostics = engine.llm.collective_rpc(drain)
+    routing = validate_routing(diagnostics, engine.sample, rid, engine.tp)
+    retired = verify_retired(engine.llm, engine.tp, rid, engine.scheduler)
+    engine.pc.unchanged()
+    clean_capture(engine.llm, engine.tp)
+    tokens = list(output.outputs[0].token_ids)
+    metrics = engine.analyzer.analyze(tokens,
+        [] if hasattr(output, 'ruler_thinking_state') else engine.sample['token_ids'], engine.sample['thinking'])
+    if hasattr(output, 'ruler_thinking_state'):
+        metrics.update(output.ruler_thinking_state.metrics(engine.analyzer.tokenizer))
+    evaluation = evaluation_metadata({}, engine.row)
+    record = engine.common(METHOD, dict(answer_engine_ttft_seconds=ttft,
+        ttft_seconds=sync_seconds+ttft, generation_seconds=elapsed,
+        tp_sync_seconds=sync_seconds), retired)
+    record.update(executed_action=routing['action'], routing=routing, independent_probes=0,
+        seed=seed, sequence_id=engine.row['id'], decision_sync=sync,
+        output_token_ids=tokens, prediction=output.outputs[0].text,
+        num_cached_tokens=output.num_cached_tokens,
+        finish_reason=getattr(output.outputs[0], 'finish_reason', None),
+        answer_validation=NATIVE_ANSWER_VALIDATION,
+        max_output_tokens=engine.sample['max_output_tokens'],
+        output_cap_reached=len(tokens)>=engine.sample['max_output_tokens'],
+        **metrics, **evaluation,
+        accuracy=score_answer(scoring_text(output.outputs[0].text, metrics, evaluation), evaluation))
+    if 'scored_text' in metrics:
+        record['timings']['first_answer_content_seconds'] = (sync_seconds+output.first_answer_content_seconds
+            if output.first_answer_content_seconds is not None else None)
+        record['output_cap_reached'] = (metrics['answer_cap_reached'] if engine.sample[KEY]['protocol'] == TOTAL
+            else metrics['thinking_cap_reached'] or metrics['answer_cap_reached'])
+        validate_thinking_outcome(dict(record, ttft_seconds=record['timings']['ttft_seconds'],
+            first_answer_content_seconds=record['timings']['first_answer_content_seconds']), engine.sample[KEY])
+    return record, diagnostics
+
+
+
+def validate_record(protocol, result):
+    """Cheap resume validation; native diagnostics are checked at execution."""
+    from runner.tree.collection import inventory
+    from ucm.sparse.prophetkv.adatree import route_features
+    if METHOD not in inventory(protocol) or protocol.get('adaptive_routing') != SCHEMA:
+        raise ValueError('AdaTreeV1 record requires its declared collection protocol')
+    routing = result.get('routing', {})
+    features = routing.get('features', {})
+    if set(features) != {'G5_mean', 'S60_p90'}:
+        raise ValueError('Missing AdaTreeV1 features')
+    action = route_features(**features)
+    if (routing.get('schema') != SCHEMA or routing.get('action') != action
+            or result.get('executed_action') != action
+            or routing.get('ratio') != int(action.rsplit('-', 1)[1])/100
+            or routing.get('independent_probes') != 0 or result.get('independent_probes') != 0
+            or routing.get('feature_mask_only') is not True
+            or routing.get('included_in_native_probe') is not True
+            or not routing.get('request_id')):
+        raise ValueError('Accepted AdaTreeV1 routing decision changed')
+
+
+def baseline_receipt(base, settings, rows):
+    """Adopt existing accepted no-cache answers once, without copying any artifact."""
+    import json
+    from pathlib import Path
+    from runner.cache.setups import file_hash
+    from scripts.reporting.experiment_task_breakdown import copied_baseline
+    pins = {}
+    source = Path(settings['baseline_source'])
+    values = copied_baseline(base, settings, rows, settings, {}, pins, source=source)['nocache']
+    expected = {json.dumps([r['id'], seed]): r['token_sha256'] for r in rows for seed in (0, 1)}
+    if len(values) != len(expected) or {v['prompt_id'] for v in values} != set(expected):
+        raise ValueError('Existing no-cache must contain all prepared inputs at seeds 0/1')
+    if any(v['token_sha256'] != expected[v['prompt_id']] for v in values):
+        raise ValueError('No-cache token IDs differ from exact prepared inputs')
+    if any(file_hash(path) != digest for path, digest in pins.items()):
+        raise ValueError('Baseline changed during adoption')
+    # Normal resume checks metadata only, accepted answers remain under their own receipts.
+    metadata = {str(path.relative_to(source)): digest for path, digest in pins.items()
+                if path.name != 'validated.json'}
+    return dict(source=str(source), answers=len(values), answer_seeds=[0, 1], metadata=metadata)
+
+
+def check_baseline_metadata(settings):
+    from pathlib import Path
+    from runner.cache.setups import file_hash
+    from runner.corpus.dataset import relative
+    receipt = settings['baseline_receipt']
+    source = Path(settings['baseline_source'])
+    if receipt['source'] != str(source) or receipt['answer_seeds'] != [0, 1] or receipt['answers'] != 1006:
+        raise ValueError('Baseline reuse receipt changed')
+    if any(file_hash(relative(source, name)) != digest for name, digest in receipt['metadata'].items()):
+        raise ValueError('Original baseline metadata changed')

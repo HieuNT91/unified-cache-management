@@ -23,13 +23,20 @@ def run(args):
         validate_layout(sample['token_ids'], sample['boundaries'], sample['question_positions'], sparse=True)
     if sample['model_config_sha256'] != digest(args.model / 'config.json'):
         raise ValueError('Input was prepared with a different model configuration')
-    if args.method == 'tree-prophetkv':
+    adaptive = args.method == 'adatree-v1'
+    tree = args.method in ('tree-prophetkv', 'adatree-v1')
+    if tree:
         from runner.tree.prophetkv import budget
-        budget(sample['boundaries'], args.ratio)
+        budget(sample['boundaries'], .05 if adaptive else args.ratio)
     cfg = engine_config(args.model, args.method, args.ratio, args.layers, args.num_layers,
         args.tp, args.memory, args.output.resolve() / 'cache',
         None,
         router_policy=args.router_policy, router_id=args.router_id)
+    if adaptive:
+        # Select TreeTemporaryStore so shared-prefix shards are submitted once
+        # and inference cannot write to the original chunk cache.
+        cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts'] = {
+            'input': sample['boundaries']}
     if args.method == 'router':
         from runner.router.measure import validate_profile
         validate_profile(sample,args.tp)
@@ -68,24 +75,36 @@ def run(args):
     namespace = uuid.uuid4().hex
     bounds, ids = sample['boundaries'], sample['token_ids']
     chunks = [ids[a:b] for a, b in zip(bounds[:-2], bounds[1:-1])]
+    prompt_cache = None
     readiness_args = SimpleNamespace(model_path=args.model, tensor_parallel_size=args.tp,
         cache_dir=cache, cache_ready_timeout_seconds=600, hash_seed=seed_value(namespace))
     try:
+        if adaptive:
+            from runner.tree.collection import TreePromptCache
+            prompt_cache = TreePromptCache(cache, args.model, args.tp, namespace, sample)
+            chunks = prompt_cache.chunks
         setup_receipts = llm.collective_rpc(setup)
         started = time.perf_counter()
         warmup = [100, 200, 300, 400] * 32
-        generate(llm.llm_engine, warmup, 1, namespace + ':warmup', phase='populate' if cached else None)
+        warm_namespace = uuid.uuid4().hex if adaptive else namespace
+        generate(llm.llm_engine, warmup, 1, warm_namespace + ':warmup', phase='populate' if cached else None)
         if cached:
-            wait_for_cache(readiness_args, [warmup])
+            warm_args = SimpleNamespace(**vars(readiness_args))
+            warm_args.hash_seed = seed_value(warm_namespace)
+            wait_for_cache(warm_args, [warmup])
         llm.collective_rpc(retire)
+        if adaptive:
+            delete_retired_files(cache, {str(p.relative_to(cache)) for p in (cache/'kv').rglob('*') if p.is_file()})
+            from runner.tree.collection import retire_warmup
+            retire_warmup(cache, warmup)
         timings['warmup_seconds'] = time.perf_counter() - started
         started = time.perf_counter()
         readiness = None
         if cached:
             for i, chunk in enumerate(chunks):
-                generate(llm.llm_engine, chunk, 1, namespace + f':populate-{i}', phase='populate')
+                generate(llm.llm_engine, list(chunk), 1, namespace + f':populate-{i}', phase='populate')
                 llm.collective_rpc(retire)
-            readiness = wait_for_cache(readiness_args, chunks)
+            readiness = prompt_cache.ready() if adaptive else wait_for_cache(readiness_args, chunks)
         timings['cache_build_and_readiness_seconds'] = time.perf_counter() - started
 
         def metadata(rid):
@@ -93,15 +112,21 @@ def run(args):
                 llm.collective_rpc(arm, kwargs=dict(request_id=rid, boundaries=bounds,
                     question_positions=sample['question_positions']))
 
-        started = time.perf_counter()
-        metadata(namespace + ':prime')
-        generate(llm.llm_engine, ids, 1, namespace + ':prime', sample=sample)
-        llm.collective_rpc(drain)
-        llm.collective_rpc(retire)
-        timings['priming_seconds'] = time.perf_counter() - started
+        if adaptive:
+            # Native probing and routing occur in the answer itself. Do not run
+            # a discarded full-input answer before measuring the same prompt.
+            llm.collective_rpc(drain)
+            timings['priming_seconds'] = 0.
+        else:
+            started = time.perf_counter()
+            metadata(namespace + ':prime')
+            generate(llm.llm_engine, ids, 1, namespace + ':prime', sample=sample)
+            llm.collective_rpc(drain)
+            llm.collective_rpc(retire)
+            timings['priming_seconds'] = time.perf_counter() - started
         before = {str(p.relative_to(cache)): (p.stat().st_size, p.stat().st_mtime_ns)
                   for p in (cache / 'kv').glob('*/*') if p.is_file()}
-        if args.method == 'tree-prophetkv':
+        if tree:
             from runner.tree.prophetkv import snapshot_f3
             f3_before = snapshot_f3(cache, str(cache), [sample])
         routing = None
@@ -124,7 +149,10 @@ def run(args):
         started = time.perf_counter()
         diagnostics = llm.collective_rpc(drain)
         scoring_layers = resolve_layers(args.method, args.layers, args.num_layers) if cached else ()
-        if routing:
+        if adaptive:
+            from runner.router.adatree import validate_routing
+            routing = validate_routing(diagnostics, sample, namespace + ':measured', args.tp)
+        elif routing:
             from runner.router.measure import validate_answer
             validate_answer(llm,diagnostics,result,sample,routing,args.tp)
         else:
@@ -135,7 +163,9 @@ def run(args):
                  for p in (cache / 'kv').glob('*/*') if p.is_file()}
         if before != after:
             raise RuntimeError('Offline cache changed during measured generation')
-        if args.method == 'tree-prophetkv' and f3_before != snapshot_f3(cache, str(cache), [sample]):
+        if adaptive:
+            prompt_cache.unchanged()
+        if tree and f3_before != snapshot_f3(cache, str(cache), [sample]):
             raise RuntimeError('Offline F3 changed during measured generation')
         dump(args.output / 'diagnostics.json', diagnostics)
         timings['validation_and_export_seconds'] = time.perf_counter() - started
@@ -146,25 +176,37 @@ def run(args):
             raise RuntimeError('Request retirement failed')
         if cached:
             receipt = json.loads((args.output / 'scheduler.json').read_text())
-            if receipt != dict(request_id=routing['answer_request_id'] if routing else namespace + ':measured', requests_blend_meta=0, requests_meta=0):
+            if receipt != dict(request_id=routing['answer_request_id'] if routing and not adaptive else namespace + ':measured', requests_blend_meta=0, requests_meta=0):
                 raise RuntimeError('Scheduler request not retired')
-            delete_retired_files(cache, before)
+            if adaptive:
+                prompt_cache.delete()
+            else:
+                delete_retired_files(cache, before)
         timings['retirement_seconds'] = time.perf_counter() - started
         output = result.outputs[0]
         from runner.reporting.aggregate import OutputAnalyzer, evaluation_metadata, score_answer, scoring_text
         evaluation=evaluation_metadata(sample)
-        output_metrics=OutputAnalyzer(llm.get_tokenizer()).analyze(list(output.token_ids),ids,sample['thinking'])
+        output_cap_reached = len(output.token_ids) >= sample['max_output_tokens']
+        if adaptive:
+            from runner.router.adatree import answer_details
+            details = answer_details(result, sample, llm.get_tokenizer(), ttft)
+            output_metrics = details['metrics']
+            output_cap_reached = details['output_cap_reached']
+            timings.update(details['timings'])
+        else:
+            output_metrics=OutputAnalyzer(llm.get_tokenizer()).analyze(list(output.token_ids),ids,sample['thinking'])
         accuracy=score_answer(scoring_text(output.text,output_metrics,evaluation),evaluation)
         from runner.runtime.generation import thinking_loop_metrics
         output_metrics.update(thinking_loop_metrics(result))
-        record = dict(**sample_provenance(sample),method=args.method, ratio=args.ratio if cached else None,
+        record = dict(**sample_provenance(sample),method=args.method,
+            ratio=routing['ratio'] if adaptive else (args.ratio if cached else None),
             scoring_layers=list(scoring_layers), input_sha256=digest(args.input),
             model=str(args.model), gpu_uuids=devices, runtime_versions=VERSIONS,
             prompt_tokens=len(ids), output_token_ids=list(output.token_ids), prediction=output.text,
             max_output_tokens=sample['max_output_tokens'], thinking=sample['thinking'],
             finish_reason=output.finish_reason, num_cached_tokens=result.num_cached_tokens,
             timings=timings, setup=setup_receipts, readiness=readiness, retirement=retirement, routing=routing,
-            **evaluation, **output_metrics, accuracy=accuracy, output_cap_reached=len(output.token_ids)>=sample['max_output_tokens'])
+            **evaluation, **output_metrics, accuracy=accuracy, output_cap_reached=output_cap_reached)
     finally:
         llm.llm_engine.engine_core.shutdown()
     dump(args.output / 'result.json', record)

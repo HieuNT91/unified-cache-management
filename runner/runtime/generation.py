@@ -77,6 +77,8 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, *, g
     from runner.inputs.config import METHODS
     if method not in METHODS:
         raise ValueError('Unsupported diagnostic method')
+    if method == 'adatree-v1':
+        raise ValueError('AdaTreeV1 requires validate_routing before native TreeKV validation')
     if method == 'tree-prophetkv' and gpu_scores:
         raise ValueError('Tree-prophetkv requires its native F3 evidence')
     if sorted(w['rank'] for w in workers) != list(range(tp)):

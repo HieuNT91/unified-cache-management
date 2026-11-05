@@ -215,6 +215,13 @@ class Engine:
         return result,ds,attention
 
     def answer(self,definition,case,attention=None,overhead=0.,route_started=None, *, seed=None, policy=None):
+        if definition['method'] == 'adatree-v1':
+            from runner.tree.collection import inventory
+            from runner.router.adatree import answer
+            if (inventory(self.protocol).get(case) != definition or not self.cached
+                    or attention is not None or overhead or route_started is not None or policy is not None):
+                raise ValueError('AdaTreeV1 uses only its integrated native probe')
+            return answer(self, seed)
         from runner.runtime.generation import generate, verify_diagnostics
         from runner.runtime.worker import drain,router_dense_receipt
         integrated=self.protocol.get('integrated_gpu_router',False) and self.cached

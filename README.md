@@ -23,6 +23,7 @@ and real-data training have not been performed for this implementation.
 | [AGENTS.md](AGENTS.md) | Short mandatory rules for work in this branch |
 | [run.py](run.py), [run.sh](run.sh) | CLI dispatch and environment setup |
 | [TREE_RMASK.md](docs/TREE_RMASK.md) | `tree-prophetkv`: F3 tree selection, S4 probing and masked recomputation |
+| [ADATREE_V1.md](docs/deployment/ADATREE_V1.md) | Fixed S60/G5 routing inside native TreeKV probing and prepared-input debug |
 | [runner/inputs/preparation.py](runner/inputs/preparation.py), [runner/runtime/generation.py](runner/runtime/generation.py), [runner/runtime/single.py](runner/runtime/single.py) | Prompt preparation, shared inference/validation and single-input execution |
 | [runner/](runner/README.md) | Package map, dependency audit, layouts, cache lifecycle, reporting and routers |
 | [ucm/](ucm/) | Connector, storage, sparse attention and runtime integration |
@@ -73,8 +74,11 @@ For prefix placement, task caps, decoding and scoring, read the
 
 ## Inference and deployment
 
-The public modes include `baseline`, `prophetkv`, `selective_prophetkv`, `router`
-and [`tree-prophetkv`](docs/TREE_RMASK.md).
+The public modes include `baseline`, `prophetkv`, `selective_prophetkv`, `router`,
+[`tree-prophetkv`](docs/TREE_RMASK.md) and
+[`adatree-v1`](docs/deployment/ADATREE_V1.md). AdaTreeV1 selects TreeKV 5/20/40%
+from native post-S4 attention in the same answer probe. Routing receipts record
+the features and decision, without feature timers or overhead warnings.
 Baseline disables the connector and prefix reuse. Sparse methods share the
 metadata layout and keep the complete question in the fresh suffix. Persistent
 setup builds reusable KV for a collection; temporary sweeps build one prompt's

@@ -36,7 +36,7 @@ def actions(percentages):
 
 def inventory(protocol):
     chunk_size(protocol)
-    expected = actions(protocol['percentages'])
+    expected = collection_actions(protocol)
     if (protocol.get('schema') != SCHEMA or protocol.get('tree_protocol') != PROTOCOL
             or protocol.get('actions') != expected
             or protocol.get('scheduled_actions') != [a['id'] for a in expected]
@@ -44,6 +44,20 @@ def inventory(protocol):
             or protocol.get('answer_validation') != 'native-answer-diagnostics-v1'):
         raise ValueError('Invalid tree-prophetkv collection protocol')
     return {a['id']: a for a in expected}
+
+
+def collection_actions(protocol):
+    if 'adaptive_routing' not in protocol:
+        return actions(protocol['percentages'])
+    from runner.router.adatree import SCHEMA as ADATREE_SCHEMA, METHOD
+    if (protocol['adaptive_routing'] != ADATREE_SCHEMA
+            or protocol['percentages'] != [5, 20, 40]
+            or protocol.get('kv_chunk_size') is not None
+            or protocol.get('dataset') != 'longbench-v2'
+            or protocol.get('answer_seeds') != [0, 1]
+            or protocol.get('answers_per_question') != 2):
+        raise ValueError('AdaTreeV1 requires exact prepared layout, LongBench and seeds 0/1')
+    return [dict(id=METHOD, method=METHOD, ratio=None)]
 
 
 def configure_engine(config, cache, protocol):

@@ -84,6 +84,11 @@ class TreeTemporaryStore(TemporaryStore):
 
 def configure_sparse(sparse, method, ratio, layers=None):
     selected = resolve_layers(method, layers)
+    adaptive = method == 'adatree-v1'
+    if adaptive:
+        if ratio not in (None, .05):
+            raise ValueError('AdaTreeV1 chooses its own repair ratio')
+        ratio = .05
     if not 0 <= ratio <= 1:
         raise ValueError('Invalid ratio')
     if (sparse.request_state.pending is not None or getattr(sparse, 'request', None) is not None
@@ -91,7 +96,8 @@ def configure_sparse(sparse, method, ratio, layers=None):
             or sparse.active or sparse.connector.worker_request_id is not None
             or sparse.connector.store.pending):
         raise RuntimeError('Retire the request before changing the scoring policy')
-    if method == 'tree-prophetkv' and getattr(sparse, 'tree_f3_config', None) is None:
+    if method in ('tree-prophetkv', 'adatree-v1') and getattr(sparse, 'tree_f3_config', None) is None:
         raise ValueError('tree-prophetkv needs a tree-enabled construction engine')
-    sparse.method, sparse.ratio, sparse.scoring_layers = method, ratio, selected
+    sparse.method, sparse.ratio, sparse.scoring_layers = 'tree-prophetkv' if adaptive else method, ratio, selected
+    sparse.adatree_v1 = adaptive
     return dict(method=method, ratio=ratio, scoring_layers=list(selected))

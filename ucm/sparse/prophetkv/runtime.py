@@ -101,6 +101,9 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     device=positions.device
     probe_positions = meta.question_positions
     tree = sparse.method == 'tree-prophetkv'
+    adatree = getattr(sparse, 'adatree_v1', False)
+    if adatree and not tree:
+        raise RuntimeError('AdaTreeV1 requires the native post-S4 TreeKV probe')
     if tree:
         if getattr(sparse, 'router_capture', False) or getattr(sparse, 'gpu_router', None) is not None:
             raise RuntimeError('tree-prophetkv does not use router capture or routing')
@@ -121,7 +124,7 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     scoring_layers = sparse.scoring_layers
     capture = getattr(sparse, 'router_capture', False)
     gpu_router = getattr(sparse, 'gpu_router', None)
-    capture_layers = capture or (gpu_router is not None and any(
+    capture_layers = adatree or capture or (gpu_router is not None and any(
         name != 'head_top1_global_jaccard_mean' for name in gpu_router['names']))
     captured = []
     head_layers = getattr(sparse, 'router_head_layers', ()) if capture else ()
@@ -159,7 +162,9 @@ def probe(sparse,positions,embeddings,query_budget=16384):
                 layer_scores.add_(context_importance(q[indices],ck), alpha=len(indices)/len(qp))
             scores.add_(layer_scores)
             if capture_layers:
-                captured.append(layer_scores.detach().clone())
+                # Retain the native layer mean directly: it is never modified
+                # after this point. AdaTree adds no second attention pass.
+                captured.append(layer_scores.detach() if adatree else layer_scores.detach().clone())
             del layer_scores
         if sparse.method == "selective_prophetkv" and i == scoring_layers[-1]:
             del ck,cv,q,k,v
@@ -187,7 +192,7 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     extra = {}
     if tree:
         from .tree_runtime import tree_selection
-        eligible, selected, extra = tree_selection(sparse, scores, b)
+        eligible, selected, extra = tree_selection(sparse, scores, b, layers=captured)
     elif gpu_router is None:
         eligible, selected = global_selection(scores, b[1], sparse.ratio)
     else:

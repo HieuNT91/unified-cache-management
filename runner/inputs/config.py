@@ -1,7 +1,7 @@
 """Shared clean method configuration; importable without CUDA."""
 from ucm.sparse.prophetkv.layers import resolve_layers
 
-METHODS = ('baseline', 'prophetkv', 'selective_prophetkv', 'router', 'tree-prophetkv')
+METHODS = ('baseline', 'prophetkv', 'selective_prophetkv', 'router', 'tree-prophetkv', 'adatree-v1')
 WINDOW = 131072
 PREFILL_BUDGET = 16384
 ROPE = dict(rope_type='yarn', factor=4.0, original_max_position_embeddings=32768)
@@ -12,6 +12,13 @@ def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
                   memory=.9, cache_dir=None, end_token=None, persistent=None, router_policy=None, router_id="router1", router_profile=False):
     if method not in METHODS:
         raise ValueError('Unknown method')
+    adaptive = method == 'adatree-v1'
+    if adaptive:
+        if ratio is not None or layers is not None or count is not None or router_policy is not None or router_profile:
+            raise ValueError('AdaTreeV1 rejects manual ratio, layer and policy overrides')
+        if persistent is not None:
+            raise ValueError('AdaTreeV1 currently requires --input and a fresh output/cache directory')
+        ratio = .05  # Minimum leaf budget; routing chooses the measured answer's ratio.
     if method == 'router':
         from runner.router.policy import load_policy
         if ratio is not None or layers is not None or count is not None:
@@ -49,7 +56,8 @@ def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
         selected = resolve_layers(method, layers, count)
         if cache_dir is None:
             raise ValueError('Cached methods require a cache directory')
-        sparse = dict(method='prophetkv' if method == 'router' else method, ratio=ratio,
+        native_method = 'tree-prophetkv' if adaptive else ('prophetkv' if method == 'router' else method)
+        sparse = dict(method=native_method, ratio=ratio,
                       component_audit=False, compute_meta={})
         if method == 'selective_prophetkv':
             sparse['scoring_layers'] = list(selected)
@@ -60,7 +68,7 @@ def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
                     ucm_connector_config=dict(storage_backends=str(cache_dir),
                         use_direct=False, timeout_ms=120000))],
                 ucm_sparse_config={'ProphetKV': sparse, 'Blend': sparse}))
-    if method == 'tree-prophetkv':
+    if method in ('tree-prophetkv', 'adatree-v1'):
         from pathlib import Path
         from runner.tree.prophetkv import PROTOCOL
         if persistent is not None and persistent.get('tree_protocol') != PROTOCOL:
@@ -69,6 +77,8 @@ def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
             protocol=PROTOCOL, cache_dir=str(Path(cache_dir).resolve()),
             namespace=persistent['fingerprint'] if persistent else str(Path(cache_dir).resolve()),
             readonly=bool(persistent and persistent['readonly']))
+        if adaptive:
+            cfg['kv_transfer_config']['kv_connector_extra_config']['adatree_v1'] = True
     if persistent is not None and method != 'baseline':
         cfg['kv_transfer_config']['kv_connector_extra_config']['persistent_setup'] = persistent
     return cfg

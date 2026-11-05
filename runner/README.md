@@ -1,7 +1,7 @@
 # Runner packages
 
 `run.py`, `run.sh` and `scripts/launcher/` remain the public entry points.
-The 41 implementation modules are grouped by responsibility:
+The 42 implementation modules are grouped by responsibility:
 
 | Package | Responsibility |
 |---|---|
@@ -17,6 +17,10 @@ The 41 implementation modules are grouped by responsibility:
 `tree/prophetkv.py` describes the tree-based KV method. They serve different
 purposes. The separate `runtime/worker.py` and `corpus/worker.py` likewise implement
 the vLLM worker and collection-specific worker callbacks respectively.
+
+`router/adatree.py` validates the fixed AdaTreeV1 decisions and native evidence.
+Its GPU feature reduction runs inside the native TreeKV probe without separate
+feature timing or warnings; see [usage](../docs/deployment/ADATREE_V1.md).
 
 Package initializers are deliberately lightweight. Importing CPU configuration,
 preparation, policy and reporting modules must not initialize a GPU runtime.

@@ -77,9 +77,9 @@ def records(base, role, rows, protocol, cases, pins, selected_seeds=None, select
     return data
 
 
-def copied_baseline(base, settings, rows, protocol, data, pins):
+def copied_baseline(base, settings, rows, protocol, data, pins, *, source=None):
     from runner.runtime.thinking_budget import KEY
-    source = base/'baseline-source'
+    source = Path(source) if source is not None else base/'baseline-source'
     role, original, original_rows, original_protocol, cases = metadata(source, pins)
     if 'nocache' not in cases:
         raise ValueError('baseline-source does not declare nocache')
@@ -123,8 +123,9 @@ def snapshot(base):
     expected = [dict(prompt_id=json.dumps([r['id'], seed]), subtask=r['subtask'])
                 for r in rows for seed in seeds(protocol)]
     data = records(base, role, rows, protocol, cases, pins)
-    if role == 'tree' and (base/'baseline-source').exists():
-        data = copied_baseline(base, settings, rows, protocol, data, pins)
+    source = Path(settings['baseline_source']) if settings.get('baseline_source') else base/'baseline-source'
+    if role == 'tree' and (settings.get('baseline_source') or source.exists()):
+        data = copied_baseline(base, settings, rows, protocol, data, pins, source=source)
     if any(file_hash(path) != digest for path, digest in pins.items()):
         raise ValueError('Experiment metadata or committed receipts changed during read')
     return expected, data
@@ -133,8 +134,8 @@ def snapshot(base):
 def report(base, same_count=False):
     from runner.reporting.status import match_records
     expected, data = snapshot(base)
-    imported = (Path(base)/'baseline-source').exists() and 'nocache' in data and any(
-        case.startswith('tree-prophetkv-') for case in data)
+    imported = 'nocache' in data and any(
+        case.startswith('tree-prophetkv-') or case == 'adatree-v1' for case in data)
     same_count = same_count or imported
     # Validate all committed metrics, including records outside the intersection.
     summaries = {case: aggregate(records, expected, {}, 'running') for case, records in data.items()}
@@ -153,7 +154,8 @@ def report(base, same_count=False):
         'Done/total uses the full planned cohort. Accuracy is percent; TTFT is seconds.',
     ]
     if imported:
-        lines += ['Baseline: '+str(Path(base).resolve()/'baseline-source'),
+        settings = read(Path(base)/'settings.json')
+        lines += ['Baseline: '+str(settings.get('baseline_source', Path(base).resolve()/'baseline-source')),
                   'Baseline keeps its original hardware provenance; TTFT may come from a different server.']
     elif any(case.startswith('tree-prophetkv-') for case in data):
         lines.append('No baseline-source/ found: reporting tree methods only.')

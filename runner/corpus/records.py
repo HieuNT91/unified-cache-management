@@ -98,6 +98,9 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
             else:
                 from runner.live_study import validate_record
             validate_record(root,case,protocol,result,folder,full)
+        elif case=='adatree-v1':
+            from runner.router.adatree import validate_record
+            validate_record(protocol, result)
         elif case!='router' and result['executed_action']!=case:raise ValueError('Accepted action differs from inventory')
         if not math.isfinite(result['accuracy']) or not 0<=result['accuracy']<=1:raise ValueError('Invalid score')
         if case=='nocache' and (result['num_cached_tokens']!=0 or initial['engine_config'].get('kv_transfer_config')):
@@ -121,7 +124,12 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
         ds=json.loads((folder/'diagnostics.json').read_text())
         from runner.router.tree_policy import inventory
         definition=dict(method='prophetkv',ratio=.01) if case=='probe' else inventory(protocol)[case]
-        verify_diagnostics(ds,sample,definition['method'],definition['ratio'],tp,range(64))
+        if case == 'adatree-v1':
+            from runner.router.adatree import validate_routing
+            if validate_routing(ds, sample, result['routing']['request_id'], tp) != result['routing']:
+                raise ValueError('Accepted AdaTreeV1 routing evidence changed')
+        else:
+            verify_diagnostics(ds,sample,definition['method'],definition['ratio'],tp,range(64))
         if case=='probe':
             heads=protocol.get('feature_profile',{}).get('head_layers')
             load_attention(folder,result,sample,protocol['actions'],heads,tp=tp)

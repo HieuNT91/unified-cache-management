@@ -57,10 +57,15 @@ def main():
     if args.model is not None:
         args.model = args.model.resolve()
     if args.command == 'run':
-        if args.method != 'router' and args.ratio is None:
+        if args.method not in ('router', 'adatree-v1') and args.ratio is None:
             args.ratio = .2
         if args.method == 'router' and (args.ratio is not None or args.layers is not None or args.num_layers is not None):
             parser.error('Router rejects manual ratio and layer overrides')
+        if args.method == 'adatree-v1':
+            if args.ratio is not None or args.layers is not None or args.num_layers is not None or args.router_policy is not None:
+                parser.error('AdaTreeV1 rejects manual ratio, layer and policy overrides')
+            if args.setup is not None:
+                parser.error('AdaTreeV1 currently requires --input and a fresh output/cache directory')
         if args.setup is not None:
             args.func = run_collection
         else:

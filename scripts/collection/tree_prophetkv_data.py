@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 from runner.corpus.dataset import relative
 from runner.corpus.records import accepted, NATIVE_ANSWER_VALIDATION
 from runner.cache.setups import atomic_json, file_hash, fingerprint
-from runner.tree.collection import SCHEMA, RATIOS, actions, inventory
+from runner.tree.collection import SCHEMA, RATIOS, actions, inventory, collection_actions
 from runner.tree.prophetkv import PROTOCOL, budget
 from runner.router.profiles import validate
 from runner.runtime.thinking_budget import KEY
@@ -77,8 +77,8 @@ def protect_paths(root, prepared, cache, model):
 
 
 def protocol_for(settings, plan):
-    result = dict(settings, actions=actions(settings['percentages']),
-                  scheduled_actions=[a['id'] for a in actions(settings['percentages'])],
+    result = dict(settings, actions=collection_actions(settings),
+                  scheduled_actions=[a['id'] for a in collection_actions(settings)],
                   answer_validation=NATIVE_ANSWER_VALIDATION, plan_sha256=fingerprint(plan),
                   prepared_receipt_sha256=plan['preparation_sha256'])
     result.pop('code', None)
@@ -119,12 +119,26 @@ def adopt(args):
         settings['kv_chunk_size'] = args.kv_chunk_size
     chunk_size(settings)
     settings['phase_order'] = ['cached']
+    adaptive = getattr(args, 'adatree_v1', False)
+    baseline_source = getattr(args, 'baseline_source', None)
+    if adaptive:
+        from runner.router.adatree import SCHEMA as ADATREE_SCHEMA
+        if local or baseline_source is None:
+            raise ValueError('A800 AdaTreeV1 requires an existing baseline source and server TP2')
+        settings.update(adaptive_routing=ADATREE_SCHEMA, baseline_source=str(baseline_source))
+        collection_actions(settings)
+        for target in (args.root, args.cache_root):
+            if target == baseline_source or target in baseline_source.parents or baseline_source in target.parents:
+                raise ValueError('AdaTreeV1 result/cache paths must be separate from baseline source')
+    elif baseline_source is not None:
+        raise ValueError('--baseline-source is only supported with --adatree-v1')
     if local:
         settings.update(local_validation=True, validation_prompt_ids=selected)
     if (args.root/'settings.json').exists():
         old, _, _ = load(args.root)
         if (any(old.get(k) != v for k, v in settings.items())
-                or old.get('kv_chunk_size') != settings.get('kv_chunk_size')):
+                or old.get('kv_chunk_size') != settings.get('kv_chunk_size')
+                or old.get('adaptive_routing') != settings.get('adaptive_routing')):
             raise ValueError('Existing run parameters differ; use its original env or fresh paths')
         return
     protect_paths(args.root, args.prepared, args.cache_root, args.model)
@@ -179,6 +193,10 @@ def adopt(args):
                       or sample.get('task') != row['subtask']):
             raise ValueError('RULER generation/task provenance differs')
         effective = runtime_sample(sample, settings)
+        if adaptive:
+            from runner.inputs.layout import boundaries_for
+            if sample['boundaries'] != boundaries_for(len(sample['token_ids']), min(sample['question_positions']), 4096):
+                raise ValueError('AdaTreeV1 requires the unchanged prepared chunk4096 layout')
         for definition in definitions:
             try:
                 budget(effective['boundaries'], definition['ratio'])
@@ -187,6 +205,8 @@ def adopt(args):
         value = dict(row, ordinal=sample['source_row'], sha256=digest, dataset=args.dataset,
                      input_tokens=len(sample['token_ids']), evaluation_protocol=sample['evaluation_protocol'],
                      **{KEY: sample[KEY]})
+        if adaptive:
+            value['token_sha256'] = sample['token_sha256']
         if not ruler:
             metadata = sample['source_metadata']
             if (metadata['length'] not in ('short', 'medium', 'long')
@@ -196,8 +216,12 @@ def adopt(args):
         rows.append(value)
     validate_rows(settings, rows)
     rows.sort(key=lambda r: (r['ordinal'], r['subtask']))
+    if adaptive:
+        from runner.router.adatree import baseline_receipt
+        settings['baseline_receipt'] = baseline_receipt(args.root, settings, rows)
     if file_hash(receipt_path) != receipt_hash or file_hash(args.prepared/'manifest.jsonl') != manifest_hash:
         raise ValueError('Prepared receipts changed during adoption')
+    definitions = collection_actions(settings)
     settings['code'] = code_hashes()  # provenance; resume accepts source updates
     args.root.mkdir(parents=True, exist_ok=True)
     with (args.root/'adopt.lock').open('a') as lock:
@@ -225,7 +249,10 @@ def load(base):
             or file_hash(Path(settings['prepared'])/'manifest.jsonl') != plan['manifest_sha256']):
         raise ValueError('Run metadata or prepared receipts changed')
     rows = read(base/'rows.json'); validate_rows(settings, rows)
-    expected = actions(settings['percentages'])
+    expected = collection_actions(settings)
+    if settings.get('adaptive_routing'):
+        from runner.router.adatree import check_baseline_metadata
+        check_baseline_metadata(settings)
     if (plan['actions'] != expected or plan['answers'] != len(rows)*len(expected)*len(seeds(settings))
             or plan['probes'] != 0 or plan['baseline_answers'] != 0 or plan['samples'] != len(rows)
             or plan['phase_order'] != ['cached'] or settings['phase_order'] != ['cached']):
@@ -275,6 +302,11 @@ def report(base, final=False):
         lines.append(f'| {name} | {value["completed"]}/{value["expected"]} | {fmt(value["accuracy_percent"])} | {fmt(value["mean_ttft_seconds"])} |')
     text = '\n'.join(lines)+'\n'; (base/('final.md' if final else 'status.md')).write_text(text)
     print(text, flush=True)
+    if settings.get('adaptive_routing'):
+        from scripts.reporting.experiment_task_breakdown import report as paired_report
+        paired_text, _, _ = paired_report(base)
+        (base/('comparison-final.md' if final else 'comparison.md')).write_text(paired_text)
+        print(paired_text, flush=True)
     return result
 
 
@@ -315,6 +347,8 @@ def main():
     p.add_argument('--kv-chunk-size', type=int, choices=(512, 1024, 2048, 4096),
                    help='Derive runtime chunk boundaries from unchanged prepared tokens; requires a new experiment')
     p.add_argument('--percentages', type=int, nargs='+', default=list(RATIOS))
+    p.add_argument('--adatree-v1', action='store_true', help='Only the fixed native-probe router, seeds 0/1')
+    p.add_argument('--baseline-source', type=Path, help='Read-only existing no-cache experiment metadata/results')
     p.add_argument('--role', choices=(ROLE,), default=ROLE)
     p.add_argument('--phase', choices=('cached',))
     p.add_argument('--attempt'); p.add_argument('--group', type=int, default=0)

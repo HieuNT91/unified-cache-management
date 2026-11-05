@@ -18,6 +18,9 @@ class ProphetKV(Blend):
         self.method=self.blend_config.get('method','prophetkv')
         self.model_config_hf=config.model_config.hf_config
         self.tree_f3_config=config.kv_transfer_config.kv_connector_extra_config.get('tree_f3')
+        self.adatree_v1=config.kv_transfer_config.kv_connector_extra_config.get('adatree_v1', False)
+        if self.adatree_v1 and (self.method != 'tree-prophetkv' or self.tree_f3_config is None):
+            raise ValueError('AdaTreeV1 requires the native TreeKV construction and probe')
         self.f3rec=None
         self.ratio=self.blend_config.get('ratio',.2)
         self.scoring_layers=resolve_layers(self.method, self.blend_config.get('scoring_layers'), self.blend_config.get('num_scoring_layers'))
