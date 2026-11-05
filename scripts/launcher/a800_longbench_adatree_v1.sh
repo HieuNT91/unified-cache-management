@@ -13,8 +13,8 @@ if [[ $# -ne 0 || -n "${KV_CHUNK_SIZE:-}" || "${TP:-2}" != 2 || "${SEED:-42}" !=
 fi
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
 exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:?Set PYTHON_BIN}" "$CODE_ROOT/scripts/collection/tree_prophetkv_data.py" "$command" \
-  --adatree-v1 --dataset longbench-v2 --root "${EXPERIMENT_DIR:?Set fresh EXPERIMENT_DIR}" \
+  --adatree-v1 --adatree-thinking-8192 --followup-nocache --dataset longbench-v2 --root "${EXPERIMENT_DIR:?Set fresh EXPERIMENT_DIR}" \
   --model "${MODEL_PATH:?Set MODEL_PATH}" --prepared "${PREPARED_DIR:?Set existing PREPARED_DIR}" \
-  --cache-root "${CACHE_ROOT:?Set fresh CACHE_ROOT}" --baseline-source "${BASELINE_SOURCE:?Set existing BASELINE_SOURCE}" \
+  --cache-root "${CACHE_ROOT:?Set fresh CACHE_ROOT}" \
   --devices "${GPU_PRIMARY:?Set four full A800 UUIDs}" --tp 2 --seed 42 \
   --answers-per-question 2 --answer-seeds 0 1 --percentages 5 20 40

@@ -6,6 +6,8 @@ RULER_PROTOCOL = 'nvidia-ruler-c3f5e3b-qwen3-thinking-v2'
 LONGBENCH_PROTOCOL = 'longbench-v2-qwen3-thinking-v2'
 THINKING_CAP = 15000
 OUTPUT_CAP = 16384
+ADATREE_PROTOCOL = 'qwen3-thinking-8192-total10000-v1'
+BUDGETS = {PROTOCOL: (THINKING_CAP, OUTPUT_CAP), ADATREE_PROTOCOL: (8192, 10000)}
 
 
 def make_policy(tokenizer, prefix='', opening_in_prompt=False):
@@ -27,8 +29,9 @@ def make_policy(tokenizer, prefix='', opening_in_prompt=False):
 
 def validate_policy(p):
     from runner.runtime.thinking_budget import SAMPLING
-    if (p.get('protocol') != PROTOCOL or p.get('thinking_cap') != THINKING_CAP
-            or type(p.get('thinking_cap')) is not int or p.get('output_reserve') != OUTPUT_CAP
+    thinking_cap, output_cap = BUDGETS.get(p.get('protocol'), (None, None))
+    if (thinking_cap is None or p.get('thinking_cap') != thinking_cap
+            or type(p.get('thinking_cap')) is not int or p.get('output_reserve') != output_cap
             or type(p.get('output_reserve')) is not int or 'answer_cap' in p
             or type(p.get('opening_in_prompt')) is not bool
             or p.get('sampling') != {k: v for k, v in SAMPLING.items() if k != 'seed'}
@@ -44,7 +47,7 @@ def validate_policy(p):
             or not {p['open_id'], p['close_id'], *p['eos_ids']} <= controls
             or {p['open_id'], p['close_id']} & set(p['eos_ids'])
             or controls & set(p['transition_ids'] + p['prefix_ids'])
-            or THINKING_CAP + 2 + len(p['transition_ids']) + len(p['prefix_ids']) >= OUTPUT_CAP):
+            or thinking_cap + 2 + len(p['transition_ids']) + len(p['prefix_ids']) >= output_cap):
         raise ValueError('Invalid total output transition/reserve')
     return p
 
@@ -54,8 +57,8 @@ def validate_sample_policy(sample):
     p = validate_policy(sample[KEY])
     ruler = sample.get('evaluation_protocol') == RULER_PROTOCOL
     if (sample.get('evaluation_protocol') not in (RULER_PROTOCOL, LONGBENCH_PROTOCOL)
-            or sample.get('thinking') is not True or sample.get('max_output_tokens') != OUTPUT_CAP
-            or len(sample['token_ids']) + OUTPUT_CAP > (82304 if ruler else 131072)
+            or sample.get('thinking') is not True or sample.get('max_output_tokens') != p['output_reserve']
+            or len(sample['token_ids']) + p['output_reserve'] > (82304 if ruler else 131072)
             or (ruler and (sample.get('execution_profile') != 'ruler-thinking' or not p['prefix_ids']))
             or (not ruler and p['prefix_ids'])):
         raise ValueError('Invalid total output sample policy')
@@ -67,6 +70,7 @@ class TotalBudgetState:
     def __init__(self, policy, loop_breaker=None):
         from copy import deepcopy
         self.policy = deepcopy(validate_policy(policy))
+        self.thinking_cap, self.output_cap = BUDGETS[self.policy['protocol']]
         from runner.runtime.thinking_loop import ThinkingLoop
         self.loop = ThinkingLoop(loop_breaker)
         self.seen = self.thinking = self.answer = self.forced = self.opening_tokens = 0
@@ -77,7 +81,7 @@ class TotalBudgetState:
         self.answer_eos = False
 
     def forced_next(self):
-        if self.phase == 'thinking' and (self.thinking == THINKING_CAP or self.loop.broken):
+        if self.phase == 'thinking' and (self.thinking == self.thinking_cap or self.loop.broken):
             return self.policy['close_id']
         return self.queue[0] if self.queue else None
 
@@ -121,21 +125,22 @@ class TotalBudgetState:
                 self.answer_ids.append(token)
                 self.answer += 1
             self.seen += 1
-            if self.seen == OUTPUT_CAP:
+            if self.seen == self.output_cap:
                 self.phase = 'done'
         return self
 
     def metrics(self, tokenizer):
         return dict(generated_answer_tokens=self.answer, forced_tokens=self.forced,
                     generated_thinking_open_tokens=self.opening_tokens,
-                    thinking_cap_reached=self.thinking == THINKING_CAP,
-                    answer_cap_reached=self.seen == OUTPUT_CAP and not self.answer_eos,
+                    thinking_cap_reached=self.thinking == self.thinking_cap,
+                    answer_cap_reached=self.seen == self.output_cap and not self.answer_eos,
                     thinking_closure=self.closure, **self.loop.metrics(),
                     scored_text=tokenizer.decode(self.answer_ids, skip_special_tokens=False))
 
 
 def validate_outcome(value, policy):
     validate_policy(policy)
+    thinking_cap, output_cap = BUDGETS[policy['protocol']]
     from runner.runtime.thinking_loop import validate_metrics
     validate_metrics(value)
     for key in ('generated_answer_tokens', 'generated_thinking_open_tokens', 'forced_tokens',
@@ -146,17 +151,17 @@ def validate_outcome(value, policy):
     transition = len(policy['transition_ids']) + len(policy['prefix_ids'])
     latency = value.get('first_answer_content_seconds')
     capped = value.get('answer_cap_reached')
-    if (closure not in ('natural', 'forced', 'repetition') or value['thinking_tokens'] > THINKING_CAP
+    if (closure not in ('natural', 'forced', 'repetition') or value['thinking_tokens'] > thinking_cap
             or value['forced_tokens'] != transition + (closure in ('forced', 'repetition'))
             or value['answer_tokens'] != n + transition
             or value['thinking_tokens'] + value['answer_tokens'] + value['control_tokens'] != value['output_tokens']
-            or value['output_tokens'] > OUTPUT_CAP or opening not in (0, 1)
+            or value['output_tokens'] > output_cap or opening not in (0, 1)
             or (policy['opening_in_prompt'] and opening != 0)
-            or type(capped) is not bool or (capped and value['output_tokens'] != OUTPUT_CAP)
+            or type(capped) is not bool or (capped and value['output_tokens'] != output_cap)
             or value['control_tokens'] != 1 + opening + (not capped)
             or type(value.get('thinking_cap_reached')) is not bool
-            or value['thinking_cap_reached'] != (value['thinking_tokens'] == THINKING_CAP)
-            or (closure != 'repetition' and (closure == 'forced') != (value['thinking_tokens'] == THINKING_CAP))
+            or value['thinking_cap_reached'] != (value['thinking_tokens'] == thinking_cap)
+            or (closure != 'repetition' and (closure == 'forced') != (value['thinking_tokens'] == thinking_cap))
             or value.get('output_cap_reached') != capped
             or (n == 0 and latency is not None)
             or (n > 0 and (type(latency) not in (int, float) or not math.isfinite(latency) or latency < value['ttft_seconds']))):

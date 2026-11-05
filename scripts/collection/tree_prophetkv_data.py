@@ -123,21 +123,34 @@ def adopt(args):
     baseline_source = getattr(args, 'baseline_source', None)
     if adaptive:
         from runner.router.adatree import SCHEMA as ADATREE_SCHEMA
-        if local or baseline_source is None:
-            raise ValueError('A800 AdaTreeV1 requires an existing baseline source and server TP2')
-        settings.update(adaptive_routing=ADATREE_SCHEMA, baseline_source=str(baseline_source))
+        if local or (baseline_source is None and not getattr(args, 'followup_nocache', False)):
+            raise ValueError('A800 AdaTreeV1 requires server TP2 and an existing baseline or follow-up no-cache')
+        settings.update(adaptive_routing=ADATREE_SCHEMA)
+        if baseline_source is not None:
+            settings['baseline_source'] = str(baseline_source)
+        if getattr(args, 'adatree_thinking_8192', False):
+            from runner.router.adatree import answer_generation
+            settings['answer_generation'] = answer_generation()
+        if getattr(args, 'followup_nocache', False):
+            settings.update(followup_nocache=True, phase_order=['cached', 'baseline'])
         collection_actions(settings)
         for target in (args.root, args.cache_root):
-            if target == baseline_source or target in baseline_source.parents or baseline_source in target.parents:
+            if baseline_source is not None and (target == baseline_source or target in baseline_source.parents or baseline_source in target.parents):
                 raise ValueError('AdaTreeV1 result/cache paths must be separate from baseline source')
     elif baseline_source is not None:
         raise ValueError('--baseline-source is only supported with --adatree-v1')
+    elif getattr(args, 'adatree_thinking_8192', False):
+        raise ValueError('--adatree-thinking-8192 requires --adatree-v1')
+    elif getattr(args, 'followup_nocache', False):
+        raise ValueError('--followup-nocache requires --adatree-v1')
     if local:
         settings.update(local_validation=True, validation_prompt_ids=selected)
     if (args.root/'settings.json').exists():
         old, _, _ = load(args.root)
         if (any(old.get(k) != v for k, v in settings.items())
                 or old.get('kv_chunk_size') != settings.get('kv_chunk_size')
+                or old.get('answer_generation') != settings.get('answer_generation')
+                or old.get('followup_nocache') != settings.get('followup_nocache')
                 or old.get('adaptive_routing') != settings.get('adaptive_routing')):
             raise ValueError('Existing run parameters differ; use its original env or fresh paths')
         return
@@ -216,7 +229,7 @@ def adopt(args):
         rows.append(value)
     validate_rows(settings, rows)
     rows.sort(key=lambda r: (r['ordinal'], r['subtask']))
-    if adaptive:
+    if adaptive and not settings.get('followup_nocache'):
         from runner.router.adatree import baseline_receipt
         settings['baseline_receipt'] = baseline_receipt(args.root, settings, rows)
     if file_hash(receipt_path) != receipt_hash or file_hash(args.prepared/'manifest.jsonl') != manifest_hash:
@@ -230,13 +243,14 @@ def adopt(args):
         freeze(args.root/'rows.json', rows)
         plan = dict(schema=SCHEMA, settings_sha256=file_hash(args.root/'settings.json'),
             rows_sha256=file_hash(args.root/'rows.json'), preparation_sha256=receipt_hash,
-            manifest_sha256=manifest_hash, samples=len(rows), probes=0, baseline_answers=0,
+            manifest_sha256=manifest_hash, samples=len(rows), probes=0,
+            baseline_answers=len(rows)*args.answers_per_question if settings.get('followup_nocache') else 0,
             answers=len(rows)*len(definitions)*args.answers_per_question,
-            actions=definitions, phase_order=['cached'])
+            actions=definitions, phase_order=settings['phase_order'])
         freeze(args.root/'plan.json', plan)
         freeze(args.root/ROLE/'protocol.json', protocol_for(settings, plan))
         freeze(args.root/ROLE/'devices.json', dict(tp=tp, groups=groups))
-    print(f'Adopted {len(rows)} prompts; {plan["answers"]} tree answers; zero baseline/feature probes.', flush=True)
+    print(f'Adopted {len(rows)} prompts; {plan["answers"]} answers including {plan["baseline_answers"]} new no-cache; zero independent probes.', flush=True)
 
 
 def load(base):
@@ -250,19 +264,21 @@ def load(base):
         raise ValueError('Run metadata or prepared receipts changed')
     rows = read(base/'rows.json'); validate_rows(settings, rows)
     expected = collection_actions(settings)
-    if settings.get('adaptive_routing'):
+    if settings.get('adaptive_routing') and not settings.get('followup_nocache'):
         from runner.router.adatree import check_baseline_metadata
         check_baseline_metadata(settings)
     if (plan['actions'] != expected or plan['answers'] != len(rows)*len(expected)*len(seeds(settings))
-            or plan['probes'] != 0 or plan['baseline_answers'] != 0 or plan['samples'] != len(rows)
-            or plan['phase_order'] != ['cached'] or settings['phase_order'] != ['cached']):
+            or plan['probes'] != 0 or plan['baseline_answers'] != (len(rows)*len(seeds(settings)) if settings.get('followup_nocache') else 0)
+            or plan['samples'] != len(rows)
+            or plan['phase_order'] != settings['phase_order']
+            or settings['phase_order'] != (['cached', 'baseline'] if settings.get('followup_nocache') else ['cached'])):
         raise ValueError('Tree collection scope changed')
     return settings, plan, rows
 
 
 def stage(base, role):
     if role != ROLE:
-        raise ValueError('Tree collection has no baseline or feature stage')
+        raise ValueError('Tree collection uses only the tree role')
     settings, plan, rows = load(base)
     protocol = read(Path(base)/ROLE/'protocol.json')
     if (protocol != protocol_for(settings, plan)
@@ -289,13 +305,13 @@ def report(base, final=False):
     if final and answers != plan['answers']:
         raise ValueError('Cannot finalize incomplete tree collection')
     result = dict(final=final, samples=plan['samples'], expected_answers=plan['answers'],
-        available_answers=answers, baseline_answers=0, feature_probes=0, methods=methods,
+        available_answers=answers, baseline_answers=plan['baseline_answers'], feature_probes=0, methods=methods,
         answer_seeds=settings['answer_seeds'], report_validation='committed-results-only-v1')
     supervisor = base/ROLE/'supervisor.json'
     if supervisor.exists():
         saved = read(supervisor); result['supervisor'] = dict(saved, alive=control.alive(saved))
     atomic_json(base/('final.json' if final else 'status.json'), result)
-    lines = [f'Tree answers {answers}/{plan["answers"]}; no-cache 0; feature probes 0.', '',
+    lines = [f'Answers {answers}/{plan["answers"]}; planned new no-cache {plan["baseline_answers"]}; feature probes 0.', '',
              '| Method | Done | Accuracy % | TTFT s |', '|---|---:|---:|---:|']
     for name, summary in methods.items():
         value = summary['overall']; fmt = lambda v: 'N/A' if v is None else f'{v:.3f}'
@@ -317,10 +333,12 @@ def supervise(base):
         state = dict(pid=os.getpid(), identity=control.identity(os.getpid()), state='running', role=ROLE, started_at=time.time())
         atomic_json(base/ROLE/'supervisor.json', state)
         try:
-            control.execute_phase(base, ROLE, 'cached', state, run_loader=load, stage_loader=stage, entrypoint=__file__)
+            settings, plan, _ = load(base)
+            for phase in settings['phase_order']:
+                control.execute_phase(base, ROLE, phase, state, run_loader=load, stage_loader=stage, entrypoint=__file__)
             report(base, final=True)
             freeze(base/ROLE/'complete.json', dict(complete=True, owned_engines_exited=True,
-                   plan_sha256=file_hash(base/'plan.json'), baseline_answers=0, feature_probes=0))
+                   plan_sha256=file_hash(base/'plan.json'), baseline_answers=plan['baseline_answers'], feature_probes=0))
             state.update(state='complete', finished_at=time.time())
         except BaseException as error:
             state.update(state='failed', error=str(error), finished_at=time.time()); raise
@@ -348,9 +366,12 @@ def main():
                    help='Derive runtime chunk boundaries from unchanged prepared tokens; requires a new experiment')
     p.add_argument('--percentages', type=int, nargs='+', default=list(RATIOS))
     p.add_argument('--adatree-v1', action='store_true', help='Only the fixed native-probe router, seeds 0/1')
+    p.add_argument('--adatree-thinking-8192', action='store_true',
+                   help='8192 thinking / 10000 total; repetition patterns 32..128 repeated 4 times')
+    p.add_argument('--followup-nocache', action='store_true', help='After all router engines exit, run no-cache with the same new policy')
     p.add_argument('--baseline-source', type=Path, help='Read-only existing no-cache experiment metadata/results')
     p.add_argument('--role', choices=(ROLE,), default=ROLE)
-    p.add_argument('--phase', choices=('cached',))
+    p.add_argument('--phase', choices=('cached', 'baseline'))
     p.add_argument('--attempt'); p.add_argument('--group', type=int, default=0)
     args = p.parse_args()
     for key, value in vars(args).items():
@@ -365,9 +386,10 @@ def main():
         if args.command != 'configure':
             control.detach(args.root, ROLE, resume=args.command == 'resume', stage_loader=stage, entrypoint=__file__)
     elif args.command == 'worker':
-        if args.phase != 'cached' or args.attempt is None:
-            p.error('worker requires --phase cached and --attempt')
-        control.worker(args.root, ROLE, 'cached', args.attempt, args.group, stage_loader=stage)
+        protocol, _ = stage(args.root, ROLE)
+        if args.phase not in protocol['phase_order'] or args.attempt is None:
+            p.error('worker requires a declared --phase and --attempt')
+        control.worker(args.root, ROLE, args.phase, args.attempt, args.group, stage_loader=stage)
     elif args.command == 'supervise':
         supervise(args.root)
     elif args.command == 'stop':

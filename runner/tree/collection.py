@@ -40,7 +40,7 @@ def inventory(protocol):
     if (protocol.get('schema') != SCHEMA or protocol.get('tree_protocol') != PROTOCOL
             or protocol.get('actions') != expected
             or protocol.get('scheduled_actions') != [a['id'] for a in expected]
-            or protocol.get('phase_order') != ['cached']
+            or protocol.get('phase_order') != (['cached', 'baseline'] if protocol.get('followup_nocache') else ['cached'])
             or protocol.get('answer_validation') != 'native-answer-diagnostics-v1'):
         raise ValueError('Invalid tree-prophetkv collection protocol')
     return {a['id']: a for a in expected}
@@ -50,6 +50,10 @@ def collection_actions(protocol):
     if 'adaptive_routing' not in protocol:
         return actions(protocol['percentages'])
     from runner.router.adatree import SCHEMA as ADATREE_SCHEMA, METHOD
+    if 'answer_generation' in protocol:
+        from runner.router.adatree import answer_generation
+        if protocol['answer_generation'] != answer_generation():
+            raise ValueError('AdaTreeV1 generation override changed')
     if (protocol['adaptive_routing'] != ADATREE_SCHEMA
             or protocol['percentages'] != [5, 20, 40]
             or protocol.get('kv_chunk_size') is not None
@@ -57,7 +61,12 @@ def collection_actions(protocol):
             or protocol.get('answer_seeds') != [0, 1]
             or protocol.get('answers_per_question') != 2):
         raise ValueError('AdaTreeV1 requires exact prepared layout, LongBench and seeds 0/1')
-    return [dict(id=METHOD, method=METHOD, ratio=None)]
+    result = [dict(id=METHOD, method=METHOD, ratio=None)]
+    if 'followup_nocache' in protocol:
+        if protocol['followup_nocache'] is not True or not protocol.get('answer_generation'):
+            raise ValueError('Follow-up no-cache requires the explicit new generation policy')
+        result.append(dict(id='nocache', method='baseline', ratio=None))
+    return result
 
 
 def configure_engine(config, cache, protocol):

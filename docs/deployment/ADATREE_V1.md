@@ -136,45 +136,56 @@ difference on this sample. The comparison receipt is
 the original routed results and prepared files remained unchanged. All three
 successful debug engines exited and released their GPU allocations.
 
-## A800: exact existing prepared inputs, two seeds and reused no-cache
+## A800: exact prepared inputs, new thinking policy and sequential no-cache
 
 `scripts/launcher/a800_longbench_adatree_v1.sh` reads
 `config/.env.a800.adatree-v1.example` directly. No env-copy, configure,
-preparation or tokenization step is needed. Its defaults follow the chats
-“Merge tree rmask method” (`01a16c5b-da6f-74b2-bb23-7ede10e3eb98`) and
-“Tìm chat và tạo launcher mới” (`01a19a07-e070-7202-b09c-dac25b292bed`),
-with the present request taking precedence over their later one-seed/chunk variants.
+preparation or tokenization step is needed. Paths and UUIDs follow the chat
+“Merge tree rmask method” (`01a16c5b-da6f-74b2-bb23-7ede10e3eb98`), with the
+current two-seed and generation-budget requests taking precedence.
 
-- Qwen3-32B, BF16, two TP2 pairs, 95% automatic KV sizing, full 131072 window.
-- Exactly 503 original prompts × seeds 0 and 1 = 1006 AdaTreeV1 answers.
-- One scheduled method: AdaTreeV1. The three leaves are possible decisions,
-  not three separate fixed-control runs. No new baseline or independent probes.
-- Prepared path: `/mnt/sde/jh/projects/unified-cache-management/.results/longbench-v2-a800-tp2-tree-prophetkv-2seed-v1/prepared`.
-- Existing baseline path: the sibling `baseline-source/` in that old run.
-- Fresh result/cache names: `longbench-v2-a800-tp2-adatree-v1-2seed-v1`.
-- Original token IDs, question positions and chunk4096 boundaries are preserved.
-  Chunk overrides are rejected, including metadata-only rechunking.
+1. Run AdaTreeV1 for all 503 prompts at seeds 0 and 1: 1006 answers.
+2. Wait for every owned router engine to exit, then run connector-free no-cache
+   on the same 503 prompts and seeds: another 1006 answers.
+3. Publish the final comparison from exact shared input/seed pairs, using the
+   newly generated no-cache records. Old no-cache results remain untouched.
 
-The first start adopts existing preparation receipts and verifies all 1006
-existing no-cache answers against exact input hashes, token hashes, seed pairs
-and thinking policy. Missing or incompatible data stops adoption before GPU
-launch. Baseline artifacts are read in place under their original protocols;
-they are not copied, relabeled or overwritten. A normal resume preserves accepted
-answers, checks immutable settings/prepared/baseline metadata and runs only missing
-answers. Native per-request checks and owned-process locks remain in force.
+Both phases use the same explicit generation policy:
 
-After committing and pushing local branch `AdaTreeV1` to `origin/AdaTreeV1`,
-run these commands **on A800** to fetch code into a fresh checkout:
+- At most **8192 thinking content tokens**. Reaching this cap forces the native
+  `</think>` token and transition into answer generation in the same request.
+- At most **10000 total output tokens**, including thinking, answer, transition
+  and control tokens. Earlier thinking closure leaves more room for the answer.
+- Exact tail repetition: minimum pattern32, maximum128, minimum4 copies.
+  Detection closes thinking early and continues the answer; it never stops an
+  answer because that answer contains a repeated pattern.
+- Qwen3-32B, BF16, two TP2 pairs, 95% automatic KV sizing, full131072 window.
+  There are no separate fixed5/20/40 controls or independent feature probes.
+
+The existing prepared directory is
+`/mnt/sde/jh/projects/unified-cache-management/.results/longbench-v2-a800-tp2-tree-prophetkv-2seed-v1/prepared`.
+Its bytes, token IDs, question positions and chunk4096 boundaries stay unchanged.
+A request-local generation view overrides only the output policy; records retain
+both the original `prepared_generation_policy` and the effective8192/10000
+policy plus the breaker configuration. Original preparation receipts and rows
+keep their original generation provenance.
+
+Fresh result/cache names are
+`longbench-v2-a800-tp2-adatree-v1-think8192-total10000-2seed-v2`.
+A run configured with the previous budgets cannot silently resume with these
+settings. The former1006-answer, reused-baseline workflow remains readable under
+its original protocol. The new launcher does not depend on the old baseline files.
+
+After pushing branch `AdaTreeV1`, use a fresh checkout on A800:
 
 ```bash
 (
 set -e
 repo=/mnt/sde/jh/projects/unified-cache-management
-code="$repo/.worktrees/adatree-v1-a800"
+code="$repo/.worktrees/adatree-v1-a800-budget-v2"
 git -C "$repo" fetch origin AdaTreeV1
 git -C "$repo" worktree add --detach "$code" origin/AdaTreeV1
 cd "$code"
-# Discard stale launcher variables in this subshell; use the supplied A800 defaults.
 unset UCM_ENV_FILE PROJECT_DIR PYTHON_BIN MODEL_PATH EXPERIMENT_DIR CACHE_ROOT
 unset PREPARED_DIR BASELINE_SOURCE GPU_PRIMARY KV_CHUNK_SIZE TP SEED
 unset ANSWER_SEEDS ANSWERS_PER_QUESTION
@@ -183,21 +194,24 @@ bash scripts/launcher/a800_longbench_adatree_v1.sh status
 )
 ```
 
-`start` launches the existing detached supervisor with the four historical A800
-UUIDs. Use its assigned devices after prior jobs have exited. To resume or report,
-run the same launcher from that checkout with `resume`, `status` or `report`.
-`report` writes the normal method summary plus `comparison.md`, using only exact
-shared prompt/seed pairs with the old no-cache records. The final paired report is
-`comparison-final.md`; old baseline hardware provenance is retained.
+`start` launches the detached supervisor. `resume` schedules only missing answers
+and preserves the cached-then-baseline phase order. A failed router phase stops
+before baseline startup. Use `report` for method progress and `comparison.md`;
+`comparison-final.md` is published after both phases finish. While no-cache is
+still pending, the paired comparison reports only completed shared pairs.
+Per-request checks and process ownership/retirement checks remain enabled.
 
-For a later source update after stopping this new run with its `stop` command:
+For later source updates to this new run, stop its supervisor first, then:
 
 ```bash
-cd /mnt/sde/jh/projects/unified-cache-management/.worktrees/adatree-v1-a800
+cd /mnt/sde/jh/projects/unified-cache-management/.worktrees/adatree-v1-a800-budget-v2
 git pull --ff-only origin AdaTreeV1
 bash scripts/launcher/a800_longbench_adatree_v1.sh resume
 ```
 
-The launcher has CPU coverage for adoption, exact inputs, seed scope, adaptive
-worker dispatch, baseline receipts and paired reporting. It has not been run on
-A800 in this task. Local GPU debug uses the separate TP4 profile described above.
+CPU tests cover the budget boundaries, forced transition, repetition detection,
+vLLM parameter transport/scheduler stop, shared generation configuration for
+both methods, exact prepared input preservation, phase ordering/failure, absence
+of a KV connector in no-cache, resume policy checks and paired record validation.
+This launcher has not been executed on A800 in this task. Existing local debug
+jobs retain their original generation budgets.

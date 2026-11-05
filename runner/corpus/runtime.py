@@ -69,6 +69,10 @@ class Engine:
         cfg=config(protocol['model'],self.profile,self.cached,self.cache,None,
                    protocol.get('hardware_profile','server'),tp=self.tp)
         self.tree_cached = protocol.get('schema') == 'tree-prophetkv-thinking-collection-v1'
+        if self.tree_cached and not self.cached and protocol.get('followup_nocache'):
+            from runner.tree.collection import inventory
+            inventory(protocol)
+            self.tree_cached = False
         if self.tree_cached:
             if not self.cached:
                 raise ValueError('Tree collection runs only cached answers')
@@ -215,6 +219,13 @@ class Engine:
         return result,ds,attention
 
     def answer(self,definition,case,attention=None,overhead=0.,route_started=None, *, seed=None, policy=None):
+        if case == 'nocache' and self.protocol.get('followup_nocache'):
+            from runner.tree.collection import inventory
+            from runner.router.adatree import answer
+            if (self.cached or inventory(self.protocol).get(case) != definition
+                    or attention is not None or overhead or route_started is not None or policy is not None):
+                raise ValueError('Follow-up baseline must use a connector-free engine')
+            return answer(self, seed, baseline=True)
         if definition['method'] == 'adatree-v1':
             from runner.tree.collection import inventory
             from runner.router.adatree import answer

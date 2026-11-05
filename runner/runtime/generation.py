@@ -2,7 +2,7 @@
 import time
 
 
-def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None, phase=None, seed=0, progress=None):
+def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None, phase=None, seed=0, progress=None, loop_breaker=None):
     from vllm import SamplingParams
     from vllm.inputs import TokensPrompt
     if engine.has_unfinished_requests():
@@ -18,7 +18,9 @@ def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None,
             raise ValueError('Thinking answer requires its complete frozen generation policy')
     extra = {METADATA_KEY: metadata} if metadata is not None else {}
     from runner.runtime.thinking_loop import KEY as LOOP_KEY, CONFIG as LOOP_CONFIG
-    loop_breaker = dict(LOOP_CONFIG) if policy is not None else None
+    if loop_breaker is not None and policy is None:
+        raise ValueError('Thinking loop breaker requires a thinking policy')
+    loop_breaker = dict(LOOP_CONFIG if loop_breaker is None else loop_breaker) if policy is not None else None
     if policy is not None:
         extra[KEY] = policy
         extra[LOOP_KEY] = loop_breaker

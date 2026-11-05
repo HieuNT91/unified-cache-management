@@ -22,7 +22,8 @@ Package initializers do not load models or GPU runtimes.
 [`router/debug_adatree.py`](../docs/deployment/ADATREE_V1.md) runs one existing
 prepared Qwen3-32B prompt with AdaTreeV1 routing.
 `launcher/a800_longbench_adatree_v1.sh` runs the full prepared A800 cohort at
-seeds 0/1 and reuses the existing no-cache answers; neither regenerates inputs.
+seeds 0/1, then runs no-cache with the same 8192-thinking/10000-total budget
+and repetition breaker; neither regenerates inputs.
 
 ## Shared dependencies
 

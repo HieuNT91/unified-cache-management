@@ -25,8 +25,8 @@ def make_policy(tokenizer, prefix, answer_cap, opening_in_prompt=False):
 
 
 def validate_policy(p):
-    from runner.runtime.output_budget import PROTOCOL as TOTAL, validate_policy as validate_total
-    if isinstance(p, dict) and p.get('protocol') == TOTAL:
+    from runner.runtime.output_budget import BUDGETS as TOTAL_BUDGETS, validate_policy as validate_total
+    if isinstance(p, dict) and p.get('protocol') in TOTAL_BUDGETS:
         return validate_total(p)
     from scripts.data.ruler import CAPS
     if not isinstance(p,dict):
@@ -49,8 +49,8 @@ def validate_policy(p):
 
 
 def validate_sample_policy(sample):
-    from runner.runtime.output_budget import PROTOCOL as TOTAL, validate_sample_policy as validate_total
-    if sample.get(KEY, {}).get('protocol') == TOTAL:
+    from runner.runtime.output_budget import BUDGETS as TOTAL_BUDGETS, validate_sample_policy as validate_total
+    if sample.get(KEY, {}).get('protocol') in TOTAL_BUDGETS:
         return validate_total(sample)
     from scripts.data.ruler import CAPS
     p = validate_policy(sample.get(KEY))
@@ -65,8 +65,8 @@ def validate_sample_policy(sample):
 class BudgetState:
     """Incrementally consumes emitted IDs. Attached to the request, freed with it."""
     def __new__(cls, policy, loop_breaker=None):
-        from runner.runtime.output_budget import PROTOCOL as TOTAL, TotalBudgetState
-        if isinstance(policy, dict) and policy.get('protocol') == TOTAL:
+        from runner.runtime.output_budget import BUDGETS as TOTAL_BUDGETS, TotalBudgetState
+        if isinstance(policy, dict) and policy.get('protocol') in TOTAL_BUDGETS:
             return TotalBudgetState(policy, loop_breaker)
         return super().__new__(cls)
 
@@ -205,8 +205,8 @@ def install_scheduler_hook():
 
 def validate_thinking_outcome(value, policy):
     """Validate committed and portable phase counts without attention replay."""
-    from runner.runtime.output_budget import PROTOCOL as TOTAL, validate_outcome
-    if policy.get('protocol') == TOTAL:
+    from runner.runtime.output_budget import BUDGETS as TOTAL_BUDGETS, validate_outcome
+    if policy.get('protocol') in TOTAL_BUDGETS:
         return validate_outcome(value, policy)
     import math
     from runner.runtime.thinking_loop import validate_metrics

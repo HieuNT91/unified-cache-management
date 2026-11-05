@@ -110,7 +110,9 @@ class AdaTreeCollectionTests(unittest.TestCase):
                 self.assertIn('--adatree-v1',argv);self.assertNotIn('--kv-chunk-size',argv)
                 self.assertEqual(argv[argv.index('--answer-seeds')+1:argv.index('--percentages')],['0','1'])
                 self.assertTrue(argv[argv.index('--prepared')+1].endswith('tree-prophetkv-2seed-v1/prepared'))
-                self.assertTrue(argv[argv.index('--baseline-source')+1].endswith('tree-prophetkv-2seed-v1/baseline-source'))
+                self.assertNotIn('--baseline-source',argv)
+                self.assertIn('--adatree-thinking-8192',argv)
+                self.assertIn('--followup-nocache',argv)
             out=subprocess.run(['bash',str(launcher),'start'],env=dict(env,KV_CHUNK_SIZE='1024'),capture_output=True)
             self.assertNotEqual(out.returncode,0)
 

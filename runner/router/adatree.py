@@ -8,7 +8,7 @@ def answer_details(result, sample, tokenizer, ttft_seconds):
     """Preserve the prepared thinking policy's answer channel and budget audit."""
     from runner.reporting.aggregate import OutputAnalyzer
     from runner.runtime.thinking_budget import KEY, validate_thinking_outcome
-    from runner.runtime.output_budget import PROTOCOL as TOTAL
+    from runner.runtime.output_budget import BUDGETS as TOTAL_BUDGETS
     state = getattr(result, 'ruler_thinking_state', None)
     if (KEY in sample) != (state is not None):
         raise RuntimeError('AdaTreeV1 answer is missing its prepared thinking-policy state')
@@ -21,7 +21,7 @@ def answer_details(result, sample, tokenizer, ttft_seconds):
             raise RuntimeError('AdaTreeV1 thinking-policy state is incomplete or changed')
         metrics.update(state.metrics(tokenizer))
         timing['first_answer_content_seconds'] = result.first_answer_content_seconds
-        capped = (metrics['answer_cap_reached'] if sample[KEY]['protocol'] == TOTAL
+        capped = (metrics['answer_cap_reached'] if sample[KEY]['protocol'] in TOTAL_BUDGETS
                   else metrics['thinking_cap_reached'] or metrics['answer_cap_reached'])
         validate_thinking_outcome(dict(metrics, output_cap_reached=capped,
             ttft_seconds=ttft_seconds, **timing), sample[KEY])
@@ -65,7 +65,7 @@ def validate_routing(workers, sample, request_id, tp):
                 feature_mask_only=True, included_in_native_probe=True)
 
 
-def answer(engine, seed):
+def answer(engine, seed, *, baseline=False):
     import time
     import uuid
     from runner.cache.setups import atomic_json
@@ -76,55 +76,74 @@ def answer(engine, seed):
     from runner.router.measure import verify_retired
     from runner.reporting.aggregate import evaluation_metadata, score_answer, scoring_text
     from runner.runtime.thinking_budget import KEY, validate_thinking_outcome
-    from runner.runtime.output_budget import PROTOCOL as TOTAL
+    from runner.runtime.output_budget import BUDGETS as TOTAL_BUDGETS
 
-    rid = engine.rid('read:adatree-v1-' + uuid.uuid4().hex)
-    clean_capture(engine.llm, engine.tp)
-    started = time.perf_counter()
-    sync = engine.llm.collective_rpc(configure, kwargs=dict(method=METHOD, ratio=None))
-    if sorted(value.get('rank', -1) for value in sync) != list(range(engine.tp)):
-        raise RuntimeError('Missing AdaTreeV1 configuration rank')
-    engine.llm.collective_rpc(arm, kwargs=dict(request_id=rid,
-        boundaries=engine.sample['boundaries'], question_positions=engine.sample['question_positions']))
-    sync_seconds = time.perf_counter() - started
+    sample = generation_sample(engine.sample, engine.protocol)
+    generation_args = {}
+    if engine.protocol.get('answer_generation'):
+        generation_args['loop_breaker'] = engine.protocol['answer_generation']['loop_breaker']
+    method = 'nocache' if baseline else METHOD
+    rid = engine.rid('read:' + method + '-' + uuid.uuid4().hex)
+    sync = []; sync_seconds = 0.
+    if not baseline:
+        clean_capture(engine.llm, engine.tp)
+        started = time.perf_counter()
+        sync = engine.llm.collective_rpc(configure, kwargs=dict(method=METHOD, ratio=None))
+        if sorted(value.get('rank', -1) for value in sync) != list(range(engine.tp)):
+            raise RuntimeError('Missing AdaTreeV1 configuration rank')
+        engine.llm.collective_rpc(arm, kwargs=dict(request_id=rid,
+            boundaries=sample['boundaries'], question_positions=sample['question_positions']))
+        sync_seconds = time.perf_counter() - started
 
     def progress(value):
-        atomic_json(engine.session/'answer-progress.json', dict(value, method=METHOD, seed=seed, at=time.time()))
+        atomic_json(engine.session/'answer-progress.json', dict(value, method=method, seed=seed, at=time.time()))
 
-    output, ttft, elapsed = generate(engine.llm.llm_engine, engine.sample['token_ids'],
-        engine.sample['max_output_tokens'], rid, engine.sample['thinking'],
-        sample=engine.sample, seed=seed, progress=progress)
+    output, ttft, elapsed = generate(engine.llm.llm_engine, sample['token_ids'],
+        sample['max_output_tokens'], rid, sample['thinking'],
+        sample=sample, seed=seed, progress=progress, **generation_args)
     diagnostics = engine.llm.collective_rpc(drain)
-    routing = validate_routing(diagnostics, engine.sample, rid, engine.tp)
-    retired = verify_retired(engine.llm, engine.tp, rid, engine.scheduler)
-    engine.pc.unchanged()
-    clean_capture(engine.llm, engine.tp)
+    if baseline:
+        from runner.runtime.generation import verify_diagnostics
+        verify_diagnostics(diagnostics, sample, 'baseline', None, engine.tp, range(64))
+        if output.num_cached_tokens != 0:
+            raise ValueError('No-cache answer reused KV')
+        routing = None
+    else:
+        routing = validate_routing(diagnostics, sample, rid, engine.tp)
+    retired = verify_retired(engine.llm, engine.tp, rid, None if baseline else engine.scheduler)
+    if not baseline:
+        engine.pc.unchanged()
+        clean_capture(engine.llm, engine.tp)
     tokens = list(output.outputs[0].token_ids)
     metrics = engine.analyzer.analyze(tokens,
-        [] if hasattr(output, 'ruler_thinking_state') else engine.sample['token_ids'], engine.sample['thinking'])
+        [] if hasattr(output, 'ruler_thinking_state') else sample['token_ids'], sample['thinking'])
     if hasattr(output, 'ruler_thinking_state'):
         metrics.update(output.ruler_thinking_state.metrics(engine.analyzer.tokenizer))
     evaluation = evaluation_metadata({}, engine.row)
-    record = engine.common(METHOD, dict(answer_engine_ttft_seconds=ttft,
+    record = engine.common(method, dict(answer_engine_ttft_seconds=ttft,
         ttft_seconds=sync_seconds+ttft, generation_seconds=elapsed,
         tp_sync_seconds=sync_seconds), retired)
-    record.update(executed_action=routing['action'], routing=routing, independent_probes=0,
+    record.update(executed_action='nocache' if baseline else routing['action'], independent_probes=0,
         seed=seed, sequence_id=engine.row['id'], decision_sync=sync,
         output_token_ids=tokens, prediction=output.outputs[0].text,
         num_cached_tokens=output.num_cached_tokens,
         finish_reason=getattr(output.outputs[0], 'finish_reason', None),
         answer_validation=NATIVE_ANSWER_VALIDATION,
-        max_output_tokens=engine.sample['max_output_tokens'],
-        output_cap_reached=len(tokens)>=engine.sample['max_output_tokens'],
+        max_output_tokens=sample['max_output_tokens'],
+        output_cap_reached=len(tokens)>=sample['max_output_tokens'],
         **metrics, **evaluation,
         accuracy=score_answer(scoring_text(output.outputs[0].text, metrics, evaluation), evaluation))
+    if routing is not None:
+        record['routing'] = routing
     if 'scored_text' in metrics:
         record['timings']['first_answer_content_seconds'] = (sync_seconds+output.first_answer_content_seconds
             if output.first_answer_content_seconds is not None else None)
-        record['output_cap_reached'] = (metrics['answer_cap_reached'] if engine.sample[KEY]['protocol'] == TOTAL
+        record['output_cap_reached'] = (metrics['answer_cap_reached'] if sample[KEY]['protocol'] in TOTAL_BUDGETS
             else metrics['thinking_cap_reached'] or metrics['answer_cap_reached'])
         validate_thinking_outcome(dict(record, ttft_seconds=record['timings']['ttft_seconds'],
-            first_answer_content_seconds=record['timings']['first_answer_content_seconds']), engine.sample[KEY])
+            first_answer_content_seconds=record['timings']['first_answer_content_seconds']), sample[KEY])
+    if engine.protocol.get('answer_generation'):
+        record.update(prepared_generation_policy=engine.sample[KEY], **{KEY: sample[KEY]})
     return record, diagnostics
 
 
@@ -182,3 +201,32 @@ def check_baseline_metadata(settings):
         raise ValueError('Baseline reuse receipt changed')
     if any(file_hash(relative(source, name)) != digest for name, digest in receipt['metadata'].items()):
         raise ValueError('Original baseline metadata changed')
+
+
+def answer_generation():
+    """Explicit A800 override; original prepared generation policy stays intact."""
+    from runner.runtime.output_budget import ADATREE_PROTOCOL
+    from runner.runtime.thinking_loop import ADATREE_CONFIG
+    return dict(protocol=ADATREE_PROTOCOL, thinking_cap=8192, output_reserve=10000,
+                loop_breaker=dict(ADATREE_CONFIG))
+
+
+def generation_policy(prepared_policy, protocol):
+    from runner.runtime.output_budget import PROTOCOL as PREPARED, validate_policy
+    override = protocol.get('answer_generation')
+    if override is None:
+        return prepared_policy
+    if (protocol.get('adaptive_routing') != SCHEMA or override != answer_generation()
+            or prepared_policy.get('protocol') != PREPARED):
+        raise ValueError('Invalid AdaTreeV1 generation override')
+    validate_policy(prepared_policy)
+    result = dict(prepared_policy, **{k: override[k] for k in ('protocol', 'thinking_cap', 'output_reserve')})
+    return validate_policy(result)
+
+
+def generation_sample(prepared, protocol):
+    from runner.runtime.thinking_budget import KEY
+    if not protocol.get('answer_generation'):
+        return prepared
+    policy = generation_policy(prepared[KEY], protocol)
+    return dict(prepared, max_output_tokens=policy['output_reserve'], **{KEY: policy})

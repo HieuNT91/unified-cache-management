@@ -124,7 +124,7 @@ def snapshot(base):
                 for r in rows for seed in seeds(protocol)]
     data = records(base, role, rows, protocol, cases, pins)
     source = Path(settings['baseline_source']) if settings.get('baseline_source') else base/'baseline-source'
-    if role == 'tree' and (settings.get('baseline_source') or source.exists()):
+    if role == 'tree' and 'nocache' not in data and (settings.get('baseline_source') or source.exists()):
         data = copied_baseline(base, settings, rows, protocol, data, pins, source=source)
     if any(file_hash(path) != digest for path, digest in pins.items()):
         raise ValueError('Experiment metadata or committed receipts changed during read')
@@ -134,9 +134,10 @@ def snapshot(base):
 def report(base, same_count=False):
     from runner.reporting.status import match_records
     expected, data = snapshot(base)
-    imported = 'nocache' in data and any(
+    settings = read(Path(base)/'settings.json')
+    imported = not settings.get('followup_nocache') and 'nocache' in data and any(
         case.startswith('tree-prophetkv-') or case == 'adatree-v1' for case in data)
-    same_count = same_count or imported
+    same_count = same_count or imported or ('adatree-v1' in data and 'nocache' in data)
     # Validate all committed metrics, including records outside the intersection.
     summaries = {case: aggregate(records, expected, {}, 'running') for case, records in data.items()}
     matched, matching = match_records(data, expected)
@@ -153,6 +154,10 @@ def report(base, same_count=False):
         'Metrics: '+('exact shared prompt/seed pairs only.' if same_count else 'all available answers per method.'),
         'Done/total uses the full planned cohort. Accuracy is percent; TTFT is seconds.',
     ]
+    if settings.get('answer_generation'):
+        lines.append('AdaTreeV1 generation: thinking <=8192, total <=10000; repetition 32..128 x4.')
+        lines.append('No-cache: same new generation policy.' if settings.get('followup_nocache')
+                     else 'Reused no-cache retains its original generation policy; budgets differ.')
     if imported:
         settings = read(Path(base)/'settings.json')
         lines += ['Baseline: '+str(settings.get('baseline_source', Path(base).resolve()/'baseline-source')),

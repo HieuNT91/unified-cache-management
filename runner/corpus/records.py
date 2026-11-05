@@ -76,6 +76,8 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
             from runner.runtime.output_budget import OUTPUT_CAP
             from scripts.data.ruler import CAPS
             cap = CAPS.get(row['subtask']) if protocol['generation_protocol'] == 'ruler-nonthinking-v1' else OUTPUT_CAP
+            if protocol.get('answer_generation') and (case == 'adatree-v1' or case == 'nocache' and protocol.get('followup_nocache')):
+                cap = protocol['answer_generation']['output_reserve']
             if (result.get('max_output_tokens') != cap or result['output_tokens'] > cap
                     or len(result.get('output_token_ids', [])) != result['output_tokens']):
                 raise ValueError('Invalid committed answer output budget')
@@ -112,10 +114,18 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
     if (protocol.get('execution_profile')=='ruler-thinking' or (enabled(protocol) and protocol['dataset']=='longbench-v2')) and case!='probe':
         from runner.runtime.thinking_budget import KEY, PROTOCOL, validate_thinking_outcome
         expected_protocol = row.get('evaluation_protocol') if enabled(protocol) else protocol.get('evaluation_protocol', PROTOCOL)
-        if result.get(KEY)!=row[KEY] or result.get('evaluation_protocol')!=expected_protocol:
+        expected_policy = row[KEY]
+        if protocol.get('answer_generation') and (case == 'adatree-v1' or case == 'nocache' and protocol.get('followup_nocache')):
+            from runner.router.adatree import generation_policy
+            expected_policy = generation_policy(row[KEY], protocol)
+            if result.get('thinking_loop_breaker') != protocol['answer_generation']['loop_breaker']:
+                raise ValueError('Thinking loop breaker differs from configured policy')
+            if result.get('prepared_generation_policy') != row[KEY]:
+                raise ValueError('Prepared generation provenance changed')
+        if result.get(KEY)!=expected_policy or result.get('evaluation_protocol')!=expected_protocol:
             raise ValueError('Thinking result policy/provenance changed')
         validate_thinking_outcome(dict(result,ttft_seconds=result['timings']['ttft_seconds'],
-            first_answer_content_seconds=result['timings'].get('first_answer_content_seconds')),row[KEY])
+            first_answer_content_seconds=result['timings'].get('first_answer_content_seconds')),expected_policy)
     if full and case=='router':validate_routed(root,folder,row,protocol,result)
     if full and case!='router' and not (protocol.get('schema') in ('live-study-confirm-v1','live-study-gpu-router-v2') and case in {p['id'] for p in protocol.get('policies',[])}):
         from runner.runtime.generation import verify_diagnostics
