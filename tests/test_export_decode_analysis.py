@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts import export_decode_analysis as exporter
+from scripts.export import export_decode_analysis as exporter
 
 
 def write(path, value):

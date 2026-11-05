@@ -2,7 +2,7 @@
 from pathlib import Path
 import unittest
 
-from scripts.longbench_v2 import prepare_prompt, render
+from scripts.data.longbench_v2 import prepare_prompt, render
 from runner.reporting.aggregate import evaluation_metadata, score_answer
 
 
@@ -22,7 +22,7 @@ class Tokenizer:
 
 class LongBenchTests(unittest.TestCase):
     def test_middle_truncation_recounts_formatting_and_preserves_complete_tail(self):
-        template=(Path(__file__).resolve().parents[1]/'scripts/longbench_0shot.txt').read_text()
+        template=(Path(__file__).resolve().parents[1]/'scripts/data/longbench_0shot.txt').read_text()
         row=dict(context='first '+('abcdef '*3000)+' last',question='Which choice?',
                  choice_A='one',choice_B='two',choice_C='three',choice_D='four')
         full,query,tail=render(row,template)

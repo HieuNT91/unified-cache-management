@@ -194,7 +194,7 @@ Các thay đổi được kiểm tra bằng fixtures CPU; chưa chạy dữ li�
 
 ### Prepare lỗi vì hash adapter sau khi đã sinh đủ 2.600 prompts
 
-Cặp hash `65d47398…` → `d616631c…` của `scripts/ruler.py` chỉ khác dòng import
+Cặp hash `65d47398…` → `d616631c…` của `scripts/data/ruler.py` chỉ khác dòng import
 `check_model` từ `run` sang `runner.inputs.preparation` (commits `cd5a3c0` → `498e9dd`).
 Hàm `check_model` giữ nguyên AST. Extension cho phép đúng cặp hash đầy đủ này,
 ghi mapping vào `extension.json`, rồi vẫn đối chiếu toàn bộ390 mẫu prefix và

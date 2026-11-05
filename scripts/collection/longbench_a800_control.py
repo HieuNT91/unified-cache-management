@@ -13,16 +13,16 @@ import sys
 import time
 import uuid
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from runner.cache.setups import atomic_json, file_hash
 from runner.router.process import identity, alive, group_alive
 from runner.corpus.records import accepted, publish, record_dir
-from scripts.router_control import code_hashes, environment, terminate_owned, cleanup_caches
-from scripts.corpus_control import idle, check_hardware
-from scripts.longbench_a800_data import read, freeze, load, stage, SCHEDULE, ACTIONS, publish_protocols, scheduled, ruler_samples
+from scripts.router.router_control import code_hashes, environment, terminate_owned, cleanup_caches
+from scripts.router.corpus_control import idle, check_hardware
+from scripts.collection.longbench_a800_data import read, freeze, load, stage, SCHEDULE, ACTIONS, publish_protocols, scheduled, ruler_samples
 
-from scripts.collection_v3 import enabled, seeds, declaration, ordered_rows, PHASES
+from scripts.collection.collection_v3 import enabled, seeds, declaration, ordered_rows, PHASES
 
 
 def resolve_groups(devices, expected, tp=2, query_inventory=True):
@@ -77,7 +77,7 @@ def configure(args):
         settings['hardware_preflight'] = 'user-managed'
     if thinking:
         from runner.runtime.thinking_budget import PROTOCOL, THINKING_CAP, WINDOW, SAMPLING
-        from scripts.ruler import CAPS
+        from scripts.data.ruler import CAPS
         settings.update(execution_profile='ruler-thinking', evaluation_protocol=PROTOCOL,
                         thinking_cap=THINKING_CAP, answer_caps=CAPS, engine_window=WINDOW, sampling=SAMPLING)
     if v3:
@@ -89,7 +89,7 @@ def configure(args):
             settings.update(evaluation_protocol=RULER_PROTOCOL, thinking_cap=THINKING_CAP, output_cap=OUTPUT_CAP)
             del settings['answer_caps']
     if extend_from:
-        from scripts.ruler_extension import configure_extension
+        from scripts.collection.ruler_extension import configure_extension
         settings['extension'] = configure_extension(args, settings, selected)
         settings['samples_per_task'] = settings['extension']['target_samples_per_task']-settings['extension']['start']
     if v3 and not (args.root/'settings.json').exists():
@@ -351,7 +351,7 @@ def supervise(base, role, cached_only=False):
                 freeze(state_root/'cached-complete.json', dict(
                     answers=len(rows)*len(cases)*len(seeds(protocol)), scheduled_actions=cases,
                     protocol_sha256=file_hash(state_root/'protocol.json'), owned_engines_exited=True))
-                from scripts.longbench_a800_report import report
+                from scripts.reporting.longbench_a800_report import report
                 report(base, final=False, emit=False)
                 # A partial phase run must remain resumable for missing probes
                 # or baselines. Do not publish full completion/export receipts.
@@ -361,21 +361,21 @@ def supervise(base, role, cached_only=False):
             freeze(state_root/'controls-complete.json', dict(answers=len(rows)*len(protocol['scheduled_actions'])*len(seeds(protocol)),
                    protocol_sha256=file_hash(state_root/'protocol.json'), owned_engines_exited=True))
             if enabled(settings):
-                from scripts.longbench_a800_report import report
+                from scripts.reporting.longbench_a800_report import report
                 report(base, final=True, emit=False)
-                from scripts.router_dataset import export_collection
+                from scripts.export.router_dataset import export_collection
                 export_collection(base, base/('ruler-data.json' if role == 'ruler' else 'longbench-data.json'))
             elif role != 'extra':
                 state.update(state='waiting-for-extra', phase='waiting'); atomic_json(state_root/'supervisor.json', state)
                 if role == 'primary':
                     wait_extra(base)
-                from scripts.longbench_a800_report import report
+                from scripts.reporting.longbench_a800_report import report
                 report(base, final=True, emit=False)
                 state.update(state='collecting-features'); atomic_json(state_root/'supervisor.json', state)
                 execute_phase(base, role, 'features', state)
                 freeze(base/'features/complete.json', dict(probes=len(rows), owned_engines_exited=True,
                        protocol_sha256=file_hash(base/'features/protocol.json')))
-                from scripts.router_dataset import export_collection
+                from scripts.export.router_dataset import export_collection
                 export_collection(base, base/('ruler-data.json' if role == 'ruler' else 'longbench-data.json'))
             freeze(state_root/'complete.json', dict(complete=True, owned_engines_exited=True,
                    plan_sha256=file_hash(base/'plan.json'), feature_collection=role != 'extra'))
@@ -476,27 +476,27 @@ def main():
             parser.error('configure requires model/data/prepared/cache-root paths')
         configure(args)
     elif args.command == 'prepare':
-        from scripts.longbench_a800_data import prepare
+        from scripts.collection.longbench_a800_data import prepare
         with (args.root/'prepare.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             prepare(args.root)
     elif args.command in ('detach', 'resume'):
         detach(args.root, args.role, args.command == 'resume', cached_only=args.cached_only)
     elif args.command == 'compute-feature':
-        from scripts.export_features import export
+        from scripts.export.export_features import export
         export(args.root)
     elif args.command == 'merge':
-        from scripts.ruler_extension import merge_extension
+        from scripts.collection.ruler_extension import merge_extension
         merge_extension(args.root)
     elif args.command == 'stop':
-        from scripts.launcher_stop import stop
+        from scripts.launcher.launcher_stop import stop
         stop(args.root, Path(__file__).name, args.root/args.role)
     elif args.command == 'supervise':
         supervise(args.root, args.role, cached_only=args.cached_only)
     elif args.command == 'worker':
         worker(args.root, args.role, args.phase, args.attempt, args.group)
     else:
-        from scripts.longbench_a800_report import report
+        from scripts.reporting.longbench_a800_report import report
         report(args.root, args.command == 'status_same_count')
 
 

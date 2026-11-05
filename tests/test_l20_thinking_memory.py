@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 from runner.cache.setups import atomic_json
 from runner.router.profiles import config, validate_initialization
-from scripts.corpus_control import check_hardware
+from scripts.router.corpus_control import check_hardware
 
 
 class L20ThinkingMemoryTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class L20ThinkingMemoryTests(unittest.TestCase):
         return '\n'.join(f'{i},{name},{total},{free}' for i in range(10))
 
     def test_idle_actual_l20_inventory_reaches_runtime_capacity_profiling(self):
-        with patch('scripts.corpus_control.subprocess.check_output',side_effect=[self.inventory(),'']):
+        with patch('scripts.router.corpus_control.subprocess.check_output',side_effect=[self.inventory(),'']):
             result=check_hardware(self.settings)
         self.assertEqual(round(result['estimated_required_mib_per_rank']),46952)
         self.assertLess(result['required_mib_per_rank'],46068)
@@ -46,12 +46,12 @@ class L20ThinkingMemoryTests(unittest.TestCase):
                (self.inventory(name='NVIDIA A800'),'','explicit hardware profile')]
         for inventory,busy,message in cases:
             with self.subTest(message=message), \
-                    patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,busy]):
+                    patch('scripts.router.corpus_control.subprocess.check_output',side_effect=[inventory,busy]):
                 with self.assertRaisesRegex(ValueError,message): check_hardware(self.settings)
 
     def test_last_rank_is_checked_and_insufficient_actual_kv_still_fails(self):
         raw=self.inventory().replace('9,NVIDIA L20,46068,46065','9,NVIDIA L20,46068,43750')
-        with patch('scripts.corpus_control.subprocess.check_output',side_effect=[raw,'']):
+        with patch('scripts.router.corpus_control.subprocess.check_output',side_effect=[raw,'']):
             with self.assertRaisesRegex(ValueError,'GPU 9.*automatic KV budget'):check_hardware(self.settings)
         receipts=[dict(rank=r,kv_tokens=82304,kv_blocks=1286,block_size=64,
             rope=[dict(formula_bitwise_equal=True,table_positions=131072)]*64) for r in range(2)]
@@ -67,7 +67,7 @@ class L20ThinkingMemoryTests(unittest.TestCase):
                                        ('rtx4500ada','ruler',4,'RTX 4500 Ada Generation')]:
             settings=dict(self.settings,execution_profile=dataset,hardware_profile=profile,tp=tp,
                           groups=[[str(i) for i in range(tp)]])
-            with self.subTest(profile=profile),patch('scripts.corpus_control.subprocess.check_output',
+            with self.subTest(profile=profile),patch('scripts.router.corpus_control.subprocess.check_output',
                     side_effect=[self.inventory(100000,100000,'NVIDIA '+name),'']):
                 result=check_hardware(settings)
             self.assertNotIn('workspace_validation',result)
@@ -78,7 +78,7 @@ class L20ThinkingMemoryTests(unittest.TestCase):
     def test_engine_stops_before_warmup_when_measured_kv_is_insufficient(self):
         from runner.corpus.runtime import Engine
         from collection_fixtures import fixture, GPUS
-        from scripts.ruler import TASKS
+        from scripts.data.ruler import TASKS
         args=fixture(self.root/'engine',n=1)
         protocol=dict(dataset='ruler',execution_profile='ruler-thinking',hardware_profile='l20-tp2',
             tp=2,groups=[GPUS[:2]],prepared=str(args.prepared),model=str(args.model),cache_root=str(args.cache_root))
@@ -88,7 +88,7 @@ class L20ThinkingMemoryTests(unittest.TestCase):
             rope=[dict(formula_bitwise_equal=True,table_positions=131072)]*64) for r in range(2)]
         with patch.dict(sys.modules,{'runner.runtime.worker':NS(setup=Mock())}),patch.dict(os.environ,{}), \
                 patch('runner.corpus.runtime.start_engine',return_value=llm), \
-                patch('scripts.router_control.code_hashes',return_value={}), \
+                patch('scripts.router.router_control.code_hashes',return_value={}), \
                 patch('runner.runtime.generation.generate') as generate:
             with self.assertRaisesRegex(ValueError,'capacity'):
                 Engine(args.root,protocol,0,'cached','insufficient',rows)

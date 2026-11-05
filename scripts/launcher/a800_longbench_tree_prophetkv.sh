@@ -18,7 +18,7 @@ if [[ -n "${KV_CHUNK_SIZE:-}" ]]; then
   chunk_args=(--kv-chunk-size "$KV_CHUNK_SIZE")
 fi
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
-exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/tree_prophetkv_data.py" "$command" \
+exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/collection/tree_prophetkv_data.py" "$command" \
   --dataset longbench-v2 --root "$EXPERIMENT_DIR" --model "${MODEL_PATH:?Set MODEL_PATH}" \
   --prepared "${PREPARED_DIR:-$EXPERIMENT_DIR/prepared}" --cache-root "$CACHE_ROOT" \
   --devices "${GPU_PRIMARY:?Set four full A800 UUIDs in config/.env.a800.tree-prophetkv}" \

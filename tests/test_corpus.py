@@ -17,7 +17,7 @@ from runner.corpus.records import publish,accepted,record_dir,protocol_identity
 from runner.corpus.train import split,fold_ids,search,GRID,LOSS_GRID,COST_GRID,train,rank
 from runner.corpus.eval import replay,test_tree as evaluate,evaluation_ids
 from runner.cache.setups import atomic_json,file_hash
-from scripts.corpus_inputs import TASKS,inventory,format_corpus,prepared_rows
+from scripts.data.corpus_inputs import TASKS,inventory,format_corpus,prepared_rows
 
 
 def inventory_for(count):
@@ -190,7 +190,7 @@ class CorpusTests(unittest.TestCase):
             row=dict(index=0,input='[USER]Instructions\n'+'context '*700+'\n'+query+'[END]\n',answer_prefix=' Answer:',outputs=['SECRET'])
             tokenizer=Tokenizer();sample=format_corpus(tokenizer,row,task)
             self.assertEqual(sample['token_ids'],list(map(ord,row['input']+row['answer_prefix'])));self.assertFalse(tokenizer.thinking)
-            from scripts.ruler import CAPS
+            from scripts.data.ruler import CAPS
             self.assertEqual(sample['max_output_tokens'],CAPS[task]);self.assertNotIn('references',sample);self.assertNotIn('outputs',sample)
             self.assertEqual(sample,format_corpus(tokenizer,row,task))
             self.assertEqual(''.join(chr(sample['token_ids'][p]) for p in sample['question_positions']),query)
@@ -215,7 +215,7 @@ class CorpusTests(unittest.TestCase):
 
     def test_profiles_uuid_groups_and_capacity(self):
         from runner.router.profiles import config
-        from scripts.corpus_control import groups,check_hardware
+        from scripts.router.corpus_control import groups,check_hardware
         uuids=[f'GPU-{i:08x}-1111-2222-3333-444444444444' for i in range(8)]
         self.assertEqual(len(groups(','.join(uuids[:4]))),1)
         self.assertEqual(len(groups(','.join(uuids[:4]),','.join(uuids[4:]))),2)
@@ -230,16 +230,16 @@ class CorpusTests(unittest.TestCase):
             model=Path(td);atomic_json(model/'model.safetensors.index.json',dict(metadata=dict(total_size=64*2**30)))
             for name,capacity in [('NVIDIA A800',81920),('NVIDIA L20',49140)]:
                 inventory='\n'.join(f'{u}, {name}, {capacity}, {capacity}' for u in uuids[:4])
-                with patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,'']):
+                with patch('scripts.router.corpus_control.subprocess.check_output',side_effect=[inventory,'']):
                     hw=check_hardware(dict(model=td,dataset='longbench-v2',groups=[uuids[:4]]))
                 self.assertEqual(hw['groups'][0][0]['name'],name)
             inventory='\n'.join(f'{u}, NVIDIA L20, 24000, 24000' for u in uuids[:4])
-            with patch('scripts.corpus_control.subprocess.check_output',return_value=inventory):
+            with patch('scripts.router.corpus_control.subprocess.check_output',return_value=inventory):
                 with self.assertRaisesRegex(ValueError,'cannot fit'):check_hardware(dict(model=td,dataset='longbench-v2',groups=[uuids[:4]]))
 
     def test_explicit_local_profile_preserves_precision_and_memory_gates(self):
         from runner.router.profiles import config
-        from scripts.corpus_control import check_hardware
+        from scripts.router.corpus_control import check_hardware
         cfg=config('/model','ruler',True,'/cache',9,'rtx4500ada')
         self.assertEqual(cfg['gpu_memory_utilization'],.95)
         self.assertEqual((cfg['dtype'],cfg['tensor_parallel_size']),('bfloat16',4))
@@ -256,13 +256,13 @@ class CorpusTests(unittest.TestCase):
             atomic_json(Path(td)/'model.safetensors.index.json',dict(metadata=dict(total_size=61.2*2**30)))
             settings=dict(model=td,dataset='ruler',groups=[uuids],hardware_profile='rtx4500ada')
             inventory='\n'.join(f'{u}, NVIDIA RTX 4500 Ada Generation, 24570, 24087' for u in uuids)
-            with patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,'']):
+            with patch('scripts.router.corpus_control.subprocess.check_output',side_effect=[inventory,'']):
                 self.assertLess(check_hardware(settings)['required_mib_per_rank'],24087)
-            with patch('scripts.corpus_control.subprocess.check_output',return_value=inventory):
+            with patch('scripts.router.corpus_control.subprocess.check_output',return_value=inventory):
                 with self.assertRaisesRegex(ValueError,'explicit hardware'):check_hardware({k:v for k,v in settings.items() if k!='hardware_profile'})
-            with patch('scripts.corpus_control.subprocess.check_output',return_value=inventory.replace('24087','19000')):
+            with patch('scripts.router.corpus_control.subprocess.check_output',return_value=inventory.replace('24087','19000')):
                 with self.assertRaisesRegex(ValueError,'cannot fit'):check_hardware(settings)
-            with patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,uuids[0]]):
+            with patch('scripts.router.corpus_control.subprocess.check_output',side_effect=[inventory,uuids[0]]):
                 with self.assertRaisesRegex(ValueError,'occupied'):check_hardware(settings)
 
     def test_collection_rejects_lost_yarn_delta_normalization(self):
@@ -285,7 +285,7 @@ class CorpusTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'YaRN delta'):engine.common('probe',{},[])
 
     def test_model_snapshot_symlinks_do_not_relax_corpus_containment(self):
-        from scripts.corpus_control import model_artifact
+        from scripts.router.corpus_control import model_artifact
         from runner.corpus.dataset import relative
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);snapshot=root/'snapshot';snapshot.mkdir()
@@ -322,7 +322,7 @@ class CorpusTests(unittest.TestCase):
             paired(dict(prompt_id='a'),[],dict(prompt_id='b'),[])
 
     def test_synthetic_full_and_partial_reporting(self):
-        from scripts.corpus_control import snapshot_report
+        from scripts.router.corpus_control import snapshot_report
         for n in (50,200):
             rows=[dict(id=f'{t}-{i}',ordinal=i,subtask=t) for i in range(n) for t in TASKS]
             protocol=dict(kind='collection',dataset='ruler',limit_per_task=200,actions=DEFAULT_ACTIONS,hardware={'synthetic':True})
@@ -330,7 +330,7 @@ class CorpusTests(unittest.TestCase):
                 return dict(accuracy=1.,timings=dict(answer_engine_ttft_seconds=2.,routing_overhead_seconds=.2))
             with tempfile.TemporaryDirectory() as td:
                 root=Path(td);atomic_json(root/'cleanup.json',dict(owned_engines_exited=True))
-                with patch('scripts.corpus_control.load_run',return_value=(protocol,rows)),patch('scripts.corpus_control.accepted',side_effect=record):
+                with patch('scripts.router.corpus_control.load_run',return_value=(protocol,rows)),patch('scripts.router.corpus_control.accepted',side_effect=record):
                     result=snapshot_report(root,True)
                 self.assertEqual(result['answers'],13*n*4);self.assertEqual(result['accepted_probes'],13*n)
                 self.assertEqual(result['complete'],n==200);self.assertEqual(result['status'],'complete' if n==200 else 'partial-complete')
@@ -394,7 +394,7 @@ class CorpusOperationalTests(unittest.TestCase):
             accepted_cases.remove(('b','prophetkv-40'))
             engine=Mock();engine.sample={};engine.answer.return_value=({'value':1},[]);engine.end.return_value={'deleted':True}
             def present(root,case,row,protocol):return {'existing':True} if (row['id'],case) in accepted_cases else None
-            with patch('scripts.corpus_control.load_run',return_value=(protocol,rows)),patch('runner.corpus.collect.check_environment',return_value=protocol['groups'][0]),patch('runner.corpus.collect.accepted',side_effect=present),patch('runner.corpus.collect.Engine',return_value=engine) as constructor,patch('runner.corpus.collect.load_attention',return_value={'saved':True}) as attention,patch('runner.corpus.collect.publish') as publication:
+            with patch('scripts.router.corpus_control.load_run',return_value=(protocol,rows)),patch('runner.corpus.collect.check_environment',return_value=protocol['groups'][0]),patch('runner.corpus.collect.accepted',side_effect=present),patch('runner.corpus.collect.Engine',return_value=engine) as constructor,patch('runner.corpus.collect.load_attention',return_value={'saved':True}) as attention,patch('runner.corpus.collect.publish') as publication:
                 run_group(root,0,'cached','resume')
                 self.assertEqual(constructor.call_args.args[-1],[rows[1]])
                 engine.probe.assert_not_called();engine.begin.assert_called_once_with(rows[1])
@@ -422,13 +422,13 @@ class CorpusOperationalTests(unittest.TestCase):
             self.assertNotEqual(result.returncode,0);self.assertIn('supplied --tree',result.stderr)
 
     def test_final_reports_require_owned_exit(self):
-        from scripts.corpus_control import snapshot_report
+        from scripts.router.corpus_control import snapshot_report
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);protocol=dict(kind='collection',dataset='ruler',actions=DEFAULT_ACTIONS,hardware={})
             row=dict(id='p',ordinal=0,subtask=TASKS[0])
             result=dict(accuracy=1.,timings=dict(answer_engine_ttft_seconds=1.,routing_overhead_seconds=.1))
             atomic_json(root/'cleanup.json',dict(owned_engines_exited=False))
-            with patch('scripts.corpus_control.load_run',return_value=(protocol,[row])),patch('scripts.corpus_control.accepted',return_value=result):
+            with patch('scripts.router.corpus_control.load_run',return_value=(protocol,[row])),patch('scripts.router.corpus_control.accepted',return_value=result):
                 with self.assertRaisesRegex(ValueError,'exit'):snapshot_report(root,True)
             self.assertFalse((root/'report.json').exists())
 
@@ -463,7 +463,7 @@ class AdditionalTrainerTests(unittest.TestCase):
 
     def test_duplicate_worker_lock_blocks_configure(self):
         import fcntl
-        from scripts.corpus_control import idle
+        from scripts.router.corpus_control import idle
         with tempfile.TemporaryDirectory() as td:
             root=Path(td)
             with (root/'group0.lock').open('a') as lock:

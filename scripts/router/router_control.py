@@ -12,13 +12,13 @@ import sys
 import time
 import uuid
 
-ROOT=Path(__file__).resolve().parents[1]
+ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
 from runner.cache.setups import atomic_json,file_hash,fingerprint
 from runner.router.policy import load_policy
 from runner.router.process import identity,alive,group_alive
 from runner.router.sweep import CASES,accepted
-from scripts.router_inputs import load_prepared,prepare
+from scripts.data.router_inputs import load_prepared,prepare
 
 
 def groups(a,b):
@@ -64,7 +64,7 @@ def load_run(root, publish=True):
     rows=load_prepared(settings['prepared'])
     policy=load_policy(settings['policy'])
     from runner.inputs.layout import PROMPT_PROTOCOL
-    from scripts.ruler import EVALUATION_PROTOCOL
+    from scripts.data.ruler import EVALUATION_PROTOCOL
     if policy.get('prompt_protocol') != PROMPT_PROTOCOL or policy.get('evaluation_protocol') != EVALUATION_PROTOCOL:
         raise ValueError('Policy protocol is incompatible; no automatic refit or historical policy reuse')
     protocol={k:v for k,v in settings.items() if k not in ('policy','ruler')}
@@ -294,7 +294,7 @@ def main():
         s=json.loads((a.root/'settings.json').read_text());prepare(Path(s['ruler']),Path(s['model']),Path(s['prepared']),a.workers)
     elif a.command in ('detach','resume'):detach(a.root,a.command=='resume')
     elif a.command=='stop':
-        from scripts.launcher_stop import stop
+        from scripts.launcher.launcher_stop import stop
         stop(a.root, Path(__file__).name)
     elif a.command=='supervise':supervise(a.root)
     elif a.command in ('status','status_same_count'):status(a.root,a.command=='status_same_count')

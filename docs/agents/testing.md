@@ -1,5 +1,27 @@
 # Testing and evidence limits
 
+## AdaTreeV1 scripts directories (2026-11-05)
+
+All 28 Python scripts and three resources were moved into seven functional
+directories, with filenames and the 15 shell launcher paths retained. No cleanup
+candidate was removed. Imports, direct commands, resource locations, repository
+roots, test patch targets and active documentation use the new paths.
+
+All 455 CPU tests across 47 modules passed, with no skips. The initial run found
+one corpus-status fixture that located the controller beside the reporter; its
+path was updated and all four corpus-status tests passed on rerun. Coverage
+includes baseline, router, Tree-ProphetKV, collection, launcher ownership,
+setup/sweep/resume, thinking budgets, reporting and standalone exports. The v3
+export fixture also invokes the relocated CLI outside the checkout with an empty
+PYTHONPATH and checks the resulting feature/accuracy arrays.
+
+All 20 direct script CLI help commands passed outside the checkout. Python/shell
+syntax, module/resource resolution, recursive source hashes, Git visibility and
+`git diff --check` passed. The three resources and legacy runtime manifest remain
+byte-identical. Normalized ASTs are unchanged for 26 moved scripts; the other two
+add repository import bootstrapping for the same-count wrapper and v3 exporter.
+No GPU, SSH, real-data job or remote execution ran.
+
 ## AdaTreeV1 runner packages (2026-11-05)
 
 The 41 retained runner implementation modules now live in seven functional packages.

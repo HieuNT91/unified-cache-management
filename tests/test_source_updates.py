@@ -10,9 +10,10 @@ from unittest.mock import patch
 
 from runner.corpus.records import record_dir
 from runner.cache.setups import atomic_json, file_hash, fingerprint
-from scripts import longbench_a800_control as control
-from scripts import longbench_a800_data as data
-from scripts import router_control, corpus_control
+from scripts.collection import longbench_a800_control as control
+from scripts.collection import longbench_a800_data as data
+from scripts.router import router_control
+from scripts.router import corpus_control
 from test_collection_v3 import fixture, commit
 
 
@@ -95,7 +96,7 @@ class SourceUpdateTests(unittest.TestCase):
                         prepared=str(prepared), policy=str(policy_path))
         atomic_json(self.root/'settings.json', settings)
         from runner.inputs.layout import PROMPT_PROTOCOL
-        from scripts.ruler import EVALUATION_PROTOCOL
+        from scripts.data.ruler import EVALUATION_PROTOCOL
         policy = dict(prompt_protocol=PROMPT_PROTOCOL, evaluation_protocol=EVALUATION_PROTOCOL)
         with patch.object(router_control, 'code_hashes', return_value={'new.py': 'new'}), \
                 patch.object(router_control, 'load_prepared', return_value=[]), \

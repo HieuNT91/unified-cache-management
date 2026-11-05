@@ -26,7 +26,7 @@ and real-data training have not been performed for this implementation.
 | [runner/inputs/preparation.py](runner/inputs/preparation.py), [runner/runtime/generation.py](runner/runtime/generation.py), [runner/runtime/single.py](runner/runtime/single.py) | Prompt preparation, shared inference/validation and single-input execution |
 | [runner/](runner/README.md) | Package map, dependency audit, layouts, cache lifecycle, reporting and routers |
 | [ucm/](ucm/) | Connector, storage, sparse attention and runtime integration |
-| [scripts/](scripts/) | Dataset adapters, launchers, baseline/ProphetKV controls and router workflows |
+| [scripts/](scripts/README.md) | Functional directory map, dataset adapters, launchers, controls and router workflows |
 | [scripts/launcher/](scripts/launcher/) | Shell launchers for A800/L20 and router/corpus workflows, plus their shared environment loader |
 | [tests/](tests/) | CPU regressions and opt-in GPU validation |
 | [docs/agents/](docs/agents/architecture.md) | Architecture, invariants, testing and experiment rules |
@@ -56,8 +56,8 @@ export MODEL_PATH=/path/to/Qwen3-32B
 export RULER_SOURCE="$PWD/.cache/RULER-rpkv"
 export CUDA_VISIBLE_DEVICES=''
 
-"$PYTHON_BIN" scripts/ruler.py download --ruler "$RULER_SOURCE"
-"$PYTHON_BIN" scripts/ruler.py prepare --ruler "$RULER_SOURCE" \
+"$PYTHON_BIN" scripts/data/ruler.py download --ruler "$RULER_SOURCE"
+"$PYTHON_BIN" scripts/data/ruler.py prepare --ruler "$RULER_SOURCE" \
   --model "$MODEL_PATH" --output inputs/rpkv-ruler64k
 
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 "$PYTHON_BIN" \

@@ -16,7 +16,7 @@ case "$command" in
   *) prepared_args=(--prepared "${PREPARED_DIR:-$CODE_ROOT/inputs/ruler-corpus-v1}") ;;
 esac
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1
-exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/corpus_control.py" "$command" \
+exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/router/corpus_control.py" "$command" \
   --root "${EXPERIMENT_DIR:-$CODE_ROOT/outputs/ruler-corpus-v1}" \
   --model "${MODEL_PATH:-$CODE_ROOT/models/Qwen3-32B}" \
   "${prepared_args[@]}" \

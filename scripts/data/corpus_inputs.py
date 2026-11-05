@@ -10,7 +10,7 @@ from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 
 from runner.cache.setups import atomic_json, file_hash, fingerprint, setup_lock
-from scripts.ruler import format_sample, definitions, query_span
+from scripts.data.ruler import format_sample, definitions, query_span
 
 SOURCES = Path(__file__).with_name('corpus_sources.json')
 TASKS = tuple(json.loads(SOURCES.read_text())['definitions'])
@@ -117,14 +117,14 @@ def prepared_rows(output):
 
 def prepare(ruler,model,output,workers=4,limit=500):
     from types import SimpleNamespace
-    from scripts.ruler import prepare as prepare_original
+    from scripts.data.ruler import prepare as prepare_original
     # Always generate the original 500-row task batch before selecting a tranche.
     prepare_original(SimpleNamespace(ruler=Path(ruler),model=Path(model),output=Path(output),samples=500,seed=42))
     return original_rows(Path(output))
 
 
 def original_rows(output):
-    from scripts.ruler import EVALUATION_PROTOCOL
+    from scripts.data.ruler import EVALUATION_PROTOCOL
     output=Path(output);receipt=json.loads((output/'preparation.json').read_text())
     if receipt['spec']['protocol'] != EVALUATION_PROTOCOL:
         raise ValueError('Incompatible RULER protocol')

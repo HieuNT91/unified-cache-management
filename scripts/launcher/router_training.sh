@@ -21,7 +21,7 @@ if [[ "$command" == train && ( " $* " == *" --tree "* || " $* " == *" --tree="* 
 fi
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
-exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/train_router.py" \
+exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/router/train_router.py" \
   --dataset "$dataset" \
   --ruler-data "${RULER_DATA_FILE:-${DATA_IMPORT_DIR:-$CODE_ROOT/inputs/router-imports}/ruler-data.json}" \
   --longbench-data "${LONGBENCH_DATA_FILE:-${EXPERIMENT_DIR:-$CODE_ROOT/outputs/longbench-v2-a800-tp2-v2}/longbench-data.json}" \

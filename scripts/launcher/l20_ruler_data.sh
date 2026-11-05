@@ -27,7 +27,7 @@ if [[ -n "${EXTEND_FROM:-}" ]]; then
     [[ -n "${!key:-}" ]] || { echo "Set a fresh $key for EXTEND_FROM" >&2; exit 2; }
   done
 fi
-exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/longbench_a800_control.py" "$command" \
+exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/collection/longbench_a800_control.py" "$command" \
   --role ruler --root "${EXPERIMENT_DIR:-$CODE_ROOT/outputs/ruler-l20-tp2-500-v3}" \
   --model "${MODEL_PATH:-$CODE_ROOT/models/Qwen3-32B}" \
   --data "${RULER_PATH:-$CODE_ROOT/.cache/vendor/RULER}" \

@@ -13,7 +13,7 @@ export CACHE_ROOT="${CACHE_ROOT:-$CODE_ROOT/.cache/longbench-temporary}"
 GPU_A="${GPU_A:-GPU-6f2a33e5-aa6e-6681-3d49-1de956c38b3e,GPU-87070a52-3745-1eae-7b16-69594603f277,GPU-73ecc591-94c9-c261-412c-5e0cf51fa103,GPU-5224ff6c-63bb-3a1e-249c-15de01751b5d}"
 GPU_B="${GPU_B:-GPU-1d441d83-c33c-4797-23be-b7355d92e3b6,GPU-83ea256b-cf28-6476-ce48-f34e04955379,GPU-b6ece736-772f-8ff9-e3a6-f4a0b369e7b4,GPU-9eed921f-1ef7-c923-f4ec-acf7181237a9}"
 prepare() {
-    CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/longbench_v2.py" prepare \
+    CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/data/longbench_v2.py" prepare \
         --model "$MODEL_PATH" --data "$LONGBENCH_DATA" --output "$PREPARED_DIR"
 }
 worker() {
@@ -25,7 +25,7 @@ worker() {
         --shard "$shard" --shards 2 "$@"
 }
 report() {
-    CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_report.py" \
+    CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep/sweep_report.py" \
         --output "$EXPERIMENT_DIR" --manifest "$PREPARED_DIR/manifest.jsonl" \
         --percentages 1 5 10 15 20 30 --shards 2 "$@"
 }
@@ -70,7 +70,7 @@ case "${1:-}" in
         fi
         physical_groups=2
         [[ -z "$resume_device_group" ]] || physical_groups=1
-        CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/longbench_v2.py" disk \
+        CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/data/longbench_v2.py" disk \
             --prepared "$PREPARED_DIR" --cache-root "$CACHE_ROOT" --groups "$physical_groups"
         log_suffix=""
         [[ "$1" != resume ]] || log_suffix="-resume-$(date +%Y%m%d-%H%M%S)"
@@ -93,13 +93,13 @@ case "${1:-}" in
         report --final
         ;;
     counts)
-        CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_counts.py" \
+        CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep/sweep_counts.py" \
             --output "$EXPERIMENT_DIR" --manifest "$PREPARED_DIR/manifest.jsonl" \
             --percentages 1 5 10 15 20 30 --shards 2
         ;;
     status) report ;;
     status_same_count) report --same-count ;;
     aggregate) report --final ;;
-    stop) "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_control.py" stop --output "$EXPERIMENT_DIR" ;;
+    stop) "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep/sweep_control.py" stop --output "$EXPERIMENT_DIR" ;;
     *) echo "Usage: bash scripts/launcher/a800_longbench.sh {prepare|run|stop|resume|counts|status|status_same_count|aggregate}" >&2; exit 2 ;;
 esac

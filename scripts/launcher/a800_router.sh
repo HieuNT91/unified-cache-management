@@ -18,7 +18,7 @@ case "$command" in
     *) echo 'Usage: a800_router.sh {configure|prepare|detach|resume|stop|status|status_same_count|report}' >&2; exit 2 ;;
 esac
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1
-exec env CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/router_control.py" "$command" \
+exec env CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/router/router_control.py" "$command" \
     --root "$EXPERIMENT_DIR" --model "$MODEL_PATH" --prepared "$PREPARED_DIR" \
     --policy "$ROUTER_POLICY_FILE" --cache-root "$CACHE_ROOT" --ruler "$RULER_ROOT" \
     --gpu-a "$GPU_A" --gpu-b "$GPU_B" --workers "${PREPARE_WORKERS:-8}"

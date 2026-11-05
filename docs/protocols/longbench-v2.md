@@ -12,7 +12,7 @@ remove chunk markers/EOT padding without deleting genuine source/chat tokens.
 
 ## Prompt and generation
 
-`scripts/longbench_v2.py` formats the dataset with `scripts/longbench_0shot.txt`
+`scripts/data/longbench_v2.py` formats the dataset with `scripts/data/longbench_0shot.txt`
 and the Qwen3 native thinking chat template, once. The full question, choices,
 instructions and chat tail remain in the suffix; `question_positions` marks the
 question. Existing formatter normalization at field boundaries is distinct from
@@ -37,7 +37,7 @@ YaRN window 131072 and output reserve 16384, its formatted input limit is 114688
 That protocol remains separate from a full-text fitting subset; do not silently
 switch between them or imply that every source row fits a smaller GPU allocation.
 
-For the user-authorized local controls, `scripts/rpkv_longbench_inputs.py` records
+For the user-authorized local controls, `scripts/data/rpkv_longbench_inputs.py` records
 all 503 formatted lengths, selects randomly with seed 42 from inputs fitting the
 local KV allocation, and preserves the selected full text without middle
 truncation. Allocation 65920 leaves at most 49536 input tokens after the 16384

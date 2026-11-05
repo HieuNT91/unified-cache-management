@@ -16,7 +16,7 @@ from contextlib import redirect_stderr
 from unittest.mock import patch
 
 import numpy as np
-from scripts import export_features as ef
+from scripts.export import export_features as ef
 from runner.router.longbench_features import features as legacy_features
 
 

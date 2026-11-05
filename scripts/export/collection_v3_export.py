@@ -8,8 +8,8 @@ import tempfile
 import numpy as np
 from runner.corpus.records import record_dir
 from runner.cache.setups import file_hash, fingerprint
-from scripts.collection_v3 import ACTIONS, RATIOS, Snapshot, seeds, validate_declaration, answer_metrics
-from scripts import export_features as ef
+from scripts.collection.collection_v3 import ACTIONS, RATIOS, Snapshot, seeds, validate_declaration, answer_metrics
+from scripts.export import export_features as ef
 
 
 def complete_rows(snapshot):
@@ -31,7 +31,7 @@ def complete_rows(snapshot):
 
 
 def protected_output(output):
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     protected = [root/'.analysis'/name for name in ('ruler-features.npz', 'longbenchv2.npz')]
     if output.is_symlink() or output.resolve() in [p.resolve() for p in protected]:
         raise ValueError('Protected analysis NPZ cannot be overwritten')
@@ -140,9 +140,9 @@ def export_compact(root, output=None, quiet=False, workers=ef.DEFAULT_WORKERS):
 
 
 def export_portable(base, output):
-    from scripts.longbench_a800_control import engines_idle
-    from scripts.longbench_a800_data import read
-    from scripts.router_dataset import example, save
+    from scripts.collection.longbench_a800_control import engines_idle
+    from scripts.collection.longbench_a800_data import read
+    from scripts.export.router_dataset import example, save
     snapshot = Snapshot(base)
     for role, protocol in snapshot.protocols.items():
         name = 'complete.json' if role == 'features' else 'controls-complete.json'
@@ -181,7 +181,7 @@ def validate_portable(data):
     from runner.router.longbench_features import FEATURES, DEFINITIONS
     from runner.inputs.layout import PROMPT_PROTOCOL
     from runner.runtime.thinking_budget import KEY, validate_thinking_outcome
-    from scripts.longbench_a800_data import validate_rows
+    from scripts.collection.longbench_a800_data import validate_rows
     provenance = data['provenance']
     validate_declaration(provenance)
     if (data.get('schema') != 'attention-router-dataset-v3' or data.get('actions') != ACTIONS
@@ -222,7 +222,7 @@ def validate_portable(data):
             if KEY in row:
                 validate_thinking_outcome(value, row[KEY])
             else:
-                from scripts.ruler import CAPS
+                from scripts.data.ruler import CAPS
                 counts = ('thinking_tokens', 'answer_tokens', 'control_tokens', 'output_tokens', 'forced_tokens')
                 if (any(type(value.get(k)) is not int or value[k] < 0 for k in counts)
                         or value['thinking_tokens'] or value['forced_tokens']

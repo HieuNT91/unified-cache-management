@@ -14,9 +14,11 @@ from unittest.mock import patch
 from runner.cache.setups import atomic_json, file_hash, fingerprint
 from runner.router.longbench_features import FEATURES
 from runner.runtime.thinking_budget import KEY, PROFILE, PROTOCOL, make_policy
-from scripts import longbench_a800_data as data, longbench_a800_control as control
-from scripts import ruler_extension as extension, router_dataset as portable
-from scripts.ruler import TASKS, CAPS, EVALUATION_PROTOCOL
+from scripts.collection import longbench_a800_data as data
+from scripts.collection import longbench_a800_control as control
+from scripts.collection import ruler_extension as extension
+from scripts.export import router_dataset as portable
+from scripts.data.ruler import TASKS, CAPS, EVALUATION_PROTOCOL
 from test_ruler_thinking import Tokenizer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,7 +103,7 @@ class ExtensionTests(unittest.TestCase):
         with patch.object(control, 'code_hashes', return_value={}):
             control.configure(args)
         prepared_fixture(args.prepared, 30)
-        with patch('scripts.ruler.prepare'):
+        with patch('scripts.data.ruler.prepare'):
             data.prepare(self.old)
         complete(self.old); self.parent = dataset_fixture(self.old)
         self.args = NS(**vars(args)); self.args.root = self.new
@@ -116,7 +118,7 @@ class ExtensionTests(unittest.TestCase):
     def test_delta_plan_union_exports_and_parent_immutability(self):
         originals = {p: (file_hash(p), p.stat().st_mtime_ns) for d in (self.old, self.root/'old-inputs') for p in d.rglob('*') if p.is_file()}
         self.configure(); prepared_fixture(self.args.prepared, 200)
-        with patch('scripts.ruler.prepare') as generate:
+        with patch('scripts.data.ruler.prepare') as generate:
             plan = data.prepare(self.new)
         self.assertEqual(generate.call_args.args[0].samples, 200)
         self.assertEqual((plan['samples'], plan['answers'], plan['probes']), (2210, 26520, 2210))
@@ -124,7 +126,7 @@ class ExtensionTests(unittest.TestCase):
         self.assertEqual([sum(r['ordinal'] % 4 == g for r in rows) for g in range(4)], [546,546,559,559])
         self.assertFalse({r['id'] for r in rows} & {r['id'] for r in self.parent['rows']})
         complete(self.new)
-        from scripts.export_features import Collection
+        from scripts.export.export_features import Collection
         self.assertEqual(len(Collection(self.new).rows), 2210)
         delta = dataset_fixture(self.new)
         combined = extension.combine_exports(self.new, delta, self.new/'ruler-data.json')
@@ -135,7 +137,7 @@ class ExtensionTests(unittest.TestCase):
         self.assertEqual(combined['provenance']['components'][0]['provenance'], self.parent['provenance'])
         self.assertEqual(originals, {p: (file_hash(p), p.stat().st_mtime_ns) for p in originals})
         # Frozen delta metadata and resumed preparation keep exactly the same cohort.
-        with patch('scripts.ruler.prepare'):
+        with patch('scripts.data.ruler.prepare'):
             self.assertEqual(data.prepare(self.new), plan)
         atomic_json(self.new/'extension.json', {'changed': True})
         with self.assertRaisesRegex(ValueError, 'receipt changed'):
@@ -222,7 +224,7 @@ class ExtensionTests(unittest.TestCase):
         atomic_json(self.args.prepared/'preparation.json', receipt)
         pins = {p: (file_hash(p), p.stat().st_mtime_ns) for directory in
                 (self.root/'old-inputs', self.args.prepared) for p in directory.rglob('*') if p.is_file()}
-        with patch('scripts.ruler.prepare'):
+        with patch('scripts.data.ruler.prepare'):
             plan = data.prepare(self.new)
         self.assertEqual(plan['samples'], 2210)
         evidence = data.read(self.new/'extension.json')
@@ -260,7 +262,7 @@ class ExtensionTests(unittest.TestCase):
         settings = self.configure()
         self.assertEqual(settings['extension']['parent_scope'], 'controls-complete')
         prepared_fixture(self.args.prepared, 200)
-        with patch('scripts.ruler.prepare'):
+        with patch('scripts.data.ruler.prepare'):
             data.prepare(self.new)
         _, _, rows = data.load(self.new)
         self.assertEqual([sum(r['ordinal'] % 2 == g for r in rows) for g in range(2)], [1105,1105])

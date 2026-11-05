@@ -99,7 +99,7 @@ def run_group(root, group, case, attempt):
     from runner.runtime.generation import generate, verify_diagnostics
     from runner.runtime.worker import setup, arm, drain
     from runner.reporting.aggregate import OutputAnalyzer, evaluation_metadata, score_answer
-    from scripts.router_inputs import load_prepared
+    from scripts.data.router_inputs import load_prepared
     from runner.cache.lifecycle import wait_for_cache
     from ucm.sparse.prophetkv.lifecycle import seed_value, delete_retired_files
     root=Path(root).resolve();protocol=json.loads((root/'protocol.json').read_text())

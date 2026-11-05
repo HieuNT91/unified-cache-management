@@ -15,9 +15,9 @@ from runner.inputs.layout import stamp_sample
 from runner.cache.setups import atomic_json, file_hash
 from runner.runtime.output_budget import LONGBENCH_PROTOCOL, make_policy
 from runner.runtime.thinking_budget import KEY
-from scripts.collection_v3 import declaration
-from scripts import tree_prophetkv_data as collection
-from scripts import longbench_a800_control as control
+from scripts.collection.collection_v3 import declaration
+from scripts.collection import tree_prophetkv_data as collection
+from scripts.collection import longbench_a800_control as control
 from collection_fixtures import fixture as ruler_fixture, GPUS
 from test_ruler_thinking import Tokenizer
 
@@ -99,7 +99,7 @@ class TreeCollectionTests(unittest.TestCase):
                 with self.assertRaises(ValueError): self.adopt(args)
 
     def adopt(self, args):
-        with patch('scripts.router_control.code_hashes', return_value={'source': 'original'}):
+        with patch('scripts.router.router_control.code_hashes', return_value={'source': 'original'}):
             collection.adopt(args)
 
     def test_both_cohorts_readonly_adoption_shards_seeds_and_fast_resume(self):
@@ -126,7 +126,7 @@ class TreeCollectionTests(unittest.TestCase):
                     if Path(path).parent.name == 'samples': raise AssertionError('Resume rescanned inputs')
                     return real_read(path)
                 with patch.object(collection, 'read', side_effect=metadata_only), \
-                        patch('scripts.router_control.code_hashes', side_effect=AssertionError('Source guard')):
+                        patch('scripts.router.router_control.code_hashes', side_effect=AssertionError('Source guard')):
                     collection.adopt(args)
                 self.assertEqual(pins, {p:(file_hash(p),p.stat().st_mtime_ns) for p in pins})
                 result = collection.report(args.root)
@@ -293,7 +293,7 @@ class TreeCollectionTests(unittest.TestCase):
             with patch.dict(sys.modules, {'runner.runtime.worker':NS(setup=Mock())}), \
                     patch('runner.corpus.runtime.start_engine', side_effect=start), \
                     patch('runner.corpus.runtime.validate_initialization'), \
-                    patch('scripts.router_control.code_hashes', return_value={}), \
+                    patch('scripts.router.router_control.code_hashes', return_value={}), \
                     patch('runner.reporting.aggregate.OutputAnalyzer'), \
                     patch('runner.runtime.generation.generate', side_effect=warmup) as generate, \
                     patch('runner.cache.lifecycle.wait_for_cache', return_value={'verified_shards':4}), \

@@ -17,14 +17,14 @@ from runner.cache.setups import atomic_json, file_hash
 from runner.corpus.records import accepted, publish, record_dir
 from runner.runtime.thinking_budget import KEY, BudgetState, validate_thinking_outcome
 from runner.runtime import output_budget as budget
-from scripts import collection_v3 as v3
-from scripts import longbench_a800_data as data
-from scripts import longbench_a800_control as control
-from scripts import collection_v3_export as export
-from scripts import collection_v3_report as report
-from scripts import export_features as ef
+from scripts.collection import collection_v3 as v3
+from scripts.collection import longbench_a800_data as data
+from scripts.collection import longbench_a800_control as control
+from scripts.export import collection_v3_export as export
+from scripts.reporting import collection_v3_report as report
+from scripts.export import export_features as ef
 from test_ruler_thinking import Tokenizer, raw_row
-from scripts.ruler import TASKS, CAPS, format_thinking_sample
+from scripts.data.ruler import TASKS, CAPS, format_thinking_sample
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,7 +46,7 @@ def fixture(root, dataset='longbench-v2', thinking=False, answers=4):
             row.update(evaluation_protocol=budget.RULER_PROTOCOL if thinking else budget.LONGBENCH_PROTOCOL,
                        **{KEY: budget.make_policy(Tokenizer(), ' Answer:' if thinking else '')})
         else:
-            from scripts.ruler import EVALUATION_PROTOCOL
+            from scripts.data.ruler import EVALUATION_PROTOCOL
             row['evaluation_protocol'] = EVALUATION_PROTOCOL
         if dataset == 'longbench-v2':
             row.update(length=data.LENGTHS[i % 3], domain=f'domain{i % 2}', sub_domain=f'sub{i % 3}')
@@ -145,7 +145,7 @@ class CollectionTests(unittest.TestCase):
         settings, rows = fixture(self.root)
         phases = []
         with patch.object(control, 'execute_phase', side_effect=lambda b, r, p, state: phases.append(p)), \
-                patch('scripts.longbench_a800_report.report'), patch('scripts.router_dataset.export_collection'), \
+                patch('scripts.reporting.longbench_a800_report.report'), patch('scripts.export.router_dataset.export_collection'), \
                 patch.object(control, 'wait_extra') as extra:
             control.supervise(self.root, 'primary')
         self.assertEqual(phases, ['baseline', 'features', 'cached']); extra.assert_not_called()
@@ -217,7 +217,7 @@ class CollectionTests(unittest.TestCase):
         # Remove only fixture-created metadata to exercise real initial publication.
         for name in ('plan.json', 'rows.json', 'primary/protocol.json', 'features/protocol.json'):
             (self.root/name).unlink()
-        with patch('scripts.longbench_v2.prepare') as prepare_inputs:
+        with patch('scripts.data.longbench_v2.prepare') as prepare_inputs:
             plan = data.prepare(self.root)
         self.assertEqual(plan['answers'], 503*9*7); self.assertEqual(plan['probes'], 503)
         self.assertEqual(prepare_inputs.call_args.args[0].answers_per_question, 7)
@@ -271,6 +271,17 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(arrays['X'].shape, (4, 100)); self.assertEqual(arrays['y_accuracy'].shape, (4, 9))
         self.assertEqual(len(set(arrays['prompt_ids'])), 4); self.assertEqual(len(set(arrays['folds'])), 1)
         np.testing.assert_array_equal(arrays['X'][0], arrays['X'][3])
+        # A direct CLI invocation must find the relocated repository readers
+        # without relying on the caller's working directory or PYTHONPATH.
+        cli_output = self.root/'cli-features.npz'
+        result = subprocess.run([sys.executable, str(Path(ef.__file__).resolve()),
+            str(self.root), '--output', str(cli_output), '--workers', '1', '--quiet'],
+            cwd=self.root, env=dict(os.environ, CUDA_VISIBLE_DEVICES='', PYTHONPATH=''),
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        cli_arrays, _ = ef.verify_npz(cli_output)
+        np.testing.assert_array_equal(cli_arrays['X'], arrays['X'])
+        np.testing.assert_array_equal(cli_arrays['y_accuracy'], arrays['y_accuracy'])
         before = file_hash(path)
         with patch.object(ef, 'extracted_prompts', side_effect=RuntimeError('worker failed')):
             with self.assertRaises(RuntimeError): export.export_compact(self.root, workers=1)
@@ -311,7 +322,7 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(before, file_hash(path))
 
     def test_portable_full_seed_inventory_and_final_completion_gate(self):
-        from scripts.router_dataset import example, save, load as load_portable, export_collection
+        from scripts.export.router_dataset import example, save, load as load_portable, export_collection
         settings, rows = fixture(self.root, answers=2); row = rows[0]
         probe = commit(self.root, row, 'probe')
         measured = {seed: {a['id']: commit(self.root, row, a['id'], seed) for a in v3.ACTIONS} for seed in range(2)}

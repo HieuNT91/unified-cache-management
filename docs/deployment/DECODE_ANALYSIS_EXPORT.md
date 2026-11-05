@@ -1,6 +1,6 @@
 # Export decoded answers for error analysis (under 100 MB)
 
-Copy only `scripts/export_decode_analysis.py` to the experiment server. It runs
+Copy only `scripts/export/export_decode_analysis.py` to the experiment server. It runs
 with Python 3.9+ and the standard library; no repository imports, launcher, GPU,
 NumPy, tokenizer or model are needed.
 

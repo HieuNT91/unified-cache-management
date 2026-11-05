@@ -70,7 +70,7 @@ class ServerEnvTests(unittest.TestCase):
                     data=json.loads(result.stdout)
                     self.assertEqual(data['gpu_a'],'GPU-custom')
                     self.assertEqual(data['argv'][data['argv'].index('--output')+1],'/existing run')
-                    expected={'stop':'sweep_control.py','status':'sweep_report.py','counts':'sweep_counts.py'}[command]
+                    expected={'stop':'sweep/sweep_control.py','status':'sweep/sweep_report.py','counts':'sweep/sweep_counts.py'}[command]
                     self.assertTrue(data['argv'][0].endswith(expected))
                     if command!='stop':
                         self.assertEqual(data['argv'][data['argv'].index('--manifest')+1],'/prepared inputs/manifest.jsonl')
@@ -86,12 +86,12 @@ class ServerEnvTests(unittest.TestCase):
         (checkout/'config').mkdir()
         (checkout/'config/.env').write_text(f'PYTHON_BIN="{executable}"\nGPU_A="from-checkout-env"\n')
         targets = {
-            'a800_longbench.sh': ('sweep_report.py', '--output'),
-            'l20_ruler.sh': ('sweep_report.py', '--output'),
-            'a800_router.sh': ('router_control.py', '--root'),
-            'router_infer.sh': ('corpus_control.py', '--root'),
-            'ruler_corpus.sh': ('corpus_control.py', '--root'),
-            'ruler_corpus_add_ratios.sh': ('corpus_add_ratios.py', '--root'),
+            'a800_longbench.sh': ('sweep/sweep_report.py', '--output'),
+            'l20_ruler.sh': ('sweep/sweep_report.py', '--output'),
+            'a800_router.sh': ('router/router_control.py', '--root'),
+            'router_infer.sh': ('router/corpus_control.py', '--root'),
+            'ruler_corpus.sh': ('router/corpus_control.py', '--root'),
+            'ruler_corpus_add_ratios.sh': ('router/corpus_add_ratios.py', '--root'),
         }
         for launcher, (controller, result_arg) in targets.items():
             with self.subTest(launcher=launcher):
@@ -112,10 +112,10 @@ class ServerEnvTests(unittest.TestCase):
         config = self.root/'server.env'
         config.write_text(f'PYTHON_BIN="{executable}"\nEXPERIMENT_DIR="/existing run"\n')
         for launcher, controller in {
-            'a800_router.sh': 'router_control.py',
-            'router_infer.sh': 'corpus_control.py',
-            'ruler_corpus.sh': 'corpus_control.py',
-            'ruler_corpus_add_ratios.sh': 'corpus_add_ratios.py',
+            'a800_router.sh': 'router/router_control.py',
+            'router_infer.sh': 'router/corpus_control.py',
+            'ruler_corpus.sh': 'router/corpus_control.py',
+            'ruler_corpus_add_ratios.sh': 'router/corpus_add_ratios.py',
         }.items():
             with self.subTest(launcher=launcher):
                 result = subprocess.run(['bash', str(ROOT/'scripts/launcher'/launcher), 'stop'],
@@ -182,7 +182,7 @@ elif args[:2]==['-m','runner.runtime.sweep']:
     event('finish',shard=shard)
 elif args[0].endswith('longbench_v2.py'):
     event('disk',groups=args[args.index('--groups')+1])
-elif args[0].endswith('sweep_report.py'):
+elif args[0].endswith('sweep/sweep_report.py'):
     event('report',final='--final' in args)
 else:raise AssertionError(args)
 ''')

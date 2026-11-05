@@ -8,10 +8,10 @@ from pathlib import Path
 import sys
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from scripts.router_dataset import load as load_dataset
-from scripts.longbench_a800_data import assign_folds, LENGTHS, ACTIONS
+from scripts.export.router_dataset import load as load_dataset
+from scripts.collection.longbench_a800_data import assign_folds, LENGTHS, ACTIONS
 from runner.router.longbench_features import FEATURES, DEFINITIONS, SCHEMA
 from runner.inputs.layout import PROMPT_PROTOCOL
 from runner.cache.setups import atomic_json, file_hash, fingerprint

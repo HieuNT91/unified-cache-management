@@ -122,7 +122,7 @@ mkdir -p "$EXPERIMENT_DIR" "$CACHE_ROOT"
 df -h "$CACHE_ROOT" "$EXPERIMENT_DIR"
 # CPU tokenization/truncation only; resumable and idempotent:
 bash scripts/launcher/a800_longbench.sh prepare
-"$PYTHON_BIN" scripts/longbench_v2.py disk --prepared "$PREPARED_DIR" \
+"$PYTHON_BIN" scripts/data/longbench_v2.py disk --prepared "$PREPARED_DIR" \
   --cache-root "$CACHE_ROOT" --groups 2
 # CPU-only configuration check; no engine or KV construction:
 CUDA_VISIBLE_DEVICES='' bash run.sh sweep --model "$MODEL_PATH" \

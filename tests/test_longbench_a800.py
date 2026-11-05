@@ -14,9 +14,9 @@ import torch
 
 from runner.router.longbench_features import FEATURES, HEAD_LAYERS, DEFINITIONS, features
 from runner.cache.setups import atomic_json, file_hash
-from scripts.longbench_a800_data import ACTIONS, SCHEDULE, protocol_for
-from scripts.longbench_a800_report import summarize
-from scripts import longbench_a800_control as control
+from scripts.collection.longbench_a800_data import ACTIONS, SCHEDULE, protocol_for
+from scripts.reporting.longbench_a800_report import summarize
+from scripts.collection import longbench_a800_control as control
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -126,8 +126,8 @@ class WorkflowTests(unittest.TestCase):
                  patch.object(control, 'load', return_value=({'dataset': 'longbench-v2'}, {}, [row(0)])), \
                  patch.object(control, 'stage', return_value=({'scheduled_actions': SCHEDULE['primary']}, [row(0)])), \
                  patch.object(control, 'wait_extra', side_effect=lambda b: events.append('wait-extra')), \
-                 patch('scripts.longbench_a800_report.report', side_effect=lambda *a, **k: events.append('complete-controls')), \
-                 patch('scripts.router_dataset.export_collection', side_effect=lambda *a: events.append('export')), \
+                 patch('scripts.reporting.longbench_a800_report.report', side_effect=lambda *a, **k: events.append('complete-controls')), \
+                 patch('scripts.export.router_dataset.export_collection', side_effect=lambda *a: events.append('export')), \
                  patch.object(control.signal, 'signal'):
                 control.supervise(base, 'primary')
             self.assertEqual(events, ['baseline', 'cached', 'wait-extra', 'complete-controls', 'features', 'export'])

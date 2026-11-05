@@ -13,17 +13,17 @@ import numpy as np
 
 from runner.cache.setups import atomic_json, file_hash, fingerprint
 from runner.tree.collection import SCHEMA
-from scripts.collection_v3 import declaration, seeds
-from scripts import tree_prophetkv_data as collection
-from scripts import longbench_a800_control as control
-from scripts.export_tree_outcomes import export
+from scripts.collection.collection_v3 import declaration, seeds
+from scripts.collection import tree_prophetkv_data as collection
+from scripts.collection import longbench_a800_control as control
+from scripts.export.export_tree_outcomes import export
 from test_tree_collection import fixture, ROOT
 from test_baseline_breakdown import fixture as report_fixture, commit
 
 
 class TreeAnswerSeedTests(unittest.TestCase):
     def adopt(self, args):
-        with patch('scripts.router_control.code_hashes', return_value={'source': 'fixture'}):
+        with patch('scripts.router.router_control.code_hashes', return_value={'source': 'fixture'}):
             collection.adopt(args)
 
     def test_seed23_reuses_original_inputs_and_preserves_seed01_run(self):

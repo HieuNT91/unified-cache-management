@@ -69,7 +69,7 @@ def check_parent(ext):
 
 
 def configure_extension(args, settings, groups=None):
-    from scripts.longbench_a800_data import load, stage
+    from scripts.collection.longbench_a800_data import load, stage
     root = Path(args.extend_from).resolve()
     old, plan, rows = load(root)
     thinking = settings.get('execution_profile') == 'ruler-thinking'
@@ -116,8 +116,8 @@ def configure_extension(args, settings, groups=None):
 
 
 def completed_collection(root):
-    from scripts.longbench_a800_data import load, stage
-    from scripts.router_dataset import load as load_dataset
+    from scripts.collection.longbench_a800_data import load, stage
+    from scripts.export.router_dataset import load as load_dataset
     root = Path(root)
     old, _, rows = load(root)
     completed = read(root/'ruler/complete.json')
@@ -151,7 +151,7 @@ def checked_json(root, name, receipt):
 
 def verify_prepared_extension(settings, receipt, manifest):
     """One-time CPU prefix/content audit before publishing the delta plan."""
-    from scripts.ruler import TASKS
+    from scripts.data.ruler import TASKS
     validate_extension(settings)
     ext = settings['extension']; check_parent(ext)
     start, target = ext['start'], ext['target_samples_per_task']
@@ -243,8 +243,8 @@ def verify_prepared_extension(settings, receipt, manifest):
 
 def combine_exports(base, delta, delta_path, allow_pending=False):
     """Publish a portable union; each row keeps its original input/record hashes."""
-    from scripts.router_dataset import save
-    from scripts.longbench_a800_data import read as read_settings
+    from scripts.export.router_dataset import save
+    from scripts.collection.longbench_a800_data import read as read_settings
     settings = read_settings(Path(base)/'settings.json'); ext = settings['extension']
     check_parent(ext)
     start, target = ext['start'], ext['target_samples_per_task']
@@ -272,7 +272,7 @@ def combine_exports(base, delta, delta_path, allow_pending=False):
 
 def merge_extension(base):
     """CPU-only union after both independent collections have finished."""
-    from scripts.longbench_a800_data import load
+    from scripts.collection.longbench_a800_data import load
     base = Path(base)
     settings, _, _ = load(base)
     if 'extension' not in settings:

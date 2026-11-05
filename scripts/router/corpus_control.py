@@ -12,14 +12,14 @@ import subprocess
 import sys
 import time
 import uuid
-ROOT=Path(__file__).resolve().parents[1]
+ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
 from runner.cache.setups import atomic_json,file_hash,fingerprint
 from runner.router.tree_policy import actions,DEFAULT_ACTIONS,load
 from runner.corpus.records import accepted,record_dir,protocol_identity
 from runner.router.process import identity,alive,group_alive
-from scripts.router_control import code_hashes,environment,idle as legacy_idle,terminate_owned,cleanup_caches
-from scripts.corpus_inputs import TASKS,prepare,prepared_rows
+from scripts.router.router_control import code_hashes,environment,idle as legacy_idle,terminate_owned,cleanup_caches
+from scripts.data.corpus_inputs import TASKS,prepare,prepared_rows
 
 
 def idle(root):
@@ -448,13 +448,13 @@ def main():
             limit=json.loads((a.root/'tranche.json').read_text())['limit_per_task']
             prepare(Path(s['ruler']),Path(s['model']),Path(s['prepared']),a.workers,limit)
         else:
-            from scripts.longbench_v2 import prepare as lb_prepare
+            from scripts.data.longbench_v2 import prepare as lb_prepare
             from types import SimpleNamespace
             lb_prepare(SimpleNamespace(model=Path(s['model']),data=Path(s['data']),output=Path(s['prepared'])))
         result=dict(prepared=True)
     elif a.command in ('detach','resume'):detach(a.root,a.command=='resume');return
     elif a.command=='stop':
-        from scripts.launcher_stop import stop
+        from scripts.launcher.launcher_stop import stop
         stop(a.root, Path(__file__).name)
         return
     elif a.command=='supervise':supervise(a.root);return
@@ -469,7 +469,7 @@ def main():
             atomic_json(path,s)
         result=dict(relocated=True,launch_checks_pending=True)
     else:
-        from scripts.corpus_status import write_summary
+        from scripts.reporting.corpus_status import write_summary
         if a.command=='status_same_count':snapshot_report(a.root,same_count=True)
         write_summary(a.root,same_count=a.command=='status_same_count')
         return

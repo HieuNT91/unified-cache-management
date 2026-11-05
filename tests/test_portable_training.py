@@ -11,9 +11,9 @@ import unittest
 from unittest.mock import patch
 import numpy as np
 
-from scripts.longbench_a800_data import ACTIONS, SCHEDULE, assign_folds
-from scripts.router_dataset import save, load, validate
-from scripts import train_router as training
+from scripts.collection.longbench_a800_data import ACTIONS, SCHEDULE, assign_folds
+from scripts.export.router_dataset import save, load, validate
+from scripts.router import train_router as training
 from runner.router.longbench_features import FEATURES
 from runner.cache.setups import fingerprint, file_hash
 from runner.corpus.train import search
@@ -24,7 +24,7 @@ SMALL_GRID=[dict(family='cost',depth=d,min_leaf=2,lam=w,penalty=0.) for d,w in (
 
 
 def synthetic_rows(dataset, count=None):
-    from scripts.ruler import TASKS,EVALUATION_PROTOCOL
+    from scripts.data.ruler import TASKS,EVALUATION_PROTOCOL
     count=count or (1300 if dataset=='ruler' else 503)
     samples=count//13 if dataset=='ruler' else None
     rows=[]
@@ -111,8 +111,8 @@ class PortableTests(unittest.TestCase):
 
     def test_completed_collection_exports_records_only_after_exit_gates(self):
         from test_a800_longbench import fixture
-        from scripts.router_dataset import export_collection
-        from scripts.longbench_a800_data import read
+        from scripts.export.router_dataset import export_collection
+        from scripts.collection.longbench_a800_data import read
         from runner.cache.setups import atomic_json
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);fixture(root)
@@ -133,8 +133,8 @@ class PortableTests(unittest.TestCase):
                     return dict(features=source['features'],timings=dict(routing_overhead_seconds=source['probe_overhead_seconds']))
                 value=source['outcomes'][case]
                 return dict(value,timings=dict(ttft_seconds=value['ttft_seconds']))
-            with patch('scripts.router_dataset.accepted',side_effect=accepted), \
-                 patch('scripts.longbench_a800_control.engines_idle') as idle:
+            with patch('scripts.export.router_dataset.accepted',side_effect=accepted), \
+                 patch('scripts.collection.longbench_a800_control.engines_idle') as idle:
                 result=export_collection(root,path)
             self.assertEqual(len(result['rows']),503)
             self.assertEqual(result['actions'],ACTIONS)

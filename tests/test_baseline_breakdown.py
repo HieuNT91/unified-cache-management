@@ -12,8 +12,8 @@ from runner.cache.setups import atomic_json, file_hash, fingerprint
 from runner.runtime.thinking_budget import KEY, BudgetState
 from runner.runtime.output_budget import make_policy, RULER_PROTOCOL, LONGBENCH_PROTOCOL
 from runner.tree.collection import SCHEMA, actions
-from scripts.collection_v3 import declaration
-from scripts import experiment_task_breakdown as report
+from scripts.collection.collection_v3 import declaration
+from scripts.reporting import experiment_task_breakdown as report
 from test_ruler_thinking import Tokenizer
 
 

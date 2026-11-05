@@ -5,7 +5,7 @@ from runner.inputs.layout import stamp_sample
 from runner.cache.setups import atomic_json, file_hash, fingerprint
 from runner.runtime import output_budget as budget
 from runner.runtime.thinking_budget import KEY
-from scripts.ruler import TASKS
+from scripts.data.ruler import TASKS
 from test_ruler_thinking import Tokenizer
 
 GPUS = [f'GPU-00000000-0000-0000-0000-{i:012d}' for i in range(10)]

@@ -136,7 +136,7 @@ def prepare(args):
 
 def _prepare(args):
     from runner.runtime.sweep import load_inputs, configurations, SharedReporter
-    from scripts.sweep_control import assert_stopped
+    from scripts.sweep.sweep_control import assert_stopped
     args.output = args.output.resolve(); args.model = args.model.resolve()
     report_root, old_attempt, previous = resolve_scope(args.output)
     excluded = sorted(set(previous.get('excluded_percentages', []) if previous else []) |
@@ -146,7 +146,7 @@ def _prepare(args):
     if not set(excluded) <= set(args.percentages) or len(excluded) == len(args.percentages):
         raise ValueError('Exclude only original ratios and retain at least one ProphetKV ratio')
     configs = [c for c in configs if c['name'] not in {f'prophetkv-{p}' for p in excluded}]
-    from scripts.sweep_counts import saved_counts
+    from scripts.sweep.sweep_counts import saved_counts
     counts = saved_counts(args.output, args.manifest, args.percentages, args.shards, excluded)
     validation = getattr(args, 'validation', 'fast')
     if validation not in ('full', 'fast'):

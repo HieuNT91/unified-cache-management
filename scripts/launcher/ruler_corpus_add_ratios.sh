@@ -10,5 +10,5 @@ if [[ -z "$command" ]]; then
 fi
 shift
 export PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
-exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/corpus_add_ratios.py" "$command" \
+exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/router/corpus_add_ratios.py" "$command" \
   --root "${EXPERIMENT_DIR:-$CODE_ROOT/outputs/ruler13-120-l20}" "$@"

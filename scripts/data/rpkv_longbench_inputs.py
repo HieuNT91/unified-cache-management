@@ -6,10 +6,10 @@ import os
 from pathlib import Path
 import random
 import sys
-ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
+ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT))
 from runner.inputs.config import validate_sample
 from runner.cache.setups import atomic_json,file_hash,fingerprint
-from scripts.longbench_v2 import prepare_prompt,render
+from scripts.data.longbench_v2 import prepare_prompt,render
 
 
 def main():
@@ -21,7 +21,7 @@ def main():
     if a.samples<1 or a.output.exists():raise ValueError('Use a positive sample count and fresh output directory')
     from transformers import AutoTokenizer
     rows=json.loads(a.source.read_text());tok=AutoTokenizer.from_pretrained(a.model,local_files_only=True)
-    template=(ROOT/'scripts/longbench_0shot.txt').read_text();eligible=[];lengths={}
+    template=(ROOT/'scripts/data/longbench_0shot.txt').read_text();eligible=[];lengths={}
     for index,row in enumerate(rows):
         content,_,_=render(row,template)
         ids=tok.apply_chat_template([dict(role='user',content=content)],tokenize=True,add_generation_prompt=True,enable_thinking=True)
@@ -42,7 +42,7 @@ def main():
     atomic_json(a.output/'selection.json',dict(seed=a.seed,samples=a.samples,source=str(a.source.resolve()),
         source_sha256=file_hash(a.source),eligible=eligible,all_formatted_lengths=lengths,indices=indices,rows=manifest,
         template_sha256=fingerprint(template),tokenizer_hashes={p.name:file_hash(p) for p in a.model.iterdir() if p.is_file() and p.suffix in ('.json','.jinja','.txt','.model','.tiktoken')},
-        preparation_sha256=file_hash(Path(__file__)),formatter_sha256=file_hash(ROOT/'scripts/longbench_v2.py'),
+        preparation_sha256=file_hash(Path(__file__)),formatter_sha256=file_hash(ROOT/'scripts/data/longbench_v2.py'),
         eligibility='Full native formatted input + 16384 output <= 65920; input >8192 supports sparse context; no truncation',user_authorized_fitting_pool=True))
     (a.output/'manifest.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in manifest))
 

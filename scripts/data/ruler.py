@@ -11,7 +11,7 @@ import subprocess
 import sys
 import urllib.request
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from runner.inputs.config import validate_sample
 from runner.cache.setups import atomic_json, file_hash, fingerprint, setup_lock

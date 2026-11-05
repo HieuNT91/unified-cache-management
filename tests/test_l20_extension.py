@@ -14,9 +14,11 @@ from unittest.mock import patch
 from runner.cache.setups import atomic_json, file_hash
 from runner.runtime.thinking_budget import KEY
 from runner.router.profiles import config
-from scripts import ruler_extension as extension, longbench_a800_data as data
-from scripts import longbench_a800_control as control, router_dataset as portable
-from scripts.export_features import Collection
+from scripts.collection import ruler_extension as extension
+from scripts.collection import longbench_a800_data as data
+from scripts.collection import longbench_a800_control as control
+from scripts.export import router_dataset as portable
+from scripts.export.export_features import Collection
 from test_ruler_extension import prepared_fixture, dataset_fixture, complete
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,7 +37,7 @@ class L20ExtensionTests(unittest.TestCase):
                 control.configure(args)
             prepared_fixture(args.prepared, 200, thinking=False, adapter=extension.LEGACY_NONTHINKING_ADAPTER,
                              chunker=extension.NONTHINKING_CHUNKER_MOVE[0])
-            with patch('scripts.ruler.prepare'):
+            with patch('scripts.data.ruler.prepare'):
                 data.prepare(parent)
             complete(parent); parent_data = dataset_fixture(parent)
             self.assertNotIn('hardware_profile', parent_data['provenance'])
@@ -68,7 +70,7 @@ class L20ExtensionTests(unittest.TestCase):
                                         chunker=extension.NONTHINKING_CHUNKER_MOVE[1])
             prepared_pins = {p: (file_hash(p), p.stat().st_mtime_ns)
                              for p in args.prepared.rglob('*') if p.is_file()}
-            with patch('scripts.ruler.prepare') as generate:
+            with patch('scripts.data.ruler.prepare') as generate:
                 plan = data.prepare(delta)
             self.assertEqual(prepared_pins, {p: (file_hash(p), p.stat().st_mtime_ns) for p in prepared_pins})
             evidence = data.read(delta/'extension.json')

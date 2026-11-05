@@ -11,7 +11,7 @@ ACTIONS = [dict(id='nocache', method='baseline', ratio=None)] + [
     dict(id=f'prophetkv-{p}', method='prophetkv', ratio=p/100) for p in RATIOS]
 SCHEDULE = dict(primary=['nocache', *[f'prophetkv-{p}' for p in (1, 5, 20, 40, 70, 90)]],
                 extra=[f'prophetkv-{p}' for p in (10, 30, 50, 60, 80)], features=['probe'])
-from scripts.collection_v3 import enabled, seeds, validate_declaration
+from scripts.collection.collection_v3 import enabled, seeds, validate_declaration
 
 LENGTHS = ('short', 'medium', 'long')
 
@@ -60,7 +60,7 @@ def actions_for(settings):
     if settings.get('naive_reuse'):
         raise ValueError('Naive reuse collections are no longer supported')
     if enabled(settings):
-        from scripts.collection_v3 import ACTIONS as V3_ACTIONS
+        from scripts.collection.collection_v3 import ACTIONS as V3_ACTIONS
         return V3_ACTIONS
     return ACTIONS
 
@@ -102,11 +102,11 @@ def prepare(base):
     actions_for(settings)  # Reject removed collection modes before preparing inputs.
     prepared = Path(settings['prepared'])
     if dataset == 'longbench-v2':
-        from scripts.longbench_v2 import prepare as prepare_inputs
+        from scripts.data.longbench_v2 import prepare as prepare_inputs
         prepare_inputs(SimpleNamespace(model=Path(settings['model']), data=Path(settings['data']), output=prepared, collection_v3=enabled(settings),
                                        answers_per_question=settings.get('answers_per_question', 1)))
     else:
-        from scripts.ruler import prepare as prepare_inputs
+        from scripts.data.ruler import prepare as prepare_inputs
         prepare_inputs(SimpleNamespace(model=Path(settings['model']), ruler=Path(settings['data']), output=prepared,
                                        samples=settings.get('extension', {}).get('target_samples_per_task', settings['samples_per_task']), seed=settings['seed'],
                                        thinking=settings.get('execution_profile') == 'ruler-thinking', collection_v3=enabled(settings)))
@@ -115,7 +115,7 @@ def prepare(base):
         raise ValueError('Prepared manifest changed')
     manifest = [json.loads(line) for line in (prepared/'manifest.jsonl').read_text().splitlines() if line.strip()]
     if 'extension' in settings:
-        from scripts.ruler_extension import verify_prepared_extension
+        from scripts.collection.ruler_extension import verify_prepared_extension
         freeze(base/'extension.json', verify_prepared_extension(settings, receipt, manifest))
     rows = []; counts = {}; start = ruler_start(settings)
     for index, row in enumerate(manifest):
@@ -172,7 +172,7 @@ def ruler_samples(settings):
 def ruler_start(settings):
     if 'extension' not in settings:
         return 0
-    from scripts.ruler_extension import validate_extension
+    from scripts.collection.ruler_extension import validate_extension
     validate_extension(settings)
     return settings['extension']['start']
 
@@ -197,7 +197,7 @@ def validate_rows(settings, rows):
         if len({r['source_id'] for r in rows}) != 503 or {r['ordinal'] for r in rows} != set(range(503)):
             raise ValueError('Expected 503 unique source rows')
     else:
-        from scripts.ruler import TASKS
+        from scripts.data.ruler import TASKS
         start = ruler_start(settings)
         if settings.get('execution_profile') == 'ruler-thinking':
             from runner.runtime.thinking_budget import PROTOCOL, KEY, validate_policy
@@ -206,7 +206,7 @@ def validate_rows(settings, rows):
             if any(r.get('evaluation_protocol') != PROTOCOL for r in rows):
                 raise ValueError('Thinking RULER evaluation identity mismatch')
             for row in rows:
-                from scripts.ruler import CAPS
+                from scripts.data.ruler import CAPS
                 policy = validate_policy(row[KEY])
                 if (not enabled(settings) and policy['answer_cap'] != CAPS.get(row['subtask'])) or row['input_tokens']+policy['output_reserve'] > 82304:
                     raise ValueError('Thinking row task cap or capacity mismatch')

@@ -11,7 +11,7 @@ from unittest.mock import patch
 import numpy as np
 
 from runner.cache.setups import file_hash
-from scripts import export_features as exporter
+from scripts.export import export_features as exporter
 from test_baseline_breakdown import fixture, commit
 
 
@@ -122,7 +122,7 @@ class TreeOutcomeExportTests(unittest.TestCase):
                 self.assertEqual(data['answer_tokens'].dtype, np.dtype('int64'))
 
     def test_token_counts_are_preserved_and_invalid_counts_never_publish(self):
-        from scripts import export_tree_outcomes as tree_exporter
+        from scripts.export import export_tree_outcomes as tree_exporter
         expected = [dict(prompt_id=json.dumps(['p',0]), subtask='task')]
         base = dict(expected[0], accuracy=.5, timings=dict(ttft_seconds=2.))
         records = {'nocache': [dict(base, thinking_tokens=13, answer_tokens=7)],

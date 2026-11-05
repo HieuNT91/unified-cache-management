@@ -48,7 +48,7 @@ if [[ -n "${EXTEND_FROM:-}" ]]; then
     [[ -n "${!key:-}" ]] || { echo "Set a fresh $key for EXTEND_FROM" >&2; exit 2; }
   done
 fi
-exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/longbench_a800_control.py" "$command" \
+exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/collection/longbench_a800_control.py" "$command" \
   --role ruler --thinking --hardware-profile "l40-tp$TP" \
   --root "${EXPERIMENT_DIR:-$CODE_ROOT/outputs/$default_run}" \
   --model "${MODEL_PATH:-$CODE_ROOT/models/Qwen3-32B}" \

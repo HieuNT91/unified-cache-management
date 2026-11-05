@@ -14,7 +14,7 @@ GPU_A="${GPU_A:-GPU-9af1e932-db0c-d64a-e1d4-e86854f6168b,GPU-9487c377-cb87-c9cf-
 GPU_B="${GPU_B:-GPU-21292522-6b1d-d6fd-517d-4f5ad92c228f,GPU-c7cf4603-1994-5a84-cba8-a9005bc62dc9,GPU-1ef3727d-cbd0-0c94-eb49-7d58c12344d9,GPU-34e0b17f-40d7-6140-6f41-b92ab321b9f3}"
 percentages=(1 5 10 15 20 30 40 60 80)
 prepare() {
-    CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/ruler.py" prepare \
+    CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/data/ruler.py" prepare \
         --ruler "$RULER_SOURCE" --model "$MODEL_PATH" --output "$PREPARED_DIR" --samples 500
 }
 worker() {
@@ -26,13 +26,13 @@ worker() {
         --layers 11 12 13 14 15 --context-length 65536 "$@"
 }
 report() {
-    CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_report.py" \
+    CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep/sweep_report.py" \
         --output "$EXPERIMENT_DIR" --manifest "$PREPARED_DIR/manifest.jsonl" \
         --percentages "${percentages[@]}" --shards 2 "$@"
 }
 case "${1:-}" in
     download)
-        CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/ruler.py" download --ruler "$RULER_SOURCE"
+        CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/data/ruler.py" download --ruler "$RULER_SOURCE"
         ;;
     prepare) prepare ;;
     dry-run)
@@ -58,7 +58,7 @@ case "${1:-}" in
             done
             prepare
         fi
-        CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/longbench_v2.py" disk \
+        CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/data/longbench_v2.py" disk \
             --prepared "$PREPARED_DIR" --cache-root "$CACHE_ROOT" --groups 2
         log_suffix=""
         [[ "$1" != resume ]] || log_suffix="-resume-$(date +%Y%m%d-%H%M%S)"
@@ -76,13 +76,13 @@ case "${1:-}" in
         report --final
         ;;
     counts)
-        CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_counts.py" \
+        CUDA_VISIBLE_DEVICES='' "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep/sweep_counts.py" \
             --output "$EXPERIMENT_DIR" --manifest "$PREPARED_DIR/manifest.jsonl" \
             --percentages "${percentages[@]}" --shards 2
         ;;
     status) report ;;
     status_same_count) report --same-count ;;
     aggregate) report --final ;;
-    stop) "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep_control.py" stop --output "$EXPERIMENT_DIR" ;;
+    stop) "$PYTHON_BIN" "$CODE_ROOT/scripts/sweep/sweep_control.py" stop --output "$EXPERIMENT_DIR" ;;
     *) echo "Usage: bash scripts/launcher/l20_ruler.sh {download|prepare|dry-run|run|stop|resume|counts|status|status_same_count|aggregate}" >&2; exit 2 ;;
 esac

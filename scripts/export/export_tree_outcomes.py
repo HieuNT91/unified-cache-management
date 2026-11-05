@@ -7,7 +7,7 @@ import tempfile
 
 import numpy as np
 
-from scripts.experiment_task_breakdown import snapshot
+from scripts.reporting.experiment_task_breakdown import snapshot
 
 
 def export(root, output=None, quiet=False):

@@ -105,7 +105,7 @@ SEED=42
 Use the existing compatible environment (Python3.10, vLLM0.9.2, PyTorch2.7,
 transformers4.53.2 and this repository's UCM runtime), local model and pinned
 RULER sources/assets or LongBench data. Preparation runs on CPU. See
-[`ruler.py`](../../scripts/ruler.py) for the existing official download command.
+[`ruler.py`](../../scripts/data/ruler.py) for the existing official download command.
 
 Configure resolves only that launcher's GPU indices to full UUIDs and freezes
 its assignment. **Primary does not require extra GPUs to exist or be idle.**

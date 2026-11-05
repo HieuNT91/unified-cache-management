@@ -18,7 +18,7 @@ from runner.corpus.dataset import selection
 from runner.corpus.records import accepted, publish, record_dir, protocol_identity
 from runner.cache.setups import atomic_json, file_hash
 from runner.router.tree_policy import DEFAULT_ACTIONS
-from scripts import corpus_add_ratios as extension
+from scripts.router import corpus_add_ratios as extension
 from test_corpus import archives, tiny_sample
 
 
@@ -101,7 +101,7 @@ class AddRatiosTests(unittest.TestCase):
         n = 2*len(tasks)
         atomic_json(root/f'partial-{n}-validation.json', dict(status='partial-complete', tranche_complete=True,
             scheduled_samples=n, accepted_answers={a['id']: n for a in DEFAULT_ACTIONS}, accepted_probes=n, answers=4*n))
-        with patch('scripts.corpus_inputs.prepared_rows', return_value=rows), patch('scripts.corpus_inputs.TASKS', tasks), \
+        with patch('scripts.data.corpus_inputs.prepared_rows', return_value=rows), patch('scripts.data.corpus_inputs.TASKS', tasks), \
                 patch('runner.router.profiles.validate'), patch.object(extension, 'environment_check'):
             corpus = extension.prepare(root)
         return corpus, rows
@@ -304,7 +304,7 @@ class AddRatiosTests(unittest.TestCase):
                 with self.assertRaises((ValueError, BlockingIOError)):
                     with extension.base_exclusive(root):
                         self.fail('Acquired duplicate base lock')
-                from scripts.corpus_control import idle
+                from scripts.router.corpus_control import idle
                 with self.assertRaisesRegex(ValueError, 'lock is held'):
                     idle(root)
 
@@ -329,11 +329,11 @@ class AddRatiosTests(unittest.TestCase):
             self.assertNotIn('--runtime-code', check.stdout)
 
     def test_detach_can_prepare_in_background_without_prior_verify(self):
-        from scripts.corpus_inputs import TASKS
+        from scripts.data.corpus_inputs import TASKS
         with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()):
             corpus, _ = self.fixture(Path(td), tasks=TASKS)
             (corpus.state/'protocol.json').unlink()
-            with patch('scripts.corpus_control.check_hardware'), \
+            with patch('scripts.router.corpus_control.check_hardware'), \
                     patch.object(extension.subprocess, 'run', side_effect=RuntimeError('captured launch')) as launch:
                 with self.assertRaisesRegex(RuntimeError, 'captured launch'):
                     extension.detach(corpus.root)
@@ -382,9 +382,9 @@ class AddRatiosTests(unittest.TestCase):
                         return self.code
 
                 with patch.object(extension, 'prepare', return_value=corpus), \
-                        patch('scripts.corpus_control.check_hardware'), \
-                        patch('scripts.router_control.cleanup_caches'), \
-                        patch('scripts.router_control.terminate_owned') as terminate, \
+                        patch('scripts.router.corpus_control.check_hardware'), \
+                        patch('scripts.router.router_control.cleanup_caches'), \
+                        patch('scripts.router.router_control.terminate_owned') as terminate, \
                         patch('runner.router.process.identity', return_value={'start': '1', 'cmd': 'fixture'}), \
                         patch('runner.router.process.group_alive', return_value=False), \
                         patch.object(extension, 'assert_engines_exited'), \

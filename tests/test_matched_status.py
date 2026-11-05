@@ -14,7 +14,7 @@ from runner.reporting.status import committed_records, match_records
 from runner.reporting.aggregate import aggregate
 from runner.cache.setups import atomic_json, file_hash, fingerprint
 from runner.runtime.sweep import configurations
-from scripts.sweep_report import collect
+from scripts.sweep.sweep_report import collect
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -90,7 +90,7 @@ class MatchedStatusTests(unittest.TestCase):
             with self.assertRaises(ValueError):committed_records(root,['baseline'],'pin')
 
     def test_native_router_matches_counts_and_metrics_including_empty(self):
-        from scripts.router_control import status
+        from scripts.router.router_control import status
         from runner.router.sweep import CASES
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);protocol=dict(prepared=td)
@@ -107,7 +107,7 @@ class MatchedStatusTests(unittest.TestCase):
             self.assertEqual(matched['methods']['baseline']['overall']['mean_answer_tokens'],2)
 
     def test_corpus_and_inference_recompute_paired_metrics(self):
-        from scripts.corpus_control import snapshot_report
+        from scripts.router.corpus_control import snapshot_report
         from runner.corpus.records import protocol_identity
         from runner.router.tree_policy import DEFAULT_ACTIONS,actions
         for kind in ('collection','inference'):
@@ -124,7 +124,7 @@ class MatchedStatusTests(unittest.TestCase):
                 commit(root,'nocache',record('p',score=0.,ttft=100.),protocol_identity(protocol))
                 atomic_json(root/'records'/'probe'/'q'/'validated.json',dict(complete=True))
                 atomic_json(root/'report.json',dict(original=True));before=file_hash(root/'report.json')
-                with patch('scripts.corpus_control.load_run',side_effect=AssertionError('No model verification in status')),patch('scripts.corpus_control.load',return_value={'provenance':{'hardware':{}}}):
+                with patch('scripts.router.corpus_control.load_run',side_effect=AssertionError('No model verification in status')),patch('scripts.router.corpus_control.load',return_value={'provenance':{'hardware':{}}}):
                     report=snapshot_report(root,same_count=True)
                 self.assertEqual(report['matching']['prompt_ids'],['q'])
                 self.assertEqual(set(report['accepted_answers'].values()),{1})

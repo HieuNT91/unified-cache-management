@@ -18,7 +18,7 @@ import uuid
 
 EXTRA = ('prophetkv-5', 'prophetkv-10')
 STATE = Path('extensions/add5-10')
-CODE_ROOT = Path(__file__).resolve().parents[1]
+CODE_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(CODE_ROOT))
 os.environ.update(PYTHONPATH=str(CODE_ROOT), PYTHONDONTWRITEBYTECODE='1',
                   OPENBLAS_NUM_THREADS='1', OMP_NUM_THREADS='1')
@@ -81,7 +81,7 @@ def completion(root, protocol, count):
 def environment_check(protocol):
     from importlib.metadata import version
     from runner.inputs.config import VERSIONS
-    from scripts.corpus_inputs import spec
+    from scripts.data.corpus_inputs import spec
     from runner.inputs.preparation import check_model
     model = Path(protocol['model'])
     check_model(model)
@@ -125,9 +125,9 @@ def prepare(root):
     from runner.corpus.records import accepted, record_dir, protocol_identity
     from runner.cache.setups import atomic_json
     from runner.router.profiles import validate
-    from scripts.corpus_inputs import TASKS
-    from scripts.corpus_control import groups
-    from scripts.router_control import code_hashes
+    from scripts.data.corpus_inputs import TASKS
+    from scripts.router.corpus_control import groups
+    from scripts.router.router_control import code_hashes
     from runner.runtime.generation import verify_diagnostics
     state = root/STATE
     if (state/'protocol.json').exists():
@@ -291,7 +291,7 @@ def collect(root, group, attempt):
     from runner.corpus.runtime import Engine
     from runner.corpus.records import record_dir, publish
     from runner.cache.setups import atomic_json, check_environment
-    from scripts.router_control import code_hashes
+    from scripts.router.router_control import code_hashes
     corpus = Extension(root)
     pending = corpus.pending(group)
     if not pending:
@@ -445,7 +445,7 @@ def finalize(root):
 @contextmanager
 def base_exclusive(root):
     """Coordinate with the original launcher's own locks, without replacing state."""
-    from scripts.corpus_control import idle
+    from scripts.router.corpus_control import idle
     with locked(root/'launch.lock'):
         idle(root)
         handle = (root/'run.lock').open('a')
@@ -463,8 +463,8 @@ def base_exclusive(root):
 def supervise(root):
     from runner.router.process import identity, group_alive
     from runner.cache.setups import atomic_json
-    from scripts.corpus_control import check_hardware
-    from scripts.router_control import environment, terminate_owned, cleanup_caches
+    from scripts.router.corpus_control import check_hardware
+    from scripts.router.router_control import environment, terminate_owned, cleanup_caches
     state_dir = root/STATE
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     with base_exclusive(root), locked(state_dir/'run.lock'):
@@ -535,8 +535,8 @@ def supervise(root):
 def detach(root, resume=False):
     from runner.router.process import identity
     from runner.cache.setups import atomic_json
-    from scripts.corpus_control import idle, check_hardware
-    from scripts.router_control import environment
+    from scripts.router.corpus_control import idle, check_hardware
+    from scripts.router.router_control import environment
     state = root/STATE
     protocol = read(root/'protocol.json')
     count = 13 * read(root/'tranche.json')['limit_per_task']
@@ -602,7 +602,7 @@ def main():
     if args.command in ('detach', 'resume'):
         detach(root, args.command == 'resume')
     elif args.command == 'stop':
-        from scripts.launcher_stop import stop
+        from scripts.launcher.launcher_stop import stop
         stop(root, Path(__file__).name, root/STATE)
     elif args.command == 'supervise':
         supervise(root)
@@ -618,7 +618,7 @@ def main():
             traceback.print_exc()
             raise SystemExit(76)
     elif args.command == 'report':
-        from scripts.corpus_control import idle
+        from scripts.router.corpus_control import idle
         with base_exclusive(root):
             idle(root/STATE)
             print(json.dumps(finalize(root), indent=2))

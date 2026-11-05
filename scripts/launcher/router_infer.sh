@@ -11,7 +11,7 @@ extra=()
 [[ -z "${CORPUS_ROOT:-}" ]] || extra+=(--corpus "$CORPUS_ROOT")
 [[ -z "${LONGBENCH_DATA:-}" ]] || extra+=(--data "$LONGBENCH_DATA")
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1
-exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/corpus_control.py" "$command" --inference \
+exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/router/corpus_control.py" "$command" --inference \
   --root "${EXPERIMENT_DIR:-$CODE_ROOT/outputs/tree-inference-v1}" \
   --model "${MODEL_PATH:-$CODE_ROOT/models/Qwen3-32B}" \
   --prepared "${PREPARED_DIR:-$CODE_ROOT/inputs/tree-inference-v1}" \

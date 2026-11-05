@@ -16,8 +16,8 @@ from runner.reporting import resume
 from runner.runtime import sweep
 from runner.inputs.config import VERSIONS, engine_config
 from runner.cache.setups import atomic_json, file_hash, fingerprint
-from scripts.sweep_report import collect
-from scripts import sweep_control
+from scripts.sweep.sweep_report import collect
+from scripts.sweep import sweep_control
 
 
 class ResumeTests(unittest.TestCase):
@@ -117,7 +117,7 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(again['fingerprint'],scope['fingerprint'])
 
     def test_drop_ratio_migrate_both_shards_and_resume_mixed_device_results(self):
-        from scripts.sweep_counts import saved_counts
+        from scripts.sweep.sweep_counts import saved_counts
         old=resume.prepare(self.args)
         devices=['GPU-00000000-0000-0000-0000-000000000001',
                  'GPU-00000000-0000-0000-0000-000000000002']
@@ -294,7 +294,7 @@ class ResumeTests(unittest.TestCase):
     def test_counts_precede_input_loading_and_exclude_partial_directories(self):
         import io
         from contextlib import redirect_stdout
-        from scripts.sweep_counts import saved_counts
+        from scripts.sweep.sweep_counts import saved_counts
         partial=self.output/'prophetkv-5/000001/diagnostics.json'
         atomic_json(partial, {'incomplete':True})
         with redirect_stdout(io.StringIO()) as stream:

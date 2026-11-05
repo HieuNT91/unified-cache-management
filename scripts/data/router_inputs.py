@@ -5,18 +5,18 @@ import os
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
 
 
 def load_prepared(output):
-    from scripts.corpus_inputs import original_rows
+    from scripts.data.corpus_inputs import original_rows
     return original_rows(Path(output))
 
 
 def prepare(ruler,model,output,workers=8):
     from types import SimpleNamespace
-    from scripts.ruler import prepare as prepare_original
+    from scripts.data.ruler import prepare as prepare_original
     prepare_original(SimpleNamespace(ruler=Path(ruler),model=Path(model),output=Path(output),samples=500,seed=42))
     return load_prepared(output)
 

@@ -28,7 +28,7 @@ def validate_policy(p):
     from runner.runtime.output_budget import PROTOCOL as TOTAL, validate_policy as validate_total
     if isinstance(p, dict) and p.get('protocol') == TOTAL:
         return validate_total(p)
-    from scripts.ruler import CAPS
+    from scripts.data.ruler import CAPS
     if not isinstance(p,dict):
         raise ValueError('Missing thinking budget policy')
     if (p.get('protocol') != PROTOCOL or p.get('thinking_cap') != THINKING_CAP
@@ -52,7 +52,7 @@ def validate_sample_policy(sample):
     from runner.runtime.output_budget import PROTOCOL as TOTAL, validate_sample_policy as validate_total
     if sample.get(KEY, {}).get('protocol') == TOTAL:
         return validate_total(sample)
-    from scripts.ruler import CAPS
+    from scripts.data.ruler import CAPS
     p = validate_policy(sample.get(KEY))
     if (sample.get('evaluation_protocol') != PROTOCOL or sample.get('execution_profile') != PROFILE or sample['thinking'] is not True
             or p['answer_cap'] != CAPS.get(sample.get('task'))

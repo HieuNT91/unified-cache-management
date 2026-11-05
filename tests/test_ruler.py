@@ -8,8 +8,8 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
-from scripts.ruler import TASKS, PERCENTAGES, format_sample, generator_command, query_span, CAPS
-from scripts.sweep_report import collect
+from scripts.data.ruler import TASKS, PERCENTAGES, format_sample, generator_command, query_span, CAPS
+from scripts.sweep.sweep_report import collect
 from runner.reporting.aggregate import aggregate, score_answer
 from runner.cache.setups import atomic_json
 from runner.runtime.sweep import configurations
@@ -68,7 +68,7 @@ class RulerTests(unittest.TestCase):
         args=NS(ruler=Path('/official'),model=Path('/model'),samples=100)
         customized={'qa_1':dict(task='qa',args={'dataset':'squad'})}
         constants={'qa':dict(template='context {context} question {query}',answer_prefix=' Answer:',tokens_to_generate=32)}
-        with patch('scripts.ruler.definitions',return_value=(customized,constants)):
+        with patch('scripts.data.ruler.definitions',return_value=(customized,constants)):
             command=generator_command(args,'qa_1',Path('/raw'),CharacterTokenizer())
         self.assertEqual(command[0],sys.executable)
         for flag,value in [('--num_samples','100'),('--max_seq_length','65536'),('--random_seed','42'),

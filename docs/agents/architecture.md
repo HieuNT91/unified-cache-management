@@ -20,18 +20,21 @@ are relative to the repository root.
 | Tree-ProphetKV | `runner/tree/` | Fixed tree policy validation, collection inventory and prompt cache specialization |
 | Router | `runner/router/` | Feature collection, compatible policy decisions, dense/sparse dispatch and reporting |
 | Reporting/recovery | `runner/reporting/aggregate.py`, `runner/reporting/resume.py`, `runner/reporting/status.py` | Accepted records, aggregation and resume validation |
-| Dataset adapters | `scripts/ruler.py`, `scripts/longbench_v2.py` | Source preparation and protocol-specific formatting/scoring |
-| Fixed controls | `scripts/longbench_a800_control.py`, `scripts/tree_prophetkv_data.py` | Baseline/ProphetKV collection and native tree-prophetkv controls |
+| Dataset adapters | `scripts/data/ruler.py`, `scripts/data/longbench_v2.py` | Source preparation and protocol-specific formatting/scoring |
+| Fixed controls | `scripts/collection/longbench_a800_control.py`, `scripts/collection/tree_prophetkv_data.py` | Baseline/ProphetKV collection and native tree-prophetkv controls |
 | Launchers | `scripts/launcher/*.sh` | Server and corpus/router shell entry points; shared `config/.env` loader |
-| Router training and evidence | `runner/corpus/`, `scripts/corpus_*.py`, `scripts/launcher/ruler_corpus*.sh` | Collect baseline/ProphetKV outcomes and router probe features, train/export policies, replay and validate evidence |
+| Router training and evidence | `runner/corpus/`, `scripts/router/`, `scripts/data/corpus_inputs.py`, `scripts/launcher/ruler_corpus*.sh` | Collect baseline/ProphetKV outcomes and router probe features, train/export policies, replay and validate evidence |
 
 `run.py` handles CLI dispatch only. Runtime modules and dataset adapters import
 shared functions from `runner.inputs.preparation` and `runner.runtime.generation`, rather than
 depending on the CLI. The existing `run.sh` commands remain unchanged. See [runner packages](../../runner/README.md)
 for the directory map, direct module entry points and dependency audit.
+The [scripts directory map](../../scripts/README.md) lists the functional groups,
+retained cleanup candidates and direct CLI path changes. Shell launcher paths stay
+the same.
 
-`scripts/ruler.py` contains both the RULER implementation and CLI; use
-`scripts.ruler` for Python imports. The complete prompt plus output reserve must
+`scripts/data/ruler.py` contains both the RULER implementation and CLI; use
+`scripts.data.ruler` for Python imports. The complete prompt plus output reserve must
 fit 65,536 tokens; input length is not fixed at 64,000. Parent `benchmarks/` is
 historical implementation, not a dependency for new work.
 
@@ -46,7 +49,7 @@ Their historical designs and frozen experiment runtimes remain separate.
 
 The obsolete `scripts/router_validate_local.py` and bundled
 `scripts/router_cohort.json` were also removed: their legacy per-sample/padded
-cohort is incompatible with original-token RULER. `scripts/router_inputs.py`
+cohort is incompatible with original-token RULER. `scripts/data/router_inputs.py`
 now contains only current batch preparation and validation. The historical
 one-shot policy exporter remains a data reader and requires an explicit
 `--cohort /path/to/original/frozen/cohort.json`; it does not make old policies

@@ -15,7 +15,7 @@ import weakref
 
 from runner.runtime.thinking_budget import (KEY, PROFILE, PROTOCOL, THINKING_CAP, WINDOW,
     BudgetState, make_policy, enforce_logits, stopping_hook, request_state)
-from scripts.ruler import TASKS, CAPS, format_thinking_sample, generator_command
+from scripts.data.ruler import TASKS, CAPS, format_thinking_sample, generator_command
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -172,7 +172,7 @@ class ThinkingTests(unittest.TestCase):
         args=NS(ruler=Path('/r'),model=Path('/m'),samples=30,seed=42,thinking=True)
         defs={'qa_1':dict(task='qa',args={'dataset':'squad'})}
         const={'qa':dict(template='{context}\nQuestion: {query}',answer_prefix=' Answer:',tokens_to_generate=32)}
-        with patch('scripts.ruler.definitions',return_value=(defs,const)):
+        with patch('scripts.data.ruler.definitions',return_value=(defs,const)):
             thinking=generator_command(args,'qa_1',Path('/raw'),Tokenizer())
             args.thinking=False
             self.assertEqual(thinking,generator_command(args,'qa_1',Path('/raw'),Tokenizer()))
@@ -213,7 +213,8 @@ class ThinkingTests(unittest.TestCase):
         self.assertEqual(report['natural_thinking_closures'],1)
 
     def test_thinking_configure_prepare_scope_shards_and_pinned_policies(self):
-        from scripts import longbench_a800_control as control, longbench_a800_data as data
+        from scripts.collection import longbench_a800_control as control
+        from scripts.collection import longbench_a800_data as data
         from runner.cache.setups import atomic_json,file_hash
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);prepared=root/'inputs'
@@ -235,7 +236,7 @@ class ThinkingTests(unittest.TestCase):
                     entries.append(dict(id=f'{task}-{i}',prepared=name,subtask=task))
             manifest=prepared/'manifest.jsonl';manifest.write_text(''.join(json.dumps(r)+'\n' for r in entries))
             files['manifest.jsonl']=file_hash(manifest);atomic_json(prepared/'preparation.json',dict(files=files))
-            with patch('scripts.ruler.prepare') as prepare:
+            with patch('scripts.data.ruler.prepare') as prepare:
                 plan=data.prepare(root)
             config=prepare.call_args.args[0]
             self.assertTrue(config.thinking);self.assertEqual((config.samples,config.seed),(30,42))
@@ -270,8 +271,9 @@ class ThinkingTests(unittest.TestCase):
                     self.assertIn('thinking-30',argv[argv.index(flag)+1])
 
     def test_synthetic390_export_import_training_and_provenance(self):
-        from scripts import router_dataset as portable,train_router as training
-        from scripts.longbench_a800_data import ACTIONS
+        from scripts.export import router_dataset as portable
+        from scripts.router import train_router as training
+        from scripts.collection.longbench_a800_data import ACTIONS
         from runner.cache.setups import fingerprint
         from runner.router.tree_policy import load as load_tree
         from test_portable_training import synthetic_rows,SMALL_GRID,bundle
@@ -338,7 +340,7 @@ class ThinkingTests(unittest.TestCase):
 
     def test_admission_checks_expanded_window_and_phase_overflow(self):
         from runner.runtime.thinking_budget import validate_sample_policy
-        from scripts.corpus_control import check_hardware
+        from scripts.router.corpus_control import check_hardware
         from runner.cache.setups import atomic_json
         s=sample();s['token_ids']=[65]*(WINDOW-s['max_output_tokens'])
         validate_sample_policy(s)
@@ -348,16 +350,16 @@ class ThinkingTests(unittest.TestCase):
             root=Path(tmp);atomic_json(root/'model.safetensors.index.json',dict(metadata=dict(total_size=61.2*2**30)))
             settings=dict(dataset='ruler',execution_profile=PROFILE,hardware_profile='l20-tp2',model=str(root),tp=2,groups=[['a','b']])
             raw='a,NVIDIA L20,49152,49152\nb,NVIDIA L20,49152,49152'
-            with patch('scripts.corpus_control.subprocess.check_output',side_effect=[raw,'']):
+            with patch('scripts.router.corpus_control.subprocess.check_output',side_effect=[raw,'']):
                 receipt=check_hardware(settings)
             self.assertAlmostEqual(receipt['required_mib_per_rank'],(30.6*2**30+82304*262144/2)/.95/2**20)
             self.assertAlmostEqual(receipt['estimated_required_mib_per_rank'],(30.6*2**30+82304*262144/2+3*2**30)/.95/2**20)
             self.assertEqual(receipt['workspace_validation'],'runtime-kv-capacity-audit')
 
     def test_live_report_and_portable_example_preserve_phase_metrics(self):
-        from scripts.longbench_a800_report import report
-        from scripts.longbench_a800_data import ACTIONS
-        from scripts.router_dataset import example
+        from scripts.reporting.longbench_a800_report import report
+        from scripts.collection.longbench_a800_data import ACTIONS
+        from scripts.export.router_dataset import example
         from runner.reporting.aggregate import OutputAnalyzer
         tok=Tokenizer();s=sample();p=s[KEY]
         ids=closed(p,tok.encode('TARGET'),[3])
@@ -375,8 +377,8 @@ class ThinkingTests(unittest.TestCase):
         plan=dict(answers=4680,probes=390)
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp)
-            with patch('scripts.longbench_a800_report.load',return_value=(settings,plan,[row])), \
-                 patch('scripts.longbench_a800_report.records',return_value={a['id']:[record] for a in ACTIONS}):
+            with patch('scripts.reporting.longbench_a800_report.load',return_value=(settings,plan,[row])), \
+                 patch('scripts.reporting.longbench_a800_report.records',return_value={a['id']:[record] for a in ACTIONS}):
                 value=report(base,emit=False)
             overall=value['methods']['nocache']['overall']
             self.assertEqual(overall['ruler_nulls'],'1/1')

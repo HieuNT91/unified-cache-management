@@ -47,7 +47,7 @@ thinking, truncation and scoring protocol while sharing metadata-only chunking.
 
 ## Preparation, provenance and scoring
 
-Use `scripts/ruler.py` for the implementation and CLI, or import `scripts.ruler`
+Use `scripts/data/ruler.py` for the implementation and CLI, or import `scripts.data.ruler`
 from Python. See [README preparation commands](../../README.md#prepare-and-check-on-cpu)
 and [CPU regression tests](../agents/testing.md).
 

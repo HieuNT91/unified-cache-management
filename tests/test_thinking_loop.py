@@ -233,8 +233,8 @@ class ThinkingLoopTests(unittest.TestCase):
             validate_thinking_outcome(values, p)
 
     def test_portable_and_report_keep_successful_broken_answers(self):
-        from scripts.router_dataset import example
-        from scripts.collection_v3 import answer_metrics
+        from scripts.export.router_dataset import example
+        from scripts.collection.collection_v3 import answer_metrics
         from runner.reporting.aggregate import metrics
         p = output_budget.make_policy(Tokenizer())
         tokens = [65] * 24 + [p['close_id']] + p['transition_ids'] + [66, 3]

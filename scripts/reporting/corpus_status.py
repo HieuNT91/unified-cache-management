@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from runner.corpus.records import protocol_identity
 from runner.reporting.status import committed_records, match_records
 from runner.reporting.aggregate import COLUMNS, aggregate

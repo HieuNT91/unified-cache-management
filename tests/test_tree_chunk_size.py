@@ -15,7 +15,7 @@ from runner.inputs.layout import stamp_sample, request_metadata
 from runner.cache.setups import atomic_json, file_hash
 from runner.tree.collection import runtime_sample, TreePromptCache
 from runner.corpus.runtime import Engine
-from scripts import tree_prophetkv_data as collection
+from scripts.collection import tree_prophetkv_data as collection
 from test_tree_collection import fixture, ROOT
 from test_collection_no_priming import NoPrimingTests
 
@@ -81,7 +81,7 @@ class ChunkSizeTests(unittest.TestCase):
                         args.percentages=[5,20,40,60]
                         if dataset=='longbench-v2':
                             args.answers_per_question=1;args.answer_seeds=[0]
-                        with patch('scripts.router_control.code_hashes',return_value={}): collection.adopt(args)
+                        with patch('scripts.router.router_control.code_hashes',return_value={}): collection.adopt(args)
                         protocol,rows=collection.stage(args.root,'tree')
                         self.assertEqual(protocol['answer_seeds'],[0])
                         self.assertEqual(collection.load(args.root)[1]['answers'],len(rows)*4)

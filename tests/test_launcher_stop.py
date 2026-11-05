@@ -11,7 +11,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from scripts import launcher_stop as control
+from scripts.launcher import launcher_stop as control
 
 
 class LauncherStopTests(unittest.TestCase):

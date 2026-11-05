@@ -11,11 +11,11 @@ from pathlib import Path
 import re
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from runner.reporting.aggregate import aggregate
 from runner.cache.setups import file_hash, fingerprint
-from scripts.collection_v3 import answer_metrics, seeds
+from scripts.collection.collection_v3 import answer_metrics, seeds
 
 
 def read(path):

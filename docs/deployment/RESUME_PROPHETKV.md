@@ -86,7 +86,7 @@ test -f "$PREPARED_DIR/manifest.jsonl"
 
 git fetch origin
 STOP_HELPER=$(mktemp /tmp/ucm-sweep-stop-XXXXXX.py)
-git show origin/prophetkv/clean-qwen3-32b-yarn4:scripts/sweep_control.py > "$STOP_HELPER" &&
+git show origin/prophetkv/clean-qwen3-32b-yarn4:scripts/sweep/sweep_control.py > "$STOP_HELPER" &&
 "$PYTHON_BIN" "$STOP_HELPER" stop --output "$EXPERIMENT_DIR" &&
 git merge --ff-only origin/prophetkv/clean-qwen3-32b-yarn4
 ```

@@ -86,7 +86,7 @@ git fetch origin
 UPDATE_TOOLS=$(mktemp -d /tmp/ucm-update-XXXXXX)
 git show origin/prophetkv/clean-qwen3-32b-yarn4:scripts/server_env.sh \
   > "$UPDATE_TOOLS/server_env.sh" &&
-git show origin/prophetkv/clean-qwen3-32b-yarn4:scripts/sweep_control.py \
+git show origin/prophetkv/clean-qwen3-32b-yarn4:scripts/sweep/sweep_control.py \
   > "$UPDATE_TOOLS/sweep_control.py" &&
 source "$UPDATE_TOOLS/server_env.sh" &&
 ucm_load_server_env "$PWD" &&

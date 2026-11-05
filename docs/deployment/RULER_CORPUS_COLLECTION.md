@@ -19,8 +19,8 @@ GPU acceptance requires a separately authorized launch with explicit UUIDs.
 Publish your reviewed clean code through Git and fetch it into a separate server
 worktree. Install the pinned environment in the main README. Model weights and
 pinned official RULER sources must already be present. Download official sources
-with the clean `scripts/ruler.py download --ruler ...` command (see its
-`--help`); `scripts/corpus_sources.json` pins every required source/tokenizer file
+with the clean `scripts/data/ruler.py download --ruler ...` command (see its
+`--help`); `scripts/data/corpus_sources.json` pins every required source/tokenizer file
 and preparation package version. A fresh download whose hashes differ is rejected.
 Never substitute a different source or tokenizer under the same collection version.
 
@@ -156,7 +156,7 @@ against the existing results (it does not load `config/.env`; pass paths explici
 
 ```bash
 CUDA_VISIBLE_DEVICES='' /data/jh/envs/ucm/bin/python \
-  /path/to/reporting-checkout/scripts/corpus_status.py \
+  /path/to/reporting-checkout/scripts/reporting/corpus_status.py \
   --root /data/jh/unified-cache-management/ucm-ruler120-l20/outputs/ruler13-120-l20
 ```
 

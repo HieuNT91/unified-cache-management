@@ -49,7 +49,7 @@ def ordered_rows(rows, protocol, group):
         return rows
     # Fixed task order; round-robin queues retain each task's source ordinal order.
     from collections import defaultdict, deque
-    from scripts.ruler import TASKS
+    from scripts.data.ruler import TASKS
     queues = defaultdict(deque)
     for row in sorted(rows, key=lambda r: (r['ordinal'], r['id'])):
         queues[row['subtask']].append(row)
@@ -84,7 +84,7 @@ class Snapshot:
     def __init__(self, root, include_probes=True):
         from pathlib import Path
         from runner.cache.setups import file_hash
-        from scripts.longbench_a800_data import load, stage, roles, device_role
+        from scripts.collection.longbench_a800_data import load, stage, roles, device_role
         self.root = Path(root).resolve()
         self.settings, self.plan, self.rows = load(self.root)
         validate_declaration(self.settings)
@@ -118,7 +118,7 @@ class Snapshot:
 
     def record(self, role, case, row, seed=None):
         from runner.corpus.records import accepted, record_dir
-        from scripts.longbench_a800_data import read
+        from scripts.collection.longbench_a800_data import read
         if (role, case, row['id'], seed) not in self.receipts:
             return None
         result = accepted(self.root/role, case, row, self.protocols[role], seed=seed)

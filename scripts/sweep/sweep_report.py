@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sys
 
-ROOT=Path(__file__).resolve().parents[1]
+ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT))
 from runner.reporting.aggregate import COLUMNS, aggregate
 from runner.cache.setups import atomic_json, manifest_entries

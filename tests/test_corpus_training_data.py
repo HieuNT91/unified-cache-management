@@ -16,8 +16,8 @@ from runner.corpus.train import train
 from runner.corpus.training_data import ExtendedCorpus, open_corpus
 from runner.cache.setups import atomic_json, file_hash
 from runner.router.tree_policy import DEFAULT_ACTIONS, load
-from scripts import corpus_add_ratios as extension
-from scripts.corpus_inputs import TASKS
+from scripts.router import corpus_add_ratios as extension
+from scripts.data.corpus_inputs import TASKS
 import test_corpus_add_ratios as fixtures
 from test_corpus import FakeCorpus
 
@@ -173,7 +173,7 @@ class ExtensionTrainingTests(unittest.TestCase):
 
     def test_both_action_scopes_fit_and_evaluate_exactly_all_samples(self):
         from runner.corpus.eval import test_tree
-        from scripts import corpus_control
+        from scripts.router import corpus_control
         with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()):
             root = Path(td)
             collection, rows = self.completed(root/'corpus', tasks=TASKS)
@@ -184,7 +184,7 @@ class ExtensionTrainingTests(unittest.TestCase):
                 argv = ['corpus_control.py', 'train', '--root', str(collection.root),
                         '--output', str(output), '--action-scope', scope,
                         '--evaluation', 'training', '--policy-count', '1']
-                with patch('scripts.corpus_inputs.prepared_rows', return_value=rows), patch.object(sys, 'argv', argv):
+                with patch('scripts.data.corpus_inputs.prepared_rows', return_value=rows), patch.object(sys, 'argv', argv):
                     corpus_control.main()
                     corpus = open_corpus(collection.root, action_scope=scope)
                 summary = extension.read(output/'summary.json')
@@ -227,7 +227,7 @@ class ExtensionTrainingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td, contextlib.redirect_stdout(io.StringIO()):
             root = Path(td)
             collection, rows = fixtures.AddRatiosTests().fixture(root/'corpus', tasks=TASKS)
-            with patch('scripts.corpus_inputs.prepared_rows', return_value=rows):
+            with patch('scripts.data.corpus_inputs.prepared_rows', return_value=rows):
                 original = open_corpus(collection.root, action_scope='original')
             self.assertNotIsInstance(original, ExtendedCorpus)
             self.assertFalse((collection.state/'complete.json').exists())

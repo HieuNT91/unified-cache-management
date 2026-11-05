@@ -67,7 +67,7 @@ thay các receipt này. Nếu parent export chưa xong, delta300 vẫn được 
 Sau khi answers **và probes mới** hoàn tất, xuất NPZ cho phần300:
 
 ```bash
-/data/jh/envs/ucm/bin/python scripts/export_features.py \
+/data/jh/envs/ucm/bin/python scripts/export/export_features.py \
   /data/jh/unified-cache-management/.results/ruler-l20-tp2-extra300-v1 \
   --output /data/jh/unified-cache-management/.results/ruler-l20-tp2-extra300-v1/ruler-features.npz
 ```

@@ -94,11 +94,11 @@ git add -- \
   runner/corpus/records.py runner/corpus/runtime.py \
   runner/runtime/generation.py runner/reporting/aggregate.py \
   runner/runtime/thinking_budget.py runner/runtime/output_budget.py \
-  scripts/collection_v3.py scripts/collection_v3_export.py \
-  scripts/collection_v3_report.py scripts/export_features.py \
-  scripts/longbench_a800_control.py scripts/longbench_a800_data.py \
-  scripts/longbench_a800_report.py scripts/longbench_v2.py \
-  scripts/router_dataset.py scripts/ruler.py \
+  scripts/collection/collection_v3.py scripts/export/collection_v3_export.py \
+  scripts/reporting/collection_v3_report.py scripts/export/export_features.py \
+  scripts/collection/longbench_a800_control.py scripts/collection/longbench_a800_data.py \
+  scripts/reporting/longbench_a800_report.py scripts/data/longbench_v2.py \
+  scripts/export/router_dataset.py scripts/data/ruler.py \
   scripts/launcher/a800_longbench_primary.sh scripts/launcher/l20_ruler_data.sh \
   scripts/launcher/l40_ruler_thinking_data.sh tests/test_collection_v3.py
 git diff --cached --stat

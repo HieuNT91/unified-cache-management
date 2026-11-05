@@ -37,7 +37,7 @@ def validate(sample,dataset):
         from runner.runtime.thinking_budget import validate_sample_policy
         validate_sample_policy(sample)
     if dataset=='ruler':
-        from scripts.ruler import EVALUATION_PROTOCOL
+        from scripts.data.ruler import EVALUATION_PROTOCOL
         if sample.get('evaluation_protocol')!=EVALUATION_PROTOCOL:
             raise ValueError('RULER requires original task-batch protocol; rebuild from source')
     # References remain reporting metadata; generate submits only tokens/layout.

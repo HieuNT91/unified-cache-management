@@ -109,7 +109,7 @@ CPU downloader can obtain them; its pinned NVIDIA revision and every required
 source/asset checksum must match `router_cohort.json`:
 
 ```bash
-CUDA_VISIBLE_DEVICES='' /mnt/sde/jh/envs/ucm/bin/python scripts/ruler.py download \
+CUDA_VISIBLE_DEVICES='' /mnt/sde/jh/envs/ucm/bin/python scripts/data/ruler.py download \
   --ruler "$PWD/.cache/vendor/RULER"
 bash scripts/launcher/a800_router.sh configure
 bash scripts/launcher/a800_router.sh prepare

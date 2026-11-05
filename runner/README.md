@@ -55,7 +55,7 @@ removed after the audit; no current runtime or CLI depended on them.
 | `reporting/comparison.py` (formerly `result_comparison.py`) | Removed together with `tests/test_result_comparison.py`; the dedicated tests were its only consumers. |
 | `router/export.py` | Optional one-shot policy exporter, invoked directly as a module in the A800 router guide and tested in `test_router`. No runtime import is expected; it is not unused code. |
 | `reporting/resume.py` and `reporting/legacy_sweep_runtimes.json` | Required by standalone sweep continuation and the A800/L20 launchers. The JSON is a compatibility resource, not an experiment output. |
-| `corpus/train.py`, `corpus/eval.py`, `corpus/training_data.py` | Training and inference configuration share these modules. `scripts/corpus_control.py` uses evaluation/training-data readers to validate the RULER inference cohort. Removing them requires splitting those dependencies first. |
+| `corpus/train.py`, `corpus/eval.py`, `corpus/training_data.py` | Training and inference configuration share these modules. `scripts/router/corpus_control.py` uses evaluation/training-data readers to validate the RULER inference cohort. Removing them requires splitting those dependencies first. |
 | `runtime/sweep.py` | Also provides `PromptCache` to `tree/collection.py`; removing the sweep CLI alone would not make this module removable. |
 | `router/guard.py`, `runtime/tiles.py`, `runtime/rope_window.py`, `runtime/tensor_parallel.py` | Small shared helpers used by workers/connectors/runtime. Their size is not evidence that they are redundant. |
 

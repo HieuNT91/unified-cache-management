@@ -6,7 +6,7 @@ import statistics
 from pathlib import Path
 from runner.reporting.aggregate import metrics
 from runner.cache.setups import atomic_json
-from scripts.collection_v3 import ACTIONS, Snapshot, seeds, answer_metrics
+from scripts.collection.collection_v3 import ACTIONS, Snapshot, seeds, answer_metrics
 
 
 def key(record):
@@ -23,7 +23,7 @@ def summarize(data, rows, settings, same_count=False):
     selected = {case: [r for r in values if not same_count or key(r) in common] for case, values in data.items()}
     scopes = [('overall', rows)]
     if settings['dataset'] == 'ruler':
-        from scripts.ruler import TASKS
+        from scripts.data.ruler import TASKS
         scopes += [('task/'+task, [r for r in rows if r['subtask'] == task]) for task in TASKS]
     else:
         scopes += [('length/'+label, [r for r in rows if r['length'] == label]) for label in ('short', 'medium', 'long')]

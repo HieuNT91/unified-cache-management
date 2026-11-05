@@ -1,6 +1,6 @@
 # Task reports with copied no-cache results
 
-Run `python scripts/experiment_task_breakdown.py EXPERIMENT_DIR` for either a
+Run `python scripts/reporting/experiment_task_breakdown.py EXPERIMENT_DIR` for either a
 RULER or LongBench v2 experiment. The tree-prophetkv report automatically reads
 `EXPERIMENT_DIR/baseline-source/` when present. It requires no env file, model,
 prepared inputs or GPU, writes no reports, and may run alongside collection.
@@ -52,7 +52,7 @@ On L20:
 
 ```bash
 /data/jh/envs/ucm/bin/python \
-  /data/jh/unified-cache-management/.worktrees/tree-prophetkv-l20-v1/scripts/experiment_task_breakdown.py \
+  /data/jh/unified-cache-management/.worktrees/tree-prophetkv-l20-v1/scripts/reporting/experiment_task_breakdown.py \
   /data/jh/unified-cache-management/outputs/ruler-l20-tp2-thinking-tree-prophetkv-500-v1
 ```
 
@@ -60,7 +60,7 @@ On A800:
 
 ```bash
 /mnt/sde/jh/envs/ucm/bin/python \
-  /mnt/sde/jh/projects/unified-cache-management/.worktrees/tree-prophetkv-a800-v1/scripts/experiment_task_breakdown.py \
+  /mnt/sde/jh/projects/unified-cache-management/.worktrees/tree-prophetkv-a800-v1/scripts/reporting/experiment_task_breakdown.py \
   /mnt/sde/jh/projects/unified-cache-management/.results/longbench-v2-a800-tp2-tree-prophetkv-2seed-v1
 ```
 
@@ -72,7 +72,7 @@ part of this report update.
 
 ## Export tree outcomes to NPZ
 
-From the updated checkout, run `python scripts/export_features.py EXPERIMENT_DIR`.
+From the updated checkout, run `python scripts/export/export_features.py EXPERIMENT_DIR`.
 For a tree-prophetkv experiment this writes
 `EXPERIMENT_DIR/tree-prophetkv-outcomes.npz`, with six one-dimensional arrays:
 `prompt_id` (`ID--seed-N`), `method`, `accuracy` (0–1), `ttft` (seconds),
@@ -94,5 +94,5 @@ still fail before writing the NPZ. The export prints available counts per method
 Existing output files are preserved; use `--output NEW_PATH.npz` for a new export.
 
 This tree export uses repository readers, so deploy the complete checkout,
-including `scripts/export_tree_outcomes.py`; copying only `export_features.py`
+including `scripts/export/export_tree_outcomes.py`; copying only `export_features.py`
 is insufficient. Legacy non-tree export behavior is unchanged by this addition.

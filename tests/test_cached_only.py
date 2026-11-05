@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts import longbench_a800_control as control
-from scripts import longbench_a800_data as data
+from scripts.collection import longbench_a800_control as control
+from scripts.collection import longbench_a800_data as data
 from test_collection_v3 import fixture, commit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,8 +33,8 @@ class CachedOnlyTests(unittest.TestCase):
                   for p in self.root.rglob('*') if p.is_file()}
         phases = []
         with patch.object(control, 'execute_phase', side_effect=lambda b, r, p, s: phases.append(p)), \
-                patch('scripts.longbench_a800_report.report') as report, \
-                patch('scripts.router_dataset.export_collection') as export:
+                patch('scripts.reporting.longbench_a800_report.report') as report, \
+                patch('scripts.export.router_dataset.export_collection') as export:
             control.supervise(self.root, 'ruler', cached_only=True)
             self.assertEqual(phases, ['cached'])
             report.assert_called_once_with(self.root, final=False, emit=False)
@@ -58,7 +58,7 @@ class CachedOnlyTests(unittest.TestCase):
     def test_failure_does_not_mark_cached_answers_complete(self):
         fixture(self.root)
         with patch.object(control, 'execute_phase', side_effect=RuntimeError('prime failed')), \
-                patch('scripts.longbench_a800_report.report') as report:
+                patch('scripts.reporting.longbench_a800_report.report') as report:
             with self.assertRaisesRegex(RuntimeError, 'prime failed'):
                 control.supervise(self.root, 'primary', cached_only=True)
         report.assert_not_called()

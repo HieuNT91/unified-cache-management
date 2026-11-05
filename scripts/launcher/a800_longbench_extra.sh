@@ -12,7 +12,7 @@ fi
 shift
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
-exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/longbench_a800_control.py" "$command" \
+exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/collection/longbench_a800_control.py" "$command" \
   --role extra --root "${EXPERIMENT_DIR:-$CODE_ROOT/outputs/longbench-v2-a800-tp2-v2}" \
   --model "${MODEL_PATH:-$CODE_ROOT/models/Qwen3-32B}" \
   --data "${LONGBENCH_DATA:-$CODE_ROOT/.data/LongBench-v2/data.json}" \

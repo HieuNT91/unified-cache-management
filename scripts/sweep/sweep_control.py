@@ -76,7 +76,7 @@ def alive(row, pid):
 def assert_stopped(output):
     receipt = Path(output)/'stop-receipt.json'
     if not receipt.exists():
-        raise RuntimeError('Run scripts/sweep_control.py stop --output YOUR_RUN first')
+        raise RuntimeError('Run scripts/sweep/sweep_control.py stop --output YOUR_RUN first')
     previous = json.loads(receipt.read_text())
     if previous['output'] != str(Path(output).resolve()):
         raise RuntimeError('Stop receipt belongs to another directory')

@@ -5,7 +5,7 @@ from pathlib import Path
 from runner.corpus.dataset import Corpus, load_attention, relative
 from runner.corpus.records import accepted, protocol_identity, record_dir
 from runner.cache.setups import file_hash
-from scripts.corpus_add_ratios import EXTRA, STATE, Extension, combined_actions
+from scripts.router.corpus_add_ratios import EXTRA, STATE, Extension, combined_actions
 
 
 def open_corpus(root, prepared=None, tree=None, action_scope='all'):
@@ -41,7 +41,7 @@ class ExtendedCorpus(Corpus):
         completion = self.state/'complete.json'
         if not completion.is_file():
             raise ValueError('5%/10% extension is incomplete; finish collection and final reporting before training')
-        from scripts.corpus_control import idle
+        from scripts.router.corpus_control import idle
         idle(self.root)
         idle(self.state)
         self.extension = Extension(self.root)

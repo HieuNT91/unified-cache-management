@@ -1045,11 +1045,12 @@ def export(root, output=None, quiet=False, workers=DEFAULT_WORKERS):
     require(type(workers) is int and workers > 0, 'workers must be a positive integer')
     root = Path(root).resolve()
     if json.loads((root/'settings.json').read_text()).get('schema') == 'tree-prophetkv-thinking-collection-v1':
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from scripts.export_tree_outcomes import export as export_tree
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        from scripts.export.export_tree_outcomes import export as export_tree
         return export_tree(root, output, quiet)
     if json.loads((root/'settings.json').read_text()).get('collection_protocol') == 'tp2-data-v3':
-        from scripts.collection_v3_export import export_compact
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        from scripts.export.collection_v3_export import export_compact
         return export_compact(root, output, quiet, workers)
     with source_read_lock(root):
         source = Collection(root)

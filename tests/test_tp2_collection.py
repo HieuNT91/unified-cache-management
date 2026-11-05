@@ -9,8 +9,8 @@ from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 import numpy as np
 
-from scripts import longbench_a800_control as control
-from scripts import longbench_a800_data as data
+from scripts.collection import longbench_a800_control as control
+from scripts.collection import longbench_a800_data as data
 from runner.corpus.dataset import load_attention, reduction_matches, selection
 from runner.router.longbench_features import features, HEAD_LAYERS
 from runner.cache.setups import atomic_json, file_hash
@@ -22,7 +22,7 @@ class TP2Tests(unittest.TestCase):
         lb = [[i for i in range(503) if i % 2 == group] for group in range(2)]
         self.assertEqual(list(map(len, lb)), [252, 251])
         self.assertEqual(sum(len(s)*len(data.ACTIONS) for s in lb), 6036)
-        from scripts.ruler import TASKS
+        from scripts.data.ruler import TASKS
         ruler = [[(t,i) for t in TASKS for i in range(100) if i % 5 == group] for group in range(5)]
         self.assertEqual(list(map(len, ruler)), [260]*5)
         self.assertEqual(len(set(sum(ruler, []))), 1300)
@@ -51,14 +51,14 @@ class TP2Tests(unittest.TestCase):
             self.assertEqual(data.read(base/'extra/devices.json')['groups'], [uuids[4:6],uuids[6:]])
 
     def test_unconfigured_extra_is_visible_and_primary_has_own_match(self):
-        from scripts.longbench_a800_report import report
+        from scripts.reporting.longbench_a800_report import report
         from test_a800_longbench import record
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp); fixture(base)
             (base/'extra/protocol.json').unlink(); (base/'extra/devices.json').unlink()
             _, _, rows=data.load(base)
             records={a['id']: ([record(rows[0],a['id'])] if a['id'] in data.SCHEDULE['primary'] else []) for a in data.ACTIONS}
-            with patch('scripts.longbench_a800_report.records', return_value=records):
+            with patch('scripts.reporting.longbench_a800_report.records', return_value=records):
                 result=report(base, True, emit=False)
             self.assertEqual(result['matching']['matched_samples'],0)
             self.assertEqual(result['primary_matched']['matching']['matched_samples'],1)
@@ -149,35 +149,35 @@ class TP2Tests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'capacity'):validate_initialization(receipts,dataset,hardware)
 
     def test_tp2_memory_gate_counts_half_weights_and_kv_per_rank(self):
-        from scripts.corpus_control import check_hardware
+        from scripts.router.corpus_control import check_hardware
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); atomic_json(root/'model.safetensors.index.json',dict(metadata=dict(total_size=64*2**30)))
             settings=dict(dataset='ruler',model=str(root),tp=2,groups=[['a','b']])
             inventory='a,NVIDIA L20,100000,100000\nb,NVIDIA L20,100000,100000'
-            with patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,'']):
+            with patch('scripts.router.corpus_control.subprocess.check_output',side_effect=[inventory,'']):
                 receipt=check_hardware(settings)
             expected=(32*2**30+65920*262144/2+8*2**30)/.95/2**20
             self.assertAlmostEqual(receipt['required_mib_per_rank'],expected)
             self.assertEqual(receipt['kv_cache_mode'],'auto')
             self.assertTrue(receipt['kv_bytes_are_minimum'])
-            with patch('scripts.corpus_control.subprocess.check_output',return_value=inventory.replace('100000','40000')):
+            with patch('scripts.router.corpus_control.subprocess.check_output',return_value=inventory.replace('100000','40000')):
                 with self.assertRaisesRegex(ValueError,'cannot fit'):check_hardware(settings)
 
     def test_auto_cache_requires_budget_free_on_both_servers(self):
-        from scripts.corpus_control import check_hardware
+        from scripts.router.corpus_control import check_hardware
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);atomic_json(root/'model.safetensors.index.json',dict(metadata=dict(total_size=61.2*2**30)))
             for dataset,hardware,name,total in [('longbench-v2','server','A800',81920),('ruler','l20-tp2','L20',49152)]:
                 settings=dict(dataset=dataset,hardware_profile=hardware,model=str(root),tp=2,groups=[['a','b']])
                 inventory=f'a,NVIDIA {name},{total},{total*.95}\nb,NVIDIA {name},{total},{total*.95}'
-                with patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,'']):
+                with patch('scripts.router.corpus_control.subprocess.check_output',side_effect=[inventory,'']):
                     self.assertEqual(check_hardware(settings)['gpu_memory_utilization'],.95)
                 # Both devices can fit the minimum, but rank1 cannot provide the
                 # requested automatic budget. Refuse without launching an engine.
                 low=f'a,NVIDIA {name},{total},{total}\nb,NVIDIA {name},{total},{total*.94}'
-                with patch('scripts.corpus_control.subprocess.check_output',return_value=low):
+                with patch('scripts.router.corpus_control.subprocess.check_output',return_value=low):
                     with self.assertRaisesRegex(ValueError,'automatic KV budget'):check_hardware(settings)
-                with patch('scripts.corpus_control.subprocess.check_output',side_effect=[inventory,'b']):
+                with patch('scripts.router.corpus_control.subprocess.check_output',side_effect=[inventory,'b']):
                     with self.assertRaisesRegex(ValueError,'occupied'):check_hardware(settings)
 
     def test_ruler_prepares_100_seed42_and_schedules_five_complete_shards(self):
@@ -187,7 +187,7 @@ class TP2Tests(unittest.TestCase):
         self.check_ruler_preparation(200)
 
     def check_ruler_preparation(self, count):
-        from scripts.ruler import TASKS
+        from scripts.data.ruler import TASKS
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp); prepared=base/'inputs'; prepared.mkdir()
             settings=dict(dataset='ruler',tp=2,model='/m',data='/ruler',prepared=str(prepared),
@@ -203,7 +203,7 @@ class TP2Tests(unittest.TestCase):
                     rows.append(dict(id=f'{task}-{ordinal:03d}',subtask=task,prepared=path))
             manifest=prepared/'manifest.jsonl';manifest.write_text(''.join(json.dumps(r)+'\n' for r in rows))
             files['manifest.jsonl']=file_hash(manifest);atomic_json(prepared/'preparation.json',dict(files=files))
-            with patch('scripts.ruler.prepare') as prepare:
+            with patch('scripts.data.ruler.prepare') as prepare:
                 plan=data.prepare(base)
             self.assertEqual((prepare.call_args.args[0].samples,prepare.call_args.args[0].seed),(count,42))
             self.assertEqual((plan['answers'],plan['probes']),(13*count*12,13*count))
@@ -245,7 +245,7 @@ class TP2Tests(unittest.TestCase):
                 for name in ('validate','validate_initialization'):
                     stack.enter_context(patch('runner.corpus.runtime.'+name))
                 stack.enter_context(patch('runner.corpus.runtime.start_engine',return_value=llm))
-                stack.enter_context(patch('scripts.router_control.code_hashes',return_value={'run.py':'updated-source'}))
+                stack.enter_context(patch('scripts.router.router_control.code_hashes',return_value={'run.py':'updated-source'}))
                 stack.enter_context(patch('runner.reporting.aggregate.OutputAnalyzer'))
                 stack.enter_context(patch('runner.runtime.generation.generate'))
                 stack.enter_context(patch('ucm.sparse.prophetkv.lifecycle.delete_retired_files'))
@@ -351,7 +351,7 @@ class TP2Tests(unittest.TestCase):
 
     def test_owned_cleanup_after_root_relocation_preserves_archived_cache_and_results(self):
         from runner.cache.setups import fingerprint
-        from scripts.router_control import cleanup_caches
+        from scripts.router.router_control import cleanup_caches
         with tempfile.TemporaryDirectory() as tmp:
             base=Path(tmp);root=base/'ruler';cache=base/'cache'
             root.mkdir();cache.mkdir()
@@ -366,8 +366,8 @@ class TP2Tests(unittest.TestCase):
             new=anchor/('b'*32);new.mkdir(parents=True)
             (new/'temporary').write_text('retired')
             atomic_json(root/'sessions/new/ownership.json',dict(cache=str(new),group=3,pid=101,identity=None))
-            with patch('scripts.router_control.alive',return_value=False), \
-                 patch('scripts.router_control.group_alive',return_value=False):
+            with patch('scripts.router.router_control.alive',return_value=False), \
+                 patch('scripts.router.router_control.group_alive',return_value=False):
                 self.assertEqual(cleanup_caches(root,dict(cache_root=str(cache))),[str(new)])
             self.assertEqual((backup/old.relative_to(cache)/'evidence').read_text(),'keep')
             self.assertFalse(new.exists())

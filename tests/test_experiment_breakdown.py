@@ -13,10 +13,10 @@ from runner.reporting.aggregate import OutputAnalyzer
 from runner.cache.setups import atomic_json, file_hash
 from runner.runtime.thinking_budget import KEY, BudgetState
 import json
-from scripts.collection_v3 import ACTIONS
-from scripts.ruler import TASKS
+from scripts.collection.collection_v3 import ACTIONS
+from scripts.data.ruler import TASKS
 from collection_fixtures import fixture, Tokenizer
-from scripts import experiment_task_breakdown as breakdown
+from scripts.reporting import experiment_task_breakdown as breakdown
 
 
 class L20ReportTests(unittest.TestCase):
@@ -69,7 +69,7 @@ class L20ReportTests(unittest.TestCase):
         atomic_json(record_dir(self.base/'ruler', self.cases[0], self.rows[2]['id'])/'result.json', {})
         pins = {p: (file_hash(p), p.stat().st_mtime_ns) for p in self.base.rglob('*') if p.is_file()}
         # Reporting must work even when the original prepared path is unavailable.
-        with patch('scripts.longbench_a800_data.load', side_effect=AssertionError('No launcher loading')):
+        with patch('scripts.collection.longbench_a800_data.load', side_effect=AssertionError('No launcher loading')):
             raw_text, raw, _ = breakdown.report(self.base)
             text, tables, matching = breakdown.report(self.base, same_count=True)
         self.assertEqual(matching['matched_samples'], 2)
@@ -105,14 +105,14 @@ class L20ReportTests(unittest.TestCase):
         import subprocess
         root = Path(__file__).resolve().parents[1]
         for name in ('experiment_task_breakdown', 'experiment_same_count'):
-            result = subprocess.run([sys.executable, str(root/'scripts'/f'{name}.py'), str(self.base)],
+            result = subprocess.run([sys.executable, str(root/'scripts/reporting'/f'{name}.py'), str(self.base)],
                                     cwd='/tmp', capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('task/'+TASKS[-1], result.stdout)
             self.assertIn('0/585', result.stdout)
 
     def test_seeded_collection_paths_and_file_hash_plan(self):
-        from scripts.collection_v3 import declaration
+        from scripts.collection.collection_v3 import declaration
         protocol = dict(self.protocol, **declaration('ruler', 1, thinking=True),
                         plan_sha256=file_hash(self.base/'plan.json'))
         atomic_json(self.base/'ruler/protocol.json', protocol)
@@ -134,11 +134,11 @@ class L20ReportTests(unittest.TestCase):
 
     def test_tree_collection_cli_and_seeded_records(self):
         import subprocess
-        from scripts import tree_prophetkv_data as tree
+        from scripts.collection import tree_prophetkv_data as tree
         from test_tree_collection import fixture as tree_fixture
         with tempfile.TemporaryDirectory() as temp:
             args = tree_fixture(Path(temp))
-            with patch('scripts.router_control.code_hashes', return_value={}), redirect_stdout(io.StringIO()):
+            with patch('scripts.router.router_control.code_hashes', return_value={}), redirect_stdout(io.StringIO()):
                 tree.adopt(args)
             protocol, rows = tree.stage(args.root, 'tree')
             script = Path(breakdown.__file__)

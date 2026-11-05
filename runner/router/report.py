@@ -143,7 +143,7 @@ def publish(folder, report, records, policy):
 
 
 def finalize(root):
-    from scripts.router_inputs import load_prepared
+    from scripts.data.router_inputs import load_prepared
     from runner.router.process import alive,group_alive
     root=Path(root);protocol=json.loads((root/'protocol.json').read_text())
     cleanup=json.loads((root/'cleanup.json').read_text())

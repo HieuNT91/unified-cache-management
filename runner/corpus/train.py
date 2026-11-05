@@ -6,7 +6,7 @@ import numpy as np
 from runner.router.policy import FEATURES, number, digest
 from runner.router.tree_policy import actions, SCHEMA, FEATURE_DEFINITIONS, export, decide
 from runner.cache.setups import atomic_json, file_hash
-from scripts.corpus_inputs import TASKS
+from scripts.data.corpus_inputs import TASKS
 
 LOSS_GRID=[dict(family='loss',depth=d,min_leaf=l,shrinkage=s,threshold=t)
     for d,l,s,t in itertools.product((1,2,3),(10,20),(0,5,20),(0.,.02,.05,.10,.20))]

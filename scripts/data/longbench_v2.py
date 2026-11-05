@@ -12,7 +12,7 @@ import re
 import shutil
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from runner.inputs.config import validate_sample
 from runner.cache.setups import atomic_json, bytes_per_shard, file_hash, fingerprint, setup_lock
@@ -92,7 +92,7 @@ def prepare(args):
     rows = json.loads(args.data.read_text())
     if len(rows) != 503 or len({row['_id'] for row in rows}) != 503:
         raise ValueError('Expected all 503 distinct LongBench v2 source rows')
-    template_path = ROOT / 'scripts/longbench_0shot.txt'
+    template_path = ROOT / 'scripts/data/longbench_0shot.txt'
     spec = dict(data_sha256=file_hash(args.data), model_config_sha256=file_hash(args.model/'config.json'),
                 tokenizer_files={p.name:file_hash(p) for p in args.model.iterdir() if p.is_file() and
                                  p.suffix in ('.json','.txt','.jinja','.model','.tiktoken')},
@@ -100,7 +100,7 @@ def prepare(args):
                 chunker_sha256=file_hash(ROOT/'runner/cache/lifecycle.py'), input_limit=INPUT, output_limit=16384)
     if getattr(args, 'collection_v3', False):
         from runner.runtime.output_budget import PROTOCOL
-        from scripts.collection_v3 import declaration
+        from scripts.collection.collection_v3 import declaration
         spec.update(declaration('longbench-v2', getattr(args, 'answers_per_question', 4)))
         spec.update(collection_protocol='tp2-data-v3', generation_protocol=PROTOCOL,
                     budget_adapter_sha256=file_hash(ROOT/'runner/runtime/output_budget.py'))

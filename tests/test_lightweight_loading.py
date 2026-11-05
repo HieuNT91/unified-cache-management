@@ -10,8 +10,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from runner.cache.setups import atomic_json, file_hash
-from scripts.corpus_inputs import original_rows
-from scripts.ruler import EVALUATION_PROTOCOL
+from scripts.data.corpus_inputs import original_rows
+from scripts.data.ruler import EVALUATION_PROTOCOL
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,7 +41,7 @@ class LightweightLoadingTests(unittest.TestCase):
         env = dict(os.environ, CUDA_VISIBLE_DEVICES='', PYTHONDONTWRITEBYTECODE='1')
         for name in ('corpus_control.py', 'router_control.py', 'corpus_add_ratios.py'):
             with self.subTest(script=name):
-                result = subprocess.run([sys.executable, str(ROOT/'scripts'/name),
+                result = subprocess.run([sys.executable, str(ROOT/'scripts/router'/name),
                     'verify', '--root', '/unused'], env=env, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn('invalid choice', result.stderr)

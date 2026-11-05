@@ -8,7 +8,7 @@ from runner.inputs.config import engine_config
 from runner.corpus.worker import tree_mode
 from runner.runtime.generation import verify_diagnostics
 from runner.router.tree_policy import inventory
-from scripts.longbench_a800_data import prepare
+from scripts.collection.longbench_a800_data import prepare
 from ucm.sparse.prophetkv.layers import resolve_layers
 
 

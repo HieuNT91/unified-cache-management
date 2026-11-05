@@ -103,7 +103,7 @@ class Corpus:
         self.protocol=json.loads((self.root/'protocol.json').read_text())
         self.prepared=Path(prepared or self.protocol['prepared'])
         self.actions=action_inventory(self.protocol['actions'])
-        from scripts.corpus_inputs import prepared_rows
+        from scripts.data.corpus_inputs import prepared_rows
         if file_hash(self.prepared/'plan.json')!=self.protocol['plan_sha256']:
             raise ValueError('Prepared corpus plan differs from collection protocol')
         self.rows={r['id']:r for r in prepared_rows(self.prepared)}

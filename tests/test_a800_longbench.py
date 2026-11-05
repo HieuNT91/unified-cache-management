@@ -11,9 +11,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from runner.cache.setups import atomic_json, file_hash
-from scripts import longbench_a800_data as data
-from scripts import longbench_a800_control as control
-from scripts.longbench_a800_report import summarize, report, records
+from scripts.collection import longbench_a800_data as data
+from scripts.collection import longbench_a800_control as control
+from scripts.reporting.longbench_a800_report import summarize, report, records
 from runner.corpus.records import NATIVE_ANSWER_VALIDATION
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,7 +37,7 @@ def fixture(root):
     atomic_json(root/'settings.json', settings)
     for role, devices in zip(('primary', 'extra'), groups):
         atomic_json(root/role/'devices.json', dict(tp=2, groups=[devices[:2], devices[2:]]))
-    with patch('scripts.longbench_v2.prepare'):
+    with patch('scripts.data.longbench_v2.prepare'):
         data.prepare(root)
     return settings
 
@@ -129,8 +129,8 @@ class A800Tests(unittest.TestCase):
             events.append(phase)
         with (patch.object(control, 'execute_phase', side_effect=execute),
                 patch.object(control, 'wait_extra', side_effect=lambda _: events.append('wait-extra')),
-                patch('scripts.longbench_a800_report.report', side_effect=lambda *a, **k: events.append('final-controls')),
-                patch('scripts.router_dataset.export_collection', side_effect=lambda *a: events.append('export'))):
+                patch('scripts.reporting.longbench_a800_report.report', side_effect=lambda *a, **k: events.append('final-controls')),
+                patch('scripts.export.router_dataset.export_collection', side_effect=lambda *a: events.append('export'))):
             control.supervise(self.root, 'primary')
         self.assertEqual(events, ['baseline', 'cached', 'wait-extra', 'final-controls', 'features', 'export'])
         self.assertFalse((self.root/'training').exists())

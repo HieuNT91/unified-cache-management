@@ -10,7 +10,7 @@ import signal
 import sys
 import time
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from runner.corpus.dataset import relative
 from runner.corpus.records import accepted, NATIVE_ANSWER_VALIDATION
@@ -20,10 +20,10 @@ from runner.tree.prophetkv import PROTOCOL, budget
 from runner.router.profiles import validate
 from runner.runtime.thinking_budget import KEY
 from runner.runtime.output_budget import RULER_PROTOCOL, LONGBENCH_PROTOCOL, validate_sample_policy, validate_policy
-from scripts.collection_v3 import declaration, seeds, answer_metrics
-from scripts import longbench_a800_control as control
-from scripts.longbench_a800_data import read, freeze
-from scripts.ruler import TASKS
+from scripts.collection.collection_v3 import declaration, seeds, answer_metrics
+from scripts.collection import longbench_a800_control as control
+from scripts.collection.longbench_a800_data import read, freeze
+from scripts.data.ruler import TASKS
 
 ROLE = 'tree'
 
@@ -87,7 +87,7 @@ def protocol_for(settings, plan):
 
 
 def adopt(args):
-    from scripts.router_control import code_hashes
+    from scripts.router.router_control import code_hashes
     ruler = args.dataset == 'ruler'
     local = getattr(args, 'local_validation', False)
     selected = getattr(args, 'validation_prompt_ids', None)
@@ -337,7 +337,7 @@ def main():
     elif args.command == 'supervise':
         supervise(args.root)
     elif args.command == 'stop':
-        from scripts.launcher_stop import stop
+        from scripts.launcher.launcher_stop import stop
         stage(args.root, ROLE)
         stop(args.root, Path(__file__).name, args.root/ROLE)
     else:

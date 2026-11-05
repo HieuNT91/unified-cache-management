@@ -8,7 +8,7 @@ import fcntl
 from pathlib import Path
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from runner.router.longbench_features import FEATURES, DEFINITIONS
 from runner.cache.setups import atomic_json, file_hash, fingerprint
@@ -22,7 +22,7 @@ SCHEMA = 'attention-router-dataset-v2'
 
 def validate(data):
     if data.get('schema') == 'attention-router-dataset-v3':
-        from scripts.collection_v3_export import validate_portable
+        from scripts.export.collection_v3_export import validate_portable
         return validate_portable(data)
     if (data.get('schema') != SCHEMA or data.get('dataset') not in ('ruler', 'longbench-v2')
             or data.get('feature_names') != list(FEATURES) or data.get('feature_definitions') != DEFINITIONS
@@ -30,7 +30,7 @@ def validate(data):
         raise ValueError('Incompatible dataset/feature version; all eight fixed layers and every TP head are required')
     if data.get('payload_sha256') != fingerprint({k: v for k, v in data.items() if k != 'payload_sha256'}):
         raise ValueError('Dataset checksum mismatch')
-    from scripts.longbench_a800_data import ACTIONS
+    from scripts.collection.longbench_a800_data import ACTIONS
     if data.get('actions') != ACTIONS:
         raise ValueError('Portable training requires all 12 canonical measured actions')
     provenance = data.get('provenance', {})
@@ -51,9 +51,9 @@ def validate(data):
     if data['dataset'] == 'longbench-v2' and len(rows) != 503:
         raise ValueError('LongBench data must contain all 503 prompts')
     if data['dataset'] == 'ruler':
-        from scripts.ruler import TASKS
+        from scripts.data.ruler import TASKS
         from collections import Counter
-        from scripts.longbench_a800_data import ruler_samples
+        from scripts.collection.longbench_a800_data import ruler_samples
         count = ruler_samples(data['provenance'])
         if len(rows) != 13*count or Counter(r['subtask'] for r in rows) != Counter({t: count for t in TASKS}):
             raise ValueError(f'RULER data must contain all 13x{count} prompts')
@@ -65,7 +65,7 @@ def validate(data):
         raise ValueError('LongBench source identities must be unique')
     for row in rows:
         if thinking:
-            from scripts.ruler import CAPS
+            from scripts.data.ruler import CAPS
             policy = validate_policy(row[KEY])
             if row.get('evaluation_protocol') != PROTOCOL or policy['answer_cap'] != CAPS.get(row['subtask']):
                 raise ValueError('Thinking row protocol/cap mismatch')
@@ -98,7 +98,7 @@ def validate(data):
         if data['dataset'] == 'ruler' and len(set(devices)) != 1:
             raise ValueError('RULER actions of one prompt must share a TP group')
         if data['dataset'] == 'longbench-v2':
-            from scripts.longbench_a800_data import SCHEDULE
+            from scripts.collection.longbench_a800_data import SCHEDULE
             pairs = []
             for role in ('primary', 'extra'):
                 current = {tuple(row['outcomes'][a]['gpu_uuids']) for a in SCHEDULE[role]}
@@ -120,7 +120,7 @@ def load(path):
 
 
 def save(path, dataset, inventory, rows, provenance):
-    from scripts.collection_v3 import enabled
+    from scripts.collection.collection_v3 import enabled
     value = dict(schema='attention-router-dataset-v3' if enabled(provenance) else SCHEMA, dataset=dataset, prompt_protocol=PROMPT_PROTOCOL,
                  feature_names=list(FEATURES), feature_definitions=DEFINITIONS,
                  actions=inventory, rows=rows, provenance=provenance)
@@ -173,11 +173,11 @@ def example(row, probe, outcomes, source_pins, dataset):
 
 
 def export_collection(base, output):
-    from scripts.longbench_a800_data import load as load_plan, stage, read, roles, scheduled, ACTIONS
+    from scripts.collection.longbench_a800_data import load as load_plan, stage, read, roles, scheduled, ACTIONS
     base = Path(base); settings, plan, rows = load_plan(base)
-    from scripts.collection_v3 import enabled
+    from scripts.collection.collection_v3 import enabled
     if enabled(settings):
-        from scripts.collection_v3_export import export_portable
+        from scripts.export.collection_v3_export import export_portable
         return export_portable(base, output)
     stages = roles(settings)
     for role in stages:
@@ -185,7 +185,7 @@ def export_collection(base, output):
         path = base/role/filename
         if not path.is_file() or not read(path)['owned_engines_exited']:
             raise ValueError('Finish all controls and feature engines before export')
-    from scripts.longbench_a800_control import engines_idle
+    from scripts.collection.longbench_a800_control import engines_idle
     for role in stages:
         engines_idle(base/role)
     protocols = {role: stage(base, role)[0] for role in stages}
@@ -212,7 +212,7 @@ def export_collection(base, output):
                 validation='committed-results-and-record-pins; per-request runtime validation, no offline attention replay',
                 timing=f'TP{settings["tp"]} controls; independent feature probes collected after all control engines exited'))
     if 'extension' in settings:
-        from scripts.ruler_extension import combine_exports
+        from scripts.collection.ruler_extension import combine_exports
         combine_exports(base, result, output, allow_pending=True)
     return result
 
@@ -223,8 +223,8 @@ def export_longbench(base, output):
 
 def export_ruler(root, output):
     """Read a completed coverage-five corpus generated on any server."""
-    from scripts.corpus_inputs import prepared_rows
-    from scripts.corpus_control import idle
+    from scripts.data.corpus_inputs import prepared_rows
+    from scripts.router.corpus_control import idle
     root = Path(root)
     if (root/'settings.json').exists() and json.loads((root/'settings.json').read_text()).get('schema') in ('tp2-data-config-v2', 'tp2-data-config-v3'):
         return export_collection(root, output)
@@ -237,7 +237,7 @@ def export_ruler(root, output):
     rows = [r for r in prepared_rows(prepared) if r['ordinal'] < limit]
     if len(rows) != 13*limit:
         raise ValueError('RULER preparation does not cover the configured tranche')
-    from scripts.ruler import EVALUATION_PROTOCOL
+    from scripts.data.ruler import EVALUATION_PROTOCOL
     values = []
     for row in rows:
         row = dict(row, evaluation_protocol=EVALUATION_PROTOCOL)

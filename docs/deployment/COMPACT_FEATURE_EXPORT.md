@@ -1,6 +1,6 @@
 # Export 100 attention feature thành NPZ
 
-Script độc lập: [`scripts/export_features.py`](../../scripts/export_features.py).
+Script độc lập: [`scripts/export/export_features.py`](../../scripts/export/export_features.py).
 Định nghĩa: [`features_list.md`](../studies/features_list.md), 100 scalar / 18 nhóm.
 
 ## Chạy trên A800, L20 hoặc máy CPU khác
@@ -12,19 +12,19 @@ source đã được pin của experiment. Các absolute path cũ trong metadata
 giữ làm provenance, không dùng để mở model/prepared/cache.
 
 ```bash
-python scripts/export_features.py /path/to/experiment
+python scripts/export/export_features.py /path/to/experiment
 ```
 
 Mặc định **64 worker processes**, mỗi worker dùng **1 BLAS thread**. Có thể ghi rõ:
 
 ```bash
-python scripts/export_features.py /path/to/experiment --workers 64
+python scripts/export/export_features.py /path/to/experiment --workers 64
 ```
 
 Với Python trong môi trường A800 đã khai báo:
 
 ```bash
-/mnt/sde/jh/envs/ucm/bin/python scripts/export_features.py \
+/mnt/sde/jh/envs/ucm/bin/python scripts/export/export_features.py \
   /mnt/sde/jh/projects/unified-cache-management/.results/longbench-v2-a800-tp2-auto95
 ```
 

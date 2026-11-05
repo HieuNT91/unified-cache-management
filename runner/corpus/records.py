@@ -40,7 +40,7 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
     mode=answer_validation(protocol)
     if mode==NATIVE_ANSWER_VALIDATION and case in ('probe','router'):
         raise ValueError('Native answer controls do not use independent probes or routers')
-    from scripts.collection_v3 import enabled, seeds
+    from scripts.collection.collection_v3 import enabled, seeds
     if seed not in seeds(protocol, case):
         raise ValueError('Answer seed differs from frozen schedule')
     folder=record_dir(root,case,row['id'],seed);path=folder/'validated.json'
@@ -74,7 +74,7 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
                     or result['output_tokens'] != sum(result[k] for k in ('thinking_tokens', 'answer_tokens', 'control_tokens'))):
                 raise ValueError('Invalid committed answer metrics')
             from runner.runtime.output_budget import OUTPUT_CAP
-            from scripts.ruler import CAPS
+            from scripts.data.ruler import CAPS
             cap = CAPS.get(row['subtask']) if protocol['generation_protocol'] == 'ruler-nonthinking-v1' else OUTPUT_CAP
             if (result.get('max_output_tokens') != cap or result['output_tokens'] > cap
                     or len(result.get('output_token_ids', [])) != result['output_tokens']):
@@ -136,7 +136,7 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
 def publish(root,case,row,protocol,result,diagnostics,*,seed=None):
     import fcntl
     root=Path(root);root.mkdir(parents=True,exist_ok=True)
-    from scripts.collection_v3 import enabled, seeds
+    from scripts.collection.collection_v3 import enabled, seeds
     if seed not in seeds(protocol, case):
         raise ValueError('Answer seed differs from frozen schedule')
     if enabled(protocol) and case != 'probe' and (result.get('seed') != seed or result.get('sequence_id') != row['id']):

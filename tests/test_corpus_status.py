@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from runner.corpus.records import protocol_identity
 from runner.cache.setups import atomic_json, file_hash
 from runner.router.tree_policy import DEFAULT_ACTIONS
-from scripts.corpus_status import collect, write_summary
+from scripts.reporting.corpus_status import collect, write_summary
 
 
 def answer(pid, score=1., total=7., engine=2.):
@@ -104,12 +104,13 @@ class CorpusStatusTests(unittest.TestCase):
                 list(pool.map(lambda _:write_summary(root), range(4)))
             self.assertEqual(json.loads((root/'live_summary.json').read_text())['accepted_answers'], 1)
             self.assertEqual(pins, {p:file_hash(p) for p in pins})
-            script = Path(__file__).resolve().parents[1]/'scripts'/'corpus_status.py'
+            script = Path(__file__).resolve().parents[1]/'scripts/reporting/corpus_status.py'
             run = subprocess.run([sys.executable, str(script), '--root', str(root)], cwd='/tmp',
                                  env=dict(os.environ, CUDA_VISIBLE_DEVICES=''), capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertIn('live_summary.md', run.stdout)
-            run = subprocess.run([sys.executable, str(script.with_name('corpus_control.py')), 'status', '--root', str(root)],
+            control = Path(__file__).resolve().parents[1]/'scripts/router/corpus_control.py'
+            run = subprocess.run([sys.executable, str(control), 'status', '--root', str(root)],
                                  cwd='/tmp', env=dict(os.environ, CUDA_VISIBLE_DEVICES=''), capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertIn('live_summary.md', run.stdout)

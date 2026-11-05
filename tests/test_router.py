@@ -223,7 +223,7 @@ class WorkflowTests(unittest.TestCase):
                     env=dict(os.environ,UCM_ENV_FILE=str(envfile),EXPERIMENT_DIR=str(root/'new')),capture_output=True,text=True,check=True)
                 self.assertIn(str(root/'new/prepared'),proc.stdout)
                 self.assertIn(command,proc.stdout)
-            from scripts.router_control import groups
+            from scripts.router.router_control import groups
             g=[f'GPU-{i:08x}-0000-0000-0000-000000000000' for i in range(8)]
             self.assertEqual(groups(','.join(g[:4]),','.join(g[4:])),[g[:4],g[4:]])
             with self.assertRaises(ValueError):groups(','.join(g[:4]),','.join(g[:4]))
@@ -325,7 +325,7 @@ class NativeExecutionTests(unittest.TestCase):
                 return NS(num_cached_tokens=0 if not engine.current['cached'] or rid.endswith('|router-dense') else 64,
                           outputs=[NS(token_ids=[7],text='answer',finish_reason='stop')]),.02,.04
             with patch.dict(sys.modules,{'runner.runtime.worker':worker}),patch.object(sweep,'start_engine',side_effect=start), \
-                 patch.object(sweep,'check_environment',return_value=['GPU-a']*4),patch('scripts.router_inputs.load_prepared',return_value=[row]), \
+                 patch.object(sweep,'check_environment',return_value=['GPU-a']*4),patch('scripts.data.router_inputs.load_prepared',return_value=[row]), \
                  patch.object(sweep,'PromptCache',Cache),patch('runner.cache.lifecycle.wait_for_cache',return_value={'verified_shards':8}), \
                  patch('runner.runtime.generation.generate',side_effect=generate),patch('runner.runtime.generation.verify_diagnostics'):
                 for case in CASES:sweep.run_group(root,0,case,'fixture')
@@ -340,7 +340,7 @@ class NativeExecutionTests(unittest.TestCase):
             self.assertEqual(sum(e[0]=='delete' for e in events),6)
 
     def test_supervisor_retries_operational_once_and_halts_validation(self):
-        from scripts import router_control as control
+        from scripts.router import router_control as control
         for failure in (75,76):
             with tempfile.TemporaryDirectory() as td:
                 root=Path(td);starts=[]
@@ -366,7 +366,7 @@ class NativeExecutionTests(unittest.TestCase):
                         final.assert_not_called();self.assertEqual(len(starts),2)
 
     def test_duplicate_supervisor_and_group_receipts_block_launch(self):
-        from scripts.router_control import idle
+        from scripts.router.router_control import idle
         from runner.router.process import identity
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);atomic_json(root/'supervisor.json',dict(pid=os.getpid(),identity=identity(os.getpid())))
@@ -424,7 +424,7 @@ class ExportAndWatchdogTests(unittest.TestCase):
             self.assertFalse((root/'never-published.json').exists())
 
     def test_watchdog_allows_only_one_operational_retry(self):
-        from scripts import router_control as control
+        from scripts.router import router_control as control
         with tempfile.TemporaryDirectory() as td:
             starts=[]
             class Child:
@@ -446,7 +446,7 @@ class ExportAndWatchdogTests(unittest.TestCase):
 
 class CacheRecoveryTests(unittest.TestCase):
     def test_cleanup_requires_dead_owned_namespace_and_preserves_results(self):
-        from scripts import router_control as control
+        from scripts.router import router_control as control
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);protocol=dict(cache_root=str(root/'cache'))
             cache=root/'cache'/fingerprint(str(root))[:16]/'group0'/('a'*32)

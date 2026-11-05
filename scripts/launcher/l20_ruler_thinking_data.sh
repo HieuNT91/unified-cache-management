@@ -12,7 +12,7 @@ fi
 shift
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1
 export OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
-exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/longbench_a800_control.py" "$command" \
+exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/collection/longbench_a800_control.py" "$command" \
   --role ruler --thinking --root "${EXPERIMENT_DIR:-$CODE_ROOT/outputs/ruler-l20-tp2-thinking-30-v1}" \
   --model "${MODEL_PATH:-$CODE_ROOT/models/Qwen3-32B}" \
   --data "${RULER_PATH:-$CODE_ROOT/.cache/vendor/RULER}" \
