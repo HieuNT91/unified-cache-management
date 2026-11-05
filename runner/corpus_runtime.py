@@ -271,6 +271,7 @@ class Engine:
         record=self.common(case,dict(answer_engine_ttft_seconds=ttft,ttft_seconds=routing_time+ttft,
             generation_seconds=elapsed,routing_overhead_seconds=routing_time,tp_sync_seconds=sync_seconds),retired)
         record.update(executed_action=definition['id'],output_token_ids=tokens,prediction=output.outputs[0].text,num_cached_tokens=output.num_cached_tokens,
+            finish_reason=getattr(output.outputs[0], 'finish_reason', None),
             answer_validation=mode,
             output_cap_reached=len(tokens)>=self.sample['max_output_tokens'],max_output_tokens=self.sample['max_output_tokens'],
             dense_receipts=audits,decision_sync=sync,**metrics,**evaluation,accuracy=score_answer(scoring_text(output.outputs[0].text,metrics,evaluation),evaluation))

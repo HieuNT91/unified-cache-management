@@ -688,6 +688,8 @@ def execute_collection(args, root, descriptor, samples, cfg, devices, receipt, r
             reporting_started = time.perf_counter()
             output_metrics = analyzer.analyze(list(output.token_ids), sample['token_ids'], sample['thinking'])
             accuracy = score_answer(scoring_text(output.text,output_metrics,evaluation), evaluation)
+            from runner.generation import thinking_loop_metrics
+            output_metrics.update(thinking_loop_metrics(result))
             timings['scoring_seconds'] = time.perf_counter()-reporting_started
             record = dict(**sample_provenance(sample),prompt_id=entry['id'], setup_fingerprint=descriptor['fingerprint'],
                 setup=str(root), construction_timings=str(root / receipt['preparation_timings']),

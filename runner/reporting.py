@@ -151,6 +151,7 @@ def metrics(records, expected):
         result[name] = sum(r.get(name, False) for r in records)
     result['forced_thinking_closures'] = sum(r.get('thinking_closure') == 'forced' for r in records)
     result['natural_thinking_closures'] = sum(r.get('thinking_closure') == 'natural' for r in records)
+    result['thinking_broken'] = sum(r.get('thinking_broken', False) for r in records)
     values = [r['timings']['first_answer_content_seconds'] for r in records if r['timings'].get('first_answer_content_seconds') is not None]
     result['mean_first_answer_content_seconds'] = statistics.mean(values) if values else None
     result['first_answer_content_samples'] = len(values)
@@ -197,7 +198,7 @@ COLUMNS = ('expected', 'completed', 'accuracy_scored', 'accuracy_unscored', 'acc
            'mean_control_tokens', 'mean_output_tokens', 'total_thinking_tokens', 'total_answer_tokens',
            'total_control_tokens', 'total_output_tokens', 'output_cap_reached', 'unfinished_thinking', 'ruler_score', 'ruler_nulls',
            'mean_generated_answer_tokens', 'total_generated_answer_tokens', 'mean_forced_tokens', 'total_forced_tokens',
-           'thinking_cap_reached', 'answer_cap_reached', 'forced_thinking_closures', 'natural_thinking_closures',
+           'thinking_cap_reached', 'answer_cap_reached', 'forced_thinking_closures', 'natural_thinking_closures', 'thinking_broken',
            'mean_first_answer_content_seconds', 'first_answer_content_samples')
 
 

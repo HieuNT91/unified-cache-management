@@ -301,6 +301,8 @@ def execute_phase(args, selected, configs, reporters, group, cache, devices):
                 output = result.outputs[0]
                 started = time.perf_counter()
                 lengths = analyzer.analyze(list(output.token_ids),ids,sample['thinking'])
+                from runner.generation import thinking_loop_metrics
+                lengths.update(thinking_loop_metrics(result))
                 evaluation = entry['evaluation']
                 accuracy = score_answer(scoring_text(output.text,lengths,evaluation),evaluation)
                 timings['scoring_seconds'] = time.perf_counter()-started

@@ -64,15 +64,17 @@ def validate_sample_policy(sample):
 
 class BudgetState:
     """Incrementally consumes emitted IDs. Attached to the request, freed with it."""
-    def __new__(cls, policy):
+    def __new__(cls, policy, loop_breaker=None):
         from runner.output_budget import PROTOCOL as TOTAL, TotalBudgetState
         if isinstance(policy, dict) and policy.get('protocol') == TOTAL:
-            return TotalBudgetState(policy)
+            return TotalBudgetState(policy, loop_breaker)
         return super().__new__(cls)
 
-    def __init__(self, policy):
+    def __init__(self, policy, loop_breaker=None):
         from copy import deepcopy
         self.policy = deepcopy(validate_policy(policy))
+        from runner.thinking_loop import ThinkingLoop
+        self.loop = ThinkingLoop(loop_breaker)
         self.seen = self.thinking = self.answer = self.forced = 0
         self.phase = 'thinking'
         self.closure = None
@@ -83,7 +85,7 @@ class BudgetState:
         self.opening_tokens = 0
 
     def forced_next(self):
-        if self.phase == 'thinking' and self.thinking == self.policy['thinking_cap']:
+        if self.phase == 'thinking' and (self.thinking == self.policy['thinking_cap'] or self.loop.broken):
             return self.policy['close_id']
         return self.queue[0] if self.queue else None
 
@@ -102,7 +104,7 @@ class BudgetState:
                 self.forced += 1
             if self.phase == 'thinking':
                 if token == p['close_id']:
-                    self.closure = 'forced' if forced is not None else 'natural'
+                    self.closure = 'repetition' if self.loop.broken else 'forced' if forced is not None else 'natural'
                     self.queue = list(p['transition_ids'] + p['prefix_ids'])
                     self.phase = 'transition'
                 elif token == p['open_id'] and i == 0 and not p['opening_in_prompt']:
@@ -111,6 +113,7 @@ class BudgetState:
                     raise ValueError('Premature EOS or control token in thinking')
                 else:
                     self.thinking += 1
+                    self.loop.observe(token, self.thinking)
             elif self.phase == 'transition':
                 self.queue.pop(0)
                 if not self.queue:
@@ -135,18 +138,21 @@ class BudgetState:
                     generated_thinking_open_tokens=self.opening_tokens,
                     thinking_cap_reached=self.thinking == self.policy['thinking_cap'],
                     answer_cap_reached=self.answer == self.policy['answer_cap'],
-                    thinking_closure=self.closure, scored_text=tokenizer.decode(self.answer_ids, skip_special_tokens=False))
+                    thinking_closure=self.closure, **self.loop.metrics(), scored_text=tokenizer.decode(self.answer_ids, skip_special_tokens=False))
 
 
 def request_state(request):
     params = request.sampling_params
-    policy = (getattr(params, 'extra_args', None) or {}).get(KEY)
+    from runner.thinking_loop import KEY as LOOP_KEY
+    extra = getattr(params, 'extra_args', None) or {}
+    policy = extra.get(KEY)
+    loop_breaker = extra.get(LOOP_KEY)
     if policy is None:
         return None
     state = getattr(request, '_ruler_thinking_state', None)
     if state is None:
-        state = request._ruler_thinking_state = BudgetState(policy)
-    elif state.policy != policy:
+        state = request._ruler_thinking_state = BudgetState(policy, loop_breaker)
+    elif state.policy != policy or state.loop.config != loop_breaker:
         raise ValueError('Thinking policy changed during request')
     return state.consume(request.output_token_ids)
 
@@ -179,6 +185,8 @@ def stopping_hook(original, statuses):
             return original(request, max_model_len, pooler_output)
         if state.phase == 'done':
             request.status = statuses.FINISHED_STOPPED if state.answer_eos else statuses.FINISHED_LENGTH_CAPPED
+            if state.loop.broken:
+                request.stop_reason = 'thinking_broken'
             return True
         if request.num_tokens >= max_model_len or request.num_output_tokens >= request.max_tokens:
             raise ValueError('Thinking request exhausted reserved capacity before answer completion')
@@ -201,23 +209,25 @@ def validate_thinking_outcome(value, policy):
     if policy.get('protocol') == TOTAL:
         return validate_outcome(value, policy)
     import math
+    from runner.thinking_loop import validate_metrics
+    validate_metrics(value)
     for key in ('generated_answer_tokens', 'generated_thinking_open_tokens', 'forced_tokens', 'thinking_tokens', 'answer_tokens', 'control_tokens', 'output_tokens'):
         if type(value.get(key)) is not int or value[key] < 0:
             raise ValueError('Invalid thinking token accounting')
     n = value['generated_answer_tokens']
     closure = value.get('thinking_closure')
-    forced = len(policy['transition_ids']) + len(policy['prefix_ids']) + (closure == 'forced')
+    forced = len(policy['transition_ids']) + len(policy['prefix_ids']) + (closure in ('forced', 'repetition'))
     latency = value.get('first_answer_content_seconds')
     opening = value['generated_thinking_open_tokens']
-    if (closure not in ('natural', 'forced') or value['thinking_tokens'] > policy['thinking_cap']
+    if (closure not in ('natural', 'forced', 'repetition') or value['thinking_tokens'] > policy['thinking_cap']
             or n > policy['answer_cap'] or value['forced_tokens'] != forced
-            or value['answer_tokens'] != n + forced - (closure == 'forced')
+            or value['answer_tokens'] != n + forced - (closure in ('forced', 'repetition'))
             or value['thinking_tokens'] + value['answer_tokens'] + value['control_tokens'] != value['output_tokens']
             or opening not in (0, 1) or (policy['opening_in_prompt'] and opening != 0)
             or value['control_tokens'] != 1 + opening + (n < policy['answer_cap'])
             or type(value.get('thinking_cap_reached')) is not bool
             or value['thinking_cap_reached'] != (value['thinking_tokens'] == policy['thinking_cap'])
-            or (closure == 'forced') != value['thinking_cap_reached']
+            or (closure != 'repetition' and (closure == 'forced') != value['thinking_cap_reached'])
             or type(value.get('answer_cap_reached')) is not bool
             or value['answer_cap_reached'] != (n == policy['answer_cap'])
             or value['output_cap_reached'] != (value['thinking_cap_reached'] or value['answer_cap_reached'])

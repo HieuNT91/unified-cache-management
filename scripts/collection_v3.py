@@ -141,6 +141,8 @@ def answer_metrics(record):
     names = ('sequence_id', 'seed', 'prompt_id', 'subtask', 'scoring', 'accuracy', 'timings',
              'thinking_tokens', 'answer_tokens', 'control_tokens', 'output_tokens', 'forced_tokens',
              'generated_answer_tokens', 'generated_thinking_open_tokens', 'thinking_closure',
+             'thinking_loop_breaker', 'thinking_broken', 'thinking_break_pattern_size',
+             'thinking_break_token_index', 'finish_reason', 'stop_reason',
              'thinking_cap_reached', 'answer_cap_reached', 'output_cap_reached', 'unfinished_thinking',
              'token_sha256', 'evaluation_protocol', 'gpu_uuids', 'input_sha256')
     result = {k: record[k] for k in names if k in record}

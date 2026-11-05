@@ -64,9 +64,11 @@ def validate_sample_policy(sample):
 
 class TotalBudgetState:
     """Same logits/scheduler interface as the legacy separately capped decoder."""
-    def __init__(self, policy):
+    def __init__(self, policy, loop_breaker=None):
         from copy import deepcopy
         self.policy = deepcopy(validate_policy(policy))
+        from runner.thinking_loop import ThinkingLoop
+        self.loop = ThinkingLoop(loop_breaker)
         self.seen = self.thinking = self.answer = self.forced = self.opening_tokens = 0
         self.phase = 'thinking'
         self.closure = self.first_answer_index = None
@@ -75,7 +77,7 @@ class TotalBudgetState:
         self.answer_eos = False
 
     def forced_next(self):
-        if self.phase == 'thinking' and self.thinking == THINKING_CAP:
+        if self.phase == 'thinking' and (self.thinking == THINKING_CAP or self.loop.broken):
             return self.policy['close_id']
         return self.queue[0] if self.queue else None
 
@@ -94,7 +96,7 @@ class TotalBudgetState:
                 self.forced += 1
             if self.phase == 'thinking':
                 if token == p['close_id']:
-                    self.closure = 'forced' if forced is not None else 'natural'
+                    self.closure = 'repetition' if self.loop.broken else 'forced' if forced is not None else 'natural'
                     self.queue = list(p['transition_ids'] + p['prefix_ids'])
                     self.phase = 'transition' if self.queue else 'answer'
                 elif token == p['open_id'] and i == 0 and not p['opening_in_prompt']:
@@ -103,6 +105,7 @@ class TotalBudgetState:
                     raise ValueError('Premature EOS or control token in thinking')
                 else:
                     self.thinking += 1
+                    self.loop.observe(token, self.thinking)
             elif self.phase == 'transition':
                 self.queue.pop(0)
                 if not self.queue:
@@ -125,14 +128,16 @@ class TotalBudgetState:
     def metrics(self, tokenizer):
         return dict(generated_answer_tokens=self.answer, forced_tokens=self.forced,
                     generated_thinking_open_tokens=self.opening_tokens,
-                    thinking_cap_reached=self.closure == 'forced',
+                    thinking_cap_reached=self.thinking == THINKING_CAP,
                     answer_cap_reached=self.seen == OUTPUT_CAP and not self.answer_eos,
-                    thinking_closure=self.closure,
+                    thinking_closure=self.closure, **self.loop.metrics(),
                     scored_text=tokenizer.decode(self.answer_ids, skip_special_tokens=False))
 
 
 def validate_outcome(value, policy):
     validate_policy(policy)
+    from runner.thinking_loop import validate_metrics
+    validate_metrics(value)
     for key in ('generated_answer_tokens', 'generated_thinking_open_tokens', 'forced_tokens',
                 'thinking_tokens', 'answer_tokens', 'control_tokens', 'output_tokens'):
         if type(value.get(key)) is not int or value[key] < 0:
@@ -141,8 +146,8 @@ def validate_outcome(value, policy):
     transition = len(policy['transition_ids']) + len(policy['prefix_ids'])
     latency = value.get('first_answer_content_seconds')
     capped = value.get('answer_cap_reached')
-    if (closure not in ('natural', 'forced') or value['thinking_tokens'] > THINKING_CAP
-            or value['forced_tokens'] != transition + (closure == 'forced')
+    if (closure not in ('natural', 'forced', 'repetition') or value['thinking_tokens'] > THINKING_CAP
+            or value['forced_tokens'] != transition + (closure in ('forced', 'repetition'))
             or value['answer_tokens'] != n + transition
             or value['thinking_tokens'] + value['answer_tokens'] + value['control_tokens'] != value['output_tokens']
             or value['output_tokens'] > OUTPUT_CAP or opening not in (0, 1)
@@ -150,8 +155,8 @@ def validate_outcome(value, policy):
             or type(capped) is not bool or (capped and value['output_tokens'] != OUTPUT_CAP)
             or value['control_tokens'] != 1 + opening + (not capped)
             or type(value.get('thinking_cap_reached')) is not bool
-            or value['thinking_cap_reached'] != (closure == 'forced')
-            or (closure == 'forced') != (value['thinking_tokens'] == THINKING_CAP)
+            or value['thinking_cap_reached'] != (value['thinking_tokens'] == THINKING_CAP)
+            or (closure != 'repetition' and (closure == 'forced') != (value['thinking_tokens'] == THINKING_CAP))
             or value.get('output_cap_reached') != capped
             or (n == 0 and latency is not None)
             or (n > 0 and (type(latency) not in (int, float) or not math.isfinite(latency) or latency < value['ttft_seconds']))):

@@ -17,9 +17,12 @@ def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None,
         if not thinking or budget != policy['output_reserve']:
             raise ValueError('Thinking answer requires its complete frozen generation policy')
     extra = {METADATA_KEY: metadata} if metadata is not None else {}
+    from runner.thinking_loop import KEY as LOOP_KEY, CONFIG as LOOP_CONFIG
+    loop_breaker = dict(LOOP_CONFIG) if policy is not None else None
     if policy is not None:
         extra[KEY] = policy
-    state = BudgetState(policy) if policy is not None else None
+        extra[LOOP_KEY] = loop_breaker
+    state = BudgetState(policy, loop_breaker) if policy is not None else None
     answer_first = None
     params = SamplingParams(temperature=.6 if thinking else 0., top_p=.95 if thinking else 1.,
                             top_k=20 if thinking else 32, min_p=0., seed=seed, max_tokens=budget,
@@ -58,6 +61,14 @@ def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None,
         result.ruler_thinking_state = state
         result.first_answer_content_seconds = answer_first
     return result, first, time.perf_counter() - started
+
+
+def thinking_loop_metrics(result):
+    """Intervention metadata for standalone/sweep result writers."""
+    state = getattr(result, 'ruler_thinking_state', None)
+    if state is None or state.loop.config is None:
+        return {}
+    return dict(thinking_closure=state.closure, **state.loop.metrics())
 
 
 def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, *, gpu_scores=False):

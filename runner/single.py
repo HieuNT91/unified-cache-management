@@ -155,6 +155,8 @@ def run(args):
         evaluation=evaluation_metadata(sample)
         output_metrics=OutputAnalyzer(llm.get_tokenizer()).analyze(list(output.token_ids),ids,sample['thinking'])
         accuracy=score_answer(scoring_text(output.text,output_metrics,evaluation),evaluation)
+        from runner.generation import thinking_loop_metrics
+        output_metrics.update(thinking_loop_metrics(result))
         record = dict(**sample_provenance(sample),method=args.method, ratio=args.ratio if cached else None,
             scoring_layers=list(scoring_layers), input_sha256=digest(args.input),
             model=str(args.model), gpu_uuids=devices, runtime_versions=VERSIONS,

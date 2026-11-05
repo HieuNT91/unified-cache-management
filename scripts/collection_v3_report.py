@@ -43,7 +43,7 @@ def summarize(data, rows, settings, same_count=False):
                 denom = statistics.mean(r['timings']['ttft_seconds'] for r in paired) if paired else 0
                 value['ttft_speedup'] = statistics.mean(base[key(r)]['timings']['ttft_seconds'] for r in paired)/denom if denom else None
                 value['paired_with_baseline'] = len(paired)
-                value['thinking_cap_reached'] = sum(r.get('thinking_closure') == 'forced' for r in values)
+                value['thinking_cap_reached'] = sum(r.get('thinking_cap_reached', False) for r in values)
                 value['answer_cap_reached'] = sum(r['output_cap_reached'] for r in values)
                 table[case] = value
             tables[scope if seed is None else f'seed-{seed}/'+scope] = table
@@ -52,14 +52,15 @@ def summarize(data, rows, settings, same_count=False):
 
 
 def markdown(table):
-    lines = ['| method | done/total | accuracy | ttft | speedup | thinking tokens | answers tokens | capped thinking | capped answers |',
-             '|---|---:|---:|---:|---:|---:|---:|---:|---:|']
+    lines = ['| method | done/total | accuracy | ttft | speedup | thinking tokens | answers tokens | capped thinking | capped answers | thinking broken |',
+             '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
     fmt = lambda v: 'N/A' if v is None else f'{v:.3f}'
     for case, v in table.items():
         name = 'no cache' if case == 'nocache' else case.removeprefix('prophetkv-')
         cells = [name, f"{v['completed']}/{v['expected']}"] + [fmt(v[k]) for k in
             ('accuracy_percent', 'mean_ttft_seconds', 'ttft_speedup', 'mean_thinking_tokens', 'mean_answer_tokens')]
         cells += ([str(v['thinking_cap_reached']), str(v['answer_cap_reached'])] if v['completed'] else ['N/A', 'N/A'])
+        cells += [str(v['thinking_broken']) if v['completed'] else 'N/A']
         lines.append('| '+' | '.join(cells)+' |')
     return '\n'.join(lines)+'\n'
 

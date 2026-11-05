@@ -165,6 +165,9 @@ def example(row, probe, outcomes, source_pins, dataset):
         if KEY in row:
             result['outcomes'][case].update({k:record[k] for k in ('generated_answer_tokens','generated_thinking_open_tokens','forced_tokens',
                 'thinking_cap_reached','answer_cap_reached','thinking_closure')})
+            result['outcomes'][case].update({k: record[k] for k in (
+                'thinking_loop_breaker', 'thinking_broken', 'thinking_break_pattern_size',
+                'thinking_break_token_index', 'finish_reason', 'stop_reason') if k in record})
             result['outcomes'][case]['first_answer_content_seconds'] = record['timings']['first_answer_content_seconds']
     return result
 
