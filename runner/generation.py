@@ -74,13 +74,16 @@ def thinking_loop_metrics(result):
 def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, *, gpu_scores=False):
     """Independent CPU replay of each TP rank's global scores and layer sets."""
     import math
-    if method in ('last_traj_4', 'last_traj_4f', 'query_traj_4f', 'tree-prophetkv') and gpu_scores:
-        raise ValueError('Trajectory controls require their native trajectory evidence')
+    from runner.config import METHODS
+    if method not in METHODS:
+        raise ValueError('Unsupported diagnostic method')
+    if method == 'tree-prophetkv' and gpu_scores:
+        raise ValueError('Tree-prophetkv requires its native F3 evidence')
     if sorted(w['rank'] for w in workers) != list(range(tp)):
         raise RuntimeError('Missing tensor-parallel rank')
     common = None
     common_scores = None
-    common_trajectory = None
+    common_f3 = None
     for worker in workers:
         events = worker['diagnostics']
         steps = [e for e in events if e['kind'] == 'prefill_step']
@@ -99,63 +102,41 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, *, g
             if len(events) != len(steps) or any(e['scheduled_tokens'] != e['recomputed_tokens'] for e in steps):
                 raise RuntimeError('Baseline used a sparse method')
             continue
-        if method == 'naive_reuse':
-            selections = [e for e in events if e['kind'] == 'naive_reuse_selection']
-            if ratio != 0 or len(selections) != 1 or any(
-                    e['kind'] not in ('naive_reuse_selection', 'prefill_step', 'layer_counts') for e in events):
-                raise RuntimeError('Naive reuse performed scoring or had a cache miss')
-            event = selections[0]
-            if (event.get('selected_positions') != [] or event.get('ratio') != 0
-                    or event.get('scoring_layers') != [] or event.get('probe_layers') != 0
-                    or event.get('suffix_forward_layers') != 0 or event.get('alignment_count') != 64):
-                raise RuntimeError('Naive reuse repaired context or missed alignment')
-            end = sample['boundaries'][-2]
-            reference = []
+        selections = [e for e in events if e['kind'] == 'prophetkv_selection']
+        if len(selections) != 1 or any(e['kind'] == 'cache_miss' for e in events):
+            raise RuntimeError('Expected exactly one successful cache selection')
+        event = selections[0]
+        if method != 'tree-prophetkv' and event.get('selection_method') not in (None, method):
+            raise RuntimeError('Unexpected selection method evidence')
+        prefix, end = sample['boundaries'][1], sample['boundaries'][-2]
+        if gpu_scores:
+            reference = event['selected_positions']
+            if ('scores' in event or event.get('gpu_score_verification') != 'finite-stable-selection-tp-equal-v1'
+                    or event['ratio'] != ratio or event['eligible_count'] != end-prefix
+                    or len(reference) != math.floor((end-prefix)*ratio)
+                    or reference != sorted(set(reference))
+                    or any(p < prefix or p >= end for p in reference)):
+                raise RuntimeError('Invalid GPU score validation evidence')
         else:
-            selections = [e for e in events if e['kind'] == 'prophetkv_selection']
-            if len(selections) != 1 or any(e['kind'] == 'cache_miss' for e in events):
-                raise RuntimeError('Expected exactly one successful cache selection')
-            event = selections[0]
-            if method != 'tree-prophetkv' and event.get('selection_method') == 'tree-prophetkv':
-                raise RuntimeError('Unexpected tree-prophetkv evidence for another method')
-            prefix, end = sample['boundaries'][1], sample['boundaries'][-2]
-            if gpu_scores:
-                reference = event['selected_positions']
-                if ('scores' in event or event.get('gpu_score_verification') != 'finite-stable-selection-tp-equal-v1'
-                        or event['ratio'] != ratio or event['eligible_count'] != end-prefix
-                        or len(reference) != math.floor((end-prefix)*ratio)
-                        or reference != sorted(set(reference))
-                        or any(p < prefix or p >= end for p in reference)):
-                    raise RuntimeError('Invalid GPU score validation evidence')
+            scores = event['scores']
+            if len(scores) != end - prefix or not all(math.isfinite(s) for s in scores):
+                raise RuntimeError('Invalid selection scores')
+            if common_scores is not None and scores != common_scores:
+                raise RuntimeError('TP ranks disagree on native attention scores')
+            common_scores = scores
+            count = math.floor(len(scores) * ratio)
+            if method == 'tree-prophetkv':
+                from runner.tree_prophetkv import validate_selection
+                reference = validate_selection(event, sample, ratio)
+                tree_evidence = event['f3_links']
+                if common_f3 is not None and tree_evidence != common_f3:
+                    raise RuntimeError('TP ranks disagree on F3 evidence')
+                common_f3 = tree_evidence
             else:
-                scores = event['scores']
-                if len(scores) != end - prefix or not all(math.isfinite(s) for s in scores):
-                    raise RuntimeError('Invalid selection scores')
-                if common_scores is not None and scores != common_scores:
-                    raise RuntimeError('TP ranks disagree on native attention scores')
-                common_scores = scores
-                count = math.floor(len(scores) * ratio)
-                if method == 'tree-prophetkv':
-                    from runner.tree_prophetkv import validate_selection
-                    reference = validate_selection(event, sample, ratio)
-                    tree_evidence = event['f3_links']
-                    if common_trajectory is not None and tree_evidence != common_trajectory:
-                        raise RuntimeError('TP ranks disagree on F3 evidence')
-                    common_trajectory = tree_evidence
-                elif method in ('last_traj_4', 'last_traj_4f', 'query_traj_4f'):
-                    from runner.last_traj_4 import validate_selection
-                    reference = validate_selection(event, sample, ratio, method)
-                    trajectory = (event['draft_tokens'], event['copy_z'], event['copying'])
-                    if common_trajectory is not None and trajectory != common_trajectory:
-                        raise RuntimeError('TP ranks disagree on trajectory evidence')
-                    common_trajectory = trajectory
-                else:
-                    if event.get('selection_method') in ('last_traj_4', 'last_traj_4f', 'query_traj_4f'):
-                        raise RuntimeError('Unexpected trajectory selection for another method')
-                    reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
-            if (event['selected_positions'] != reference or event['scoring_layers'] != list(expected_layers)
-                    or event['fusion'] != 'mean_layers_fp32' or event['alignment_count'] != 64):
-                raise RuntimeError('Selection replay, mean or cache alignment mismatch')
+                reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
+        if (event['selected_positions'] != reference or event['scoring_layers'] != list(expected_layers)
+                or event['fusion'] != 'mean_layers_fp32' or event['alignment_count'] != 64):
+            raise RuntimeError('Selection replay, mean or cache alignment mismatch')
         if common is not None and common != reference:
             raise RuntimeError('TP ranks disagree on selected positions')
         common = reference

@@ -12,7 +12,6 @@ from runner.setups import atomic_json,file_hash
 
 ACTIONS=[dict(id='nocache',method='baseline',ratio=None),dict(id='prophetkv-1',method='prophetkv',ratio=.01),dict(id='prophetkv-5',method='prophetkv',ratio=.05)]
 
-
 def diagnostics():
     selected=[64,65,66];positions=selected+list(range(128,384));count=len(positions)
     events=[dict(kind='prophetkv_selection',scores=[1.]*64,selected_positions=selected,
@@ -22,21 +21,7 @@ def diagnostics():
         selected_positions=positions,selected_set_verified=True,projection_tokens=count,attention_tokens=count,ffn_tokens=count) for i in range(64)]
     return [dict(rank=r,diagnostics=copy.deepcopy(events)) for r in range(4)]
 
-
 class NoProbeTests(unittest.TestCase):
-    def test_worker_resumes_missing_answers_without_probe(self):
-        from scripts.rpkv_gpu_validation import worker
-        protocol=dict(dataset='ruler',actions=ACTIONS,answer_validation=NATIVE_ANSWER_VALIDATION)
-        row=dict(id='p');engine=Mock()
-        engine.answer.return_value=(dict(thinking_tokens=0),[]);engine.end.return_value={}
-        engine.probe.side_effect=AssertionError('Unexpected probe request')
-        def existing(root,case,row,protocol):
-            if case=='probe':raise AssertionError('Unexpected probe lookup')
-            return {} if case=='prophetkv-1' else None
-        with tempfile.TemporaryDirectory() as tmp,patch('scripts.rpkv_gpu_validation.load_run',return_value=(protocol,[row])),patch('runner.setups.check_environment'),patch('runner.corpus_runtime.Engine',return_value=engine),patch('scripts.rpkv_gpu_validation.accepted',side_effect=existing),patch('scripts.rpkv_gpu_validation.publish') as pub,patch('scripts.rpkv_gpu_validation.report'):
-            worker(Path(tmp),'cached','attempt')
-        engine.probe.assert_not_called();engine.answer.assert_called_once_with(ACTIONS[2],'prophetkv-5')
-        engine.begin.assert_called_once_with(row);engine.end.assert_called_once();engine.close.assert_called_once();pub.assert_called_once()
 
     def test_engine_answer_keeps_diagnostics_retirement_and_cache_checks(self):
         from runner.corpus_runtime import Engine
@@ -76,54 +61,9 @@ class NoProbeTests(unittest.TestCase):
             atomic_json(folder/'diagnostics.json',ds);receipt=json.loads((folder/'validated.json').read_text());receipt['files']['diagnostics.json']=file_hash(folder/'diagnostics.json');atomic_json(folder/'validated.json',receipt)
             with self.assertRaisesRegex(RuntimeError,'Selection replay'):accepted(root,'prophetkv-5',row,protocol,full=True)
 
-    def test_final_live_report_requires_answers_but_no_probes(self):
-        from scripts.rpkv_gpu_validation import report
-        protocol=dict(dataset='ruler',actions=ACTIONS,answer_validation=NATIVE_ANSWER_VALIDATION);rows=[dict(id='p',subtask='niah_single_1')]
-        def outcome(root,case,row,protocol):
-            if case=='probe':raise AssertionError('Unexpected probe lookup')
-            return dict(subtask=row['subtask'],scoring='ruler_all',prediction='x',accuracy=1.,thinking_tokens=0,answer_tokens=1,control_tokens=0,output_tokens=1,unfinished_thinking=False,output_cap_reached=False,timings=dict(ttft_seconds=.2))
-        with tempfile.TemporaryDirectory() as tmp,patch('scripts.rpkv_gpu_validation.load_run',return_value=(protocol,rows)),patch('scripts.rpkv_gpu_validation.accepted',side_effect=outcome):
-            value=report(Path(tmp),True);self.assertEqual(value['probes'],0)
-            self.assertTrue(value['final']);self.assertEqual(len(value['actions']),3)
-            with patch('scripts.rpkv_gpu_validation.accepted',return_value=None):
-                with self.assertRaisesRegex(ValueError,'incomplete answers'):report(Path(tmp),True)
-
     def test_old_protocols_keep_their_original_validation_identity(self):
         self.assertEqual(answer_validation({}),PROBE_ANSWER_VALIDATION)
         with self.assertRaises(ValueError):answer_validation(dict(answer_validation='unknown'))
-
-    def test_final_report_uses_committed_results_without_model_or_replay(self):
-        from scripts.rpkv_gpu_results import report
-        from scripts.ruler import TASKS
-        from runner.layout import token_hash
-        with tempfile.TemporaryDirectory() as tmp:
-            base=Path(tmp);ruler=base/'upstream';(ruler/'scripts/eval/synthetic').mkdir(parents=True)
-            (ruler/'scripts/eval/evaluate.py').write_text('def postprocess_pred(text, task):\n    return text.strip()\n')
-            (ruler/'scripts/eval/synthetic/constants.py').write_text("TASKS={'fake': {'metric_fn': lambda predictions, references: 100.0}}\n")
-            atomic_json(base/'experiment.json',dict(ruler_samples_per_task=1,longbench_samples=1,seed=42))
-            for dataset,tasks in [('ruler',TASKS),('longbench-v2',['qa'])]:
-                root=base/'results'/dataset;prepared=base/'prepared'/dataset
-                sample=dict(token_ids=[1,2,3],token_sha256=token_hash([1,2,3]),thinking=False,max_output_tokens=128 if dataset=='ruler' else 16384,truncation=dict(truncated=False))
-                atomic_json(prepared/'p.json',sample)
-                rows=[dict(id=t,subtask=t,prepared='p.json') for t in tasks]
-                atomic_json(root/'rows.json',rows);atomic_json(root/'complete.json',dict(answers=len(rows)*3,probes=0))
-                atomic_json(root/'protocol.json',dict(model='fake',prepared=str(prepared),actions=ACTIONS,answer_validation=NATIVE_ANSWER_VALIDATION))
-            analysis=dict(answer_text='The correct answer is (A)',thinking_tokens=0,answer_tokens=1,control_tokens=0,output_tokens=1,unfinished_thinking=False)
-            def outcome(root,case,row,protocol,full=False):
-                self.assertFalse(full)
-                if case=='probe':raise AssertionError('Unexpected independent probe')
-                cap=128 if root.name=='ruler' else 16384
-                return dict(subtask=row['subtask'],output_token_ids=[9],prediction='The correct answer is (A)',references=['A'],scoring='ruler_all' if root.name=='ruler' else 'longbench_v2',
-                    token_sha256=token_hash([1,2,3]),prompt_tokens=3,max_output_tokens=cap,accuracy=1.,output_cap_reached=False,
-                    timings=dict(ttft_seconds=.2,answer_engine_ttft_seconds=.19),**analysis)
-            with patch.dict('os.environ',{'CUDA_VISIBLE_DEVICES':''}),patch('transformers.AutoTokenizer.from_pretrained',side_effect=AssertionError('Reporter must not load a model')),patch('scripts.rpkv_gpu_results.accepted',side_effect=outcome),patch('runner.generation.verify_diagnostics',side_effect=AssertionError('Reporter must not replay diagnostics')),patch('builtins.print'):
-                report(base)
-            receipt=json.loads((base/'final/completion.json').read_text())
-            self.assertEqual((receipt['answers'],receipt['probes']),(42,0))
-            self.assertTrue(receipt['complete']);self.assertFalse(receipt['audits']['ruler']['diagnostic_replay'])
-            self.assertFalse(receipt['audits']['ruler']['independent_scoring_replay'])
-            self.assertFalse((base/'final/validation.json').exists())
-            self.assertIn('No independent diagnostic probes were run',(base/'final/report.md').read_text())
 
 
 if __name__=='__main__':unittest.main()

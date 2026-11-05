@@ -28,7 +28,7 @@ class ProphetKV(Blend):
         self.pending_audit=None
         self.layer_index=0
         self.prefill_state=None
-        if self.method in ('prophetkv','selective_prophetkv','last_traj_4','last_traj_4f','query_traj_4f','tree-prophetkv'):self.compute_meta={}
+        if self.method in ('prophetkv','selective_prophetkv','tree-prophetkv'):self.compute_meta={}
 
     def build_sparse_meta(self, scheduler_output, requests, input_batch, attn_metadata):
         self.active=False;self.pending_audit=None;self.layer_index=0
@@ -102,16 +102,12 @@ class ProphetKV(Blend):
         if not self.active:
             return None
         if self.coverage_selected is None:
-            if getattr(self, 'naive_reuse', False):
-                from runner.naive_reuse import select_without_scoring
-                self.coverage_selected=select_without_scoring(self, positions.device)
-            else:
-                b=self.request.boundaries
-                ids=torch.tensor(self.prompt_token_ids[b[-2]:],device=positions.device)
-                embeddings=torch.cat([self.model.get_input_embeddings(ids[a:a+16384])
-                                      for a in range(0,len(ids),16384)])
-                suffix_positions=torch.arange(b[-2],b[-1],device=positions.device)
-                self.coverage_selected=probe(self,suffix_positions,embeddings)
+            b=self.request.boundaries
+            ids=torch.tensor(self.prompt_token_ids[b[-2]:],device=positions.device)
+            embeddings=torch.cat([self.model.get_input_embeddings(ids[a:a+16384])
+                                  for a in range(0,len(ids),16384)])
+            suffix_positions=torch.arange(b[-2],b[-1],device=positions.device)
+            self.coverage_selected=probe(self,suffix_positions,embeddings)
             self.prefill_state.select_once(self.coverage_selected.cpu().tolist())
         expected=self.prefill_state.step(self.step_start,self.step_end-self.step_start)
         self.step_positions=torch.tensor(expected,device=positions.device,dtype=positions.dtype)

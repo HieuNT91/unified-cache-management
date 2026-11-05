@@ -69,7 +69,7 @@ def report(base, same_count=False, final=False, emit=True):
         raise ValueError('Cannot finalize incomplete controls')
     result = summarize(data, rows, same_count)
     result['all_methods_matched'] = summarize(data, rows, True)
-    if settings['dataset'] == 'longbench-v2' and not settings.get('naive_reuse'):
+    if settings['dataset'] == 'longbench-v2':
         result['primary_matched'] = summarize({c: data[c] for c in SCHEDULE['primary']}, rows, True)
     result['waiting'] = {role: dict(configured=(base/role/'devices.json').exists(),
         missing_answers=len(rows)*len(scheduled(settings, role))-sum(len(data[c]) for c in scheduled(settings, role)))

@@ -64,7 +64,7 @@ mkdir -p "$NLTK_DATA/tokenizers"
 ```
 
 Kết quả là `nltk_data/tokenizers/punkt_tab/english/` (và các ngôn ngữ khác).
-Thêm dòng sau vào `.env.l40.thinking` hoặc file env của launcher đang dùng để
+Thêm dòng sau vào `config/.env.l40.thinking` hoặc file env của launcher đang dùng để
 process prepare/worker luôn tìm được dữ liệu:
 
 ```dotenv
@@ -158,7 +158,7 @@ PY
 python -m pip check
 ```
 
-Copy `.env.a800.example` → `.env.a800` hoặc `.env.l20.example` → `.env.l20`
+Copy `config/.env.a800.example` → `config/.env.a800` hoặc `config/.env.l20.example` → `config/.env.l20`
 nếu chưa có file cấu hình. Sửa đường dẫn model/data/output và UUID server mới,
 đặt `PYTHON_BIN=/home/zhufangzhou/jh/envs/ucm/bin/python`.
 Ở terminal mới, activate env và chạy lại các dòng `export`/`unset` ở bước 1.

@@ -3,7 +3,7 @@
 ucm_load_server_env() {
     local _ucm_env_root
     _ucm_env_root="$(cd -- "$1" && pwd)" || return 1
-    local _ucm_env_file="${UCM_ENV_FILE:-$_ucm_env_root/.env}"
+    local _ucm_env_file="${UCM_ENV_FILE:-$_ucm_env_root/config/.env}"
     local _ucm_env_line _ucm_env_key _ucm_env_value _ucm_env_number=0
     if [[ "$_ucm_env_file" != /* ]]; then
         _ucm_env_file="$_ucm_env_root/$_ucm_env_file"

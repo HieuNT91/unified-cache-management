@@ -255,8 +255,9 @@ class ThinkingTests(unittest.TestCase):
             fake=Path(tmp)/'fake python'
             fake.write_text(f'#!{sys.executable}\nimport json,os,sys\nprint(json.dumps([sys.argv[1:],os.environ.get("CUDA_VISIBLE_DEVICES")]))\n')
             fake.chmod(0o755)
-            (root/'.env.l20.thinking').write_text(f'PYTHON_BIN="{fake}"\nMODEL_PATH="/model from file"\n')
-            (root/'.env.l20').write_text('PYTHON_BIN=/must-not-run\n')
+            (root/'config').mkdir()
+            (root/'config/.env.l20.thinking').write_text(f'PYTHON_BIN="{fake}"\nMODEL_PATH="/model from file"\n')
+            (root/'config/.env.l20').write_text('PYTHON_BIN=/must-not-run\n')
             for command in ('configure','prepare','detach','resume','stop','status','status_same_count','report'):
                 result=subprocess.run(['bash',str(launchers/'l20_ruler_thinking_data.sh'),command],cwd='/tmp',
                     env={'PATH':os.environ['PATH'],'MODEL_PATH':'/override'},capture_output=True,text=True)

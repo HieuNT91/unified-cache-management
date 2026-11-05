@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import Mock,patch
 import numpy as np
 
+import runner.generation  # Load before fixtures temporarily replace sys.modules.
 from runner.router_policy import (ACTIONS,FEATURES,DEFINITIONS,SCHEMA,digest,validate,decide,
                                   features_from_arrays,load_policy)
 from runner.router_export import compile_policy,source_action
@@ -215,7 +216,8 @@ class WorkflowTests(unittest.TestCase):
     def test_env_precedence_relocation_and_commands(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);fake=root/'python';fake.write_text('#!/bin/bash\nprintf "%s\\n" "$@"\n');fake.chmod(0o755)
-            envfile=root/'.env';envfile.write_text(f'PYTHON_BIN="{fake}"\nEXPERIMENT_DIR="{root}/old"\nPREPARED_DIR="$EXPERIMENT_DIR/prepared"\n')
+            (root/'config').mkdir()
+            envfile=root/'config/.env';envfile.write_text(f'PYTHON_BIN="{fake}"\nEXPERIMENT_DIR="{root}/old"\nPREPARED_DIR="$EXPERIMENT_DIR/prepared"\n')
             for command in ('configure','prepare','detach','resume','status'):
                 proc=subprocess.run(['bash',str(ROOT/'scripts/launcher/a800_router.sh'),command],cwd='/tmp',
                     env=dict(os.environ,UCM_ENV_FILE=str(envfile),EXPERIMENT_DIR=str(root/'new')),capture_output=True,text=True,check=True)

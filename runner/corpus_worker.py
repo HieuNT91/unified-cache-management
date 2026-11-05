@@ -81,23 +81,20 @@ def export(worker,output,sample,inventory=None):
 
 def tree_mode(worker,request_id,definition,capture=False,head_layers=()):
     """Generic actions using the same request-scoped dense guard as frozen routers."""
+    if definition['method'] not in ('baseline', 'prophetkv', 'tree-prophetkv'):
+        raise ValueError('Unsupported fixed-control method')
     from runner.worker import configure
     from runner.router_guard import is_dense_request
     from ucm.sparse.state import get_ucm_sparse
     from vllm.distributed import get_tensor_model_parallel_rank, get_tp_group
     dense=definition['method']=='baseline'
-    from runner.naive_reuse import ACTION
-    naive=definition['method']=='naive_reuse'
-    if naive and (definition != ACTION or capture or head_layers):
-        raise ValueError('Invalid naive reuse action')
     if is_dense_request(request_id)!=dense or (capture and definition['ratio']!=.01):raise ValueError('Invalid tree request tag/probe')
-    trajectory=definition['method'] in ('last_traj_4','last_traj_4f','query_traj_4f','tree-prophetkv')
-    if trajectory and (capture or head_layers):
+    tree=definition['method']=='tree-prophetkv'
+    if tree and (capture or head_layers):
         raise ValueError(definition['method']+' does not support independent feature capture')
-    configure(worker,definition['method'] if trajectory else 'prophetkv',.01 if definition['ratio'] is None else definition['ratio'])
+    configure(worker,'tree-prophetkv' if tree else 'prophetkv',.01 if definition['ratio'] is None else definition['ratio'])
     sparse=get_ucm_sparse()
     sparse.gpu_router=None
-    sparse.naive_reuse=naive
     if sparse.router_arrays is not None or sparse.router_capture:raise RuntimeError('Capture leaked')
     if head_layers:
         from runner.longbench_features import HEAD_LAYERS

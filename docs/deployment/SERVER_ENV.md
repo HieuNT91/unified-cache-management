@@ -9,28 +9,28 @@
 > exact-64000, padding and RULER thinking/16K-output settings are obsolete.
 > Shell commands remain relative to the worktree root, not this folder.
 
-Both launchers automatically read `.env` from the checkout containing `scripts/`,
-regardless of the current working directory. Git ignores `.env` and `.env.*`;
-`.env.example` remains tracked. Copy the template once or write your own `.env`.
+Both launchers automatically read `config/.env` from the checkout containing `scripts/`,
+regardless of the current working directory. Git ignores `config/.env` and `config/.env.*`;
+`config/.env.example` remains tracked. Copy the template once or write your own `config/.env`.
 Each setting is a trusted local Bash `KEY=VALUE` assignment on one line. Quotes,
 comments, optional `export`, and references to earlier variables are supported.
 Do not put multiline assignments or general shell scripts in this file.
 
-Precedence is **existing environment > .env > launcher defaults**. Existing values
+Precedence is **existing environment > config/.env > launcher defaults**. Existing values
 also win when later assignments expand them. If a previous shell still contains
 old exports, start a fresh terminal or unset those variables once before using
-`.env`. All loaded settings are exported to workers. Optional `UCM_ENV_FILE` selects
+`config/.env`. All loaded settings are exported to workers. Optional `UCM_ENV_FILE` selects
 another file; relative paths are resolved against the checkout root. A missing
-explicit file is an error, while no default `.env` preserves the old behavior.
+explicit file is an error, while no default `config/.env` preserves the old behavior.
 
 For a continuation, copy the exact original output, prepared-input, model and
 cache paths. Do not create a new result directory. Resume verifies these settings
 and keeps the original GPU assignments. Optional `GPU_A`/`GPU_B` contain four UUIDs
 each; omit them to keep the launchers' existing server-specific defaults.
 
-## L20 `.env`
+## L20 `config/.env`
 
-Save as `/data/jh/unified-cache-management/.env`:
+Save as `/data/jh/unified-cache-management/config/.env`:
 
 ```bash
 PROJECT=/data/jh/unified-cache-management
@@ -45,11 +45,11 @@ RESUME_VALIDATION=fast
 
 Replace the last value with the real timestamped directory used at launch.
 
-## A800 `.env`
+## A800 `config/.env`
 
-Save `.env` in the **actual code checkout containing `scripts/launcher/a800_longbench.sh`**.
+Save `config/.env` in the **actual code checkout containing `scripts/launcher/a800_longbench.sh`**.
 The earlier guide used
-`/mnt/sde/jh/projects/unified-cache-management/.worktrees/longbench-a800/.env`.
+`/mnt/sde/jh/projects/unified-cache-management/.worktrees/longbench-a800/config/.env`.
 If you run from the main checkout, save it there instead. With the earlier guide's
 paths, its contents are:
 
@@ -76,10 +76,10 @@ git -C /home/thnguyen/spark/unified-cache-management/.worktrees/prophetkv-clean 
   push origin prophetkv/clean-qwen3-32b-yarn4
 ```
 
-On each server, enter the **existing code checkout** and write `.env` as above.
+On each server, enter the **existing code checkout** and write `config/.env` as above.
 Keep live code in place until the owned workers exit. Fetching and extracting
 helpers into `/tmp` does not modify the live checkout. This bootstrap works even
-when its old launcher has no `.env` or `stop` support:
+when its old launcher has no `config/.env` or `stop` support:
 
 ```bash
 git fetch origin
@@ -90,8 +90,8 @@ git show origin/prophetkv/clean-qwen3-32b-yarn4:scripts/sweep_control.py \
   > "$UPDATE_TOOLS/sweep_control.py" &&
 source "$UPDATE_TOOLS/server_env.sh" &&
 ucm_load_server_env "$PWD" &&
-"${PYTHON_BIN:?Set PYTHON_BIN in .env}" "$UPDATE_TOOLS/sweep_control.py" \
-  stop --output "${EXPERIMENT_DIR:?Set EXPERIMENT_DIR in .env}" &&
+"${PYTHON_BIN:?Set PYTHON_BIN in config/.env}" "$UPDATE_TOOLS/sweep_control.py" \
+  stop --output "${EXPERIMENT_DIR:?Set EXPERIMENT_DIR in config/.env}" &&
 git merge --ff-only origin/prophetkv/clean-qwen3-32b-yarn4
 ```
 
@@ -127,9 +127,9 @@ bash scripts/launcher/a800_longbench.sh aggregate
 ```
 
 The launcher logs above are in the code checkout. Worker logs and live/final
-summaries remain under `EXPERIMENT_DIR` from `.env`; `status` prints the summary
+summaries remain under `EXPERIMENT_DIR` from `config/.env`; `status` prints the summary
 path. No further exports or manual sourcing are needed for launcher commands.
-Do not change `.env` to another output directory while managing a live run.
+Do not change `config/.env` to another output directory while managing a live run.
 
 For later updates, the installed launchers support `stop` directly, so the
 bootstrap is no longer necessary. Example for L20 (substitute `a800_longbench.sh`
@@ -138,14 +138,14 @@ on A800):
 ```bash
 bash scripts/launcher/l20_ruler.sh stop &&
 git pull --ff-only origin prophetkv/clean-qwen3-32b-yarn4
-# Then use the resume command above, keeping the existing .env paths.
+# Then use the resume command above, keeping the existing config/.env paths.
 ```
 
 Fast resume (`RESUME_VALIDATION=fast`) skips repeated parsing/replay/hashing of
 saved attention diagnostics, while checking compatible settings, saved answers,
 retirement and diagnostic-file presence. New measurements retain full validation.
 Use `full` for diagnostic replay and hashing as well. The chosen mode is recorded
-in receipts and reports. Existing exports override the `.env` setting.
+in receipts and reports. Existing exports override the `config/.env` setting.
 
 The fast-resume update recognizes the previous 16c1f75/2ae7f30 continuation runtime
 and preserves results from it. Arbitrary future inference changes are not

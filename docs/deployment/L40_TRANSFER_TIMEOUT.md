@@ -51,7 +51,7 @@ và model forward. vLLM0.9.2 đặt mặc định này trong
 Bản chia lô trước đó bỏ sót việc cấu hình deadline bao ngoài này.
 
 Launcher L40 TP2 nay mặc định RPC2400 giây; chỉnh trực tiếp trong
-`.env.l40.thinking` của checkout chạy launcher:
+`config/.env.l40.thinking` của checkout chạy launcher:
 
 ```bash
 VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS="2400"
@@ -100,7 +100,7 @@ bash scripts/launcher/l40_ruler_thinking_data.sh status
 ```
 
 Controller đọc model, prepared, cache-root, TP2 và bốn cặp GPU UUID từ metadata
-của run cũ. Giữ `.env.l40.thinking` hiện có và thêm dòng timeout trên; không chép
+của run cũ. Giữ `config/.env.l40.thinking` hiện có và thêm dòng timeout trên; không chép
 đè toàn bộ file. Không cần configure hoặc prepare lại. User vẫn
 kiểm tra availability của các GPU đã gán trước resume. No-cache đã accepted được
 bỏ qua; feature probes còn thiếu chạy tiếp, rồi các answer ProphetKV còn thiếu.
@@ -108,7 +108,8 @@ Inputs và seed giữ nguyên. Không xóa `records`, `validated.json`, settings
 hoặc prepared inputs. Nếu chỉ một phần no-cache hợp lệ thì resume chạy phần còn
 thiếu; không giả định accepted cho kết quả lỗi/hỏng.
 
-Không cần patch rời hoặc `cache_staging_recovery.py` để resume từ source hiện tại.
+Không cần patch rời để resume từ source hiện tại. Công cụ sao chép recovery cũ
+đã được loại khỏi `AdaTreeV1`; các kiểm tra readiness/ownership vẫn được giữ.
 Helper recovery đó phục vụ bản frozen cũ và lỗi `.temp`; không phải luồng launch
 hiện tại. Các bản patch attention được đề xuất trước đó đã rút lại.
 

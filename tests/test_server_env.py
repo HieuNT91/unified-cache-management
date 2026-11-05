@@ -15,6 +15,7 @@ class ServerEnvTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        (self.root/'config').mkdir()
         self.env = {'PATH': os.environ['PATH']}
 
     def load(self, body, **overrides):
@@ -24,7 +25,7 @@ class ServerEnvTests(unittest.TestCase):
             env=dict(self.env,**overrides),capture_output=True,text=True)
 
     def test_default_file_quotes_expansion_and_exported_overrides(self):
-        (self.root/'.env').write_text('# local config\nPROJECT="/file path"\n'
+        (self.root/'config/.env').write_text('# local config\nPROJECT="/file path"\n'
             'PREPARED_DIR="$PROJECT/prepared"\nexport PYTHON_BIN="/file/python"\n')
         result=self.load('printf "%s\\n" "$PROJECT" "$PREPARED_DIR" "$PYTHON_BIN"',
                          PROJECT='/override path',PYTHON_BIN='/override/python')
@@ -46,7 +47,7 @@ class ServerEnvTests(unittest.TestCase):
         self.assertEqual(result.stdout,'/path with spaces')
 
     def test_invalid_line_fails_without_disclosing_value(self):
-        (self.root/'.env').write_text('not-an-assignment PRIVATE_VALUE\n')
+        (self.root/'config/.env').write_text('not-an-assignment PRIVATE_VALUE\n')
         result=self.load('echo should-not-run')
         self.assertNotEqual(result.returncode,0)
         self.assertIn('Expected KEY=VALUE',result.stderr)
@@ -82,7 +83,8 @@ class ServerEnvTests(unittest.TestCase):
         executable.write_text(f'#!{sys.executable}\nimport json,os,sys\n'
             'print(json.dumps(dict(argv=sys.argv[1:],gpu_a=os.environ.get("GPU_A"))))\n')
         executable.chmod(0o755)
-        (checkout/'.env').write_text(f'PYTHON_BIN="{executable}"\nGPU_A="from-checkout-env"\n')
+        (checkout/'config').mkdir()
+        (checkout/'config/.env').write_text(f'PYTHON_BIN="{executable}"\nGPU_A="from-checkout-env"\n')
         targets = {
             'a800_longbench.sh': ('sweep_report.py', '--output'),
             'l20_ruler.sh': ('sweep_report.py', '--output'),

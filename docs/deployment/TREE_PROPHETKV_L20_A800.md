@@ -45,7 +45,7 @@ the old result/settings/cache directories into the new experiment.
 | A800 | `/mnt/sde/jh/projects/unified-cache-management/.data/prepared/longbench-v2-a800-tp2-4seed-v3` | `/mnt/sde/jh/projects/unified-cache-management/.results/longbench-v2-a800-tp2-tree-prophetkv-2seed-v1/prepared` |
 
 A800 no-cache results remain at
-`.results/longbench-v2-a800-tp2-4seed-v3`. The old worktree's root `.env.a800`
+`.results/longbench-v2-a800-tp2-4seed-v3`. An env file at the old worktree root
 is not loaded automatically; these launchers use the new files under `config/`.
 Exported variables override env file values; `UCM_ENV_FILE` can explicitly select
 another file. Always review exported `EXPERIMENT_DIR`, `PREPARED_DIR`,

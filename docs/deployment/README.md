@@ -4,6 +4,15 @@ Run shell commands from the worktree root. Read [AGENTS.md](../../AGENTS.md) and
 [experiment protection](../agents/experiment-rules.md) before process operations.
 This documentation move does not authorize a launch, update, stop or resume.
 
+## AdaTreeV1 cleanup (2026-11-05)
+
+Trajectory and naive-reuse comparisons, their launchers and templates, the old
+GPU control orchestration, and the standalone cache-staging recovery copier
+have been removed. Baseline, router and tree-prophetkv retain their shared
+runtime and ordinary resume checks. Existing historical results and frozen
+packages remain unchanged; references under `docs/studies/` describe those
+packages and do not provide commands for this checkout.
+
 ## Source updates and resume (2026-10-16)
 
 Collection, corpus and router controllers permit source updates between attempts.
@@ -31,10 +40,6 @@ with no no-cache rerun or feature extraction.
 
 ## TP2 collection and portable training
 
-For a single 0% control using existing prepared inputs, see
-[L20 RULER / A800 LongBench naive reuse](NAIVE_REUSE_L20_A800.md).
-The separate launchers run the full cohort with no scoring/repair or feature probes.
-
 For a completed L20 non-thinking200/task run, use
 [the200+300 extension guide](L20_RULER_EXTEND300.md) to collect only the next300
 samples/task with the same five TP2 pairs and preserve the original results.
@@ -45,7 +50,7 @@ It has a separate launcher/env and four TP2 groups at96% memory; GPU availabilit
 Use [TP2 A800/L20 collection and training](A800_LONGBENCH_DATA.md) for the new
 503 LongBench / 2600 RULER twelve-action scope (200/task; older100/task exports remain supported). Launchers are
 `a800_longbench_primary.sh`, `a800_longbench_extra.sh`, `l20_ruler_data.sh` and
-`router_training.sh`; they read `.env.a800` or `.env.l20` automatically. The older
+`router_training.sh`; they read `config/.env.a800` or `config/.env.l20` automatically. The older
 TP4 workflow commands below remain separate and compatible.
 
 ## Current rpkv setup
@@ -53,7 +58,7 @@ TP4 workflow commands below remain separate and compatible.
 All shell launchers live in `scripts/launcher/`. Invoke them from the worktree
 root, for example `bash scripts/launcher/l20_ruler.sh status`, or use an absolute
 path from another directory. They resolve the worktree root two levels above
-their own location; `.env`, data/cache defaults and Python paths stay rooted at
+their own location; `config/.env`, data/cache defaults and Python paths stay rooted at
 the checkout.
 
 The workflow is configure → prepare → detach (or resume) → status/report.
@@ -70,7 +75,7 @@ resume uses `fast`, and reports use committed results without diagnostic replay.
 | `ruler_corpus.sh` | Router corpus collection, training and replay |
 | `ruler_corpus_add_ratios.sh` | Added ProphetKV action collection |
 
-All six launchers accept `stop`, using the same `.env` and `EXPERIMENT_DIR`
+All six launchers accept `stop`, using the same `config/.env` and `EXPERIMENT_DIR`
 as their launch command. For example:
 
 ```bash
@@ -101,9 +106,9 @@ their historical paths; use this directory layout for current commands.
 
 Use the existing environment loader in `scripts/launcher/server_env.sh`. Trusted Bash
 `KEY=VALUE` settings support quotes, comments, optional `export` and earlier
-variable references; existing environment values take precedence over `.env`,
+variable references; existing environment values take precedence over `config/.env`,
 then launcher defaults. Do not put arbitrary shell scripts or multiline values
-in `.env`. The default file is in the checkout root; `UCM_ENV_FILE` selects an
+in `config/.env`. The default file is under the checkout’s `config/` directory; `UCM_ENV_FILE` selects an
 explicit file (relative to that root), and a missing explicit file is an error.
 
 Typical settings are `PYTHON_BIN`, `MODEL_PATH`, `EXPERIMENT_DIR`, `PREPARED_DIR`,
@@ -127,7 +132,7 @@ names, cohort sizes and paths in inherited commands must not be blindly reused.
 
 | Guide | Purpose |
 |---|---|
-| [SERVER_ENV.md](SERVER_ENV.md) | `.env` syntax, precedence and historical server update workflow |
+| [SERVER_ENV.md](SERVER_ENV.md) | `config/.env` syntax, precedence and historical server update workflow |
 | [A800_LONGBENCH.md](A800_LONGBENCH.md) | Two-group A800 LongBench preparation, sweep, monitoring and reporting |
 | [A800_ROUTER.md](A800_ROUTER.md) | Native router deployment and policy/cohort verification |
 | [L20_RULER_64000.md](L20_RULER_64000.md) | Historical L20 launch configuration; use current RULER protocol for new inputs |

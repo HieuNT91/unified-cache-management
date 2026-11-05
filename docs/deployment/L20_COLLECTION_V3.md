@@ -15,13 +15,13 @@ COLLECTION_COMMIT=$(git rev-parse origin/prophetkv/tp2-router-data)
 COLLECTION_CHECKOUT="$PROJECT_DIR/.worktrees/ruler-l20-tp2-500-v3"
 git worktree add --detach "$COLLECTION_CHECKOUT" "$COLLECTION_COMMIT"
 cd "$COLLECTION_CHECKOUT"
-cp .env.l20.example .env.l20
+cp config/.env.l20.example config/.env.l20
 ```
 
 The copied environment contains:
 
 ```bash
-# Fresh collection v3; copy to .env.l20. UUIDs are saved assignments, not a live availability check.
+# Fresh collection v3; copy to config/.env.l20. UUIDs are saved assignments, not a live availability check.
 # BF16 / TP2; automatic KV memory budget 95%.
 PROJECT_DIR="/data/jh/unified-cache-management"
 PYTHON_BIN="/data/jh/envs/ucm/bin/python"

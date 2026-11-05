@@ -7,7 +7,7 @@ guide includes pull/resume commands that preserve old no-cache results and input
 
 ## Resume ProphetKV only
 
-For the existing prepared run, set this in the checkout's `.env.l40.thinking`:
+For the existing prepared run, set this in the checkout's `config/.env.l40.thinking`:
 
 ```bash
 PROPHETKV_ONLY="1"
@@ -51,13 +51,13 @@ COLLECTION_COMMIT=$(git rev-parse origin/prophetkv/tp2-router-data)
 COLLECTION_CHECKOUT="$PROJECT_DIR/.worktrees/ruler-l40-tp2-thinking-500-v3"
 git worktree add --detach "$COLLECTION_CHECKOUT" "$COLLECTION_COMMIT"
 cd "$COLLECTION_CHECKOUT"
-cp .env.l40.thinking.example .env.l40.thinking
+cp config/.env.l40.thinking.example config/.env.l40.thinking
 ```
 
 The copied environment contains:
 
 ```bash
-# Fresh collection v3; copy to .env.l40.thinking. UUIDs are saved assignments, not a live availability check.
+# Fresh collection v3; copy to config/.env.l40.thinking. UUIDs are saved assignments, not a live availability check.
 # BF16 / TP2; automatic KV memory budget 96%.
 # Physical pairs 0/1, 2/3, 4/5, 6/7. User checks L40 availability.
 PROJECT="/home/zhufangzhou/jh/projects/unified-cache-management"

@@ -62,8 +62,8 @@ L20 checkout and its existing run; configure the200-row cohort in a new checkout
 
 ## Two configuration files
 
-Copy [`.env.a800.example`](../../.env.a800.example) to `.env.a800` on A800, and
-[`.env.l20.example`](../../.env.l20.example) to `.env.l20` on L20; edit the paths.
+Copy [`config/.env.a800.example`](../../config/.env.a800.example) to `config/.env.a800` on A800, and
+[`config/.env.l20.example`](../../config/.env.l20.example) to `config/.env.l20` on L20; edit the paths.
 These are the only server configuration files needed by this workflow. Launchers
 load them automatically from the checkout root, including when invoked elsewhere.
 No terminal `export` is needed. The trusted Bash assignment loader preserves
@@ -116,7 +116,7 @@ Primary and extra must use disjoint UUIDs and the same model/data/path settings.
 At engine launch, device names, free memory and existing compute processes are
 checked. Both TP2 server profiles use utilization0.95 and automatic KV sizing:
 vLLM profiles model/runtime memory and allocates the remaining budget to KV,
-without `num_gpu_blocks_override`. This is the default; no additional `.env`
+without `num_gpu_blocks_override`. This is the default; no additional `config/.env`
 variable is needed. The workspace estimates are8GiB/rank on A800 and3GiB/rank
 on L20. These are admission estimates, not explicit runtime reservations. Admission
 counts model BF16 bytes/TP plus full original-position KV/TP plus workspace,
@@ -135,7 +135,7 @@ initialization and runtime checks must also pass.
 The automatic-memory change applies to new runs. Do not pull into a checkout
 used by an active or configured collection: its source hashes are frozen, and
 old settings/records cannot be resumed with changed code. Keep that checkout for
-the original run and update a separate checkout. In its `.env.a800` or `.env.l20`,
+the original run and update a separate checkout. In its `config/.env.a800` or `config/.env.l20`,
 use new `EXPERIMENT_DIR`, `PREPARED_DIR` and `CACHE_ROOT` paths (for example with
 an `-auto95` suffix), then run `configure`, `prepare`, `detach` as below.
 Do not launch on occupied GPUs. A800 primary and later extra must use the same
@@ -153,7 +153,7 @@ Read the matching worker log before attempting resume:
 ```bash
 cd /data/jh/unified-cache-management/.worktrees/tp2-router-data
 source scripts/launcher/server_env.sh
-UCM_ENV_FILE="${UCM_ENV_FILE:-$PWD/.env.l20}"
+UCM_ENV_FILE="${UCM_ENV_FILE:-$PWD/config/.env.l20}"
 ucm_load_server_env "$PWD"
 tail -n 150 "$EXPERIMENT_DIR"/ruler/cached-*-group4.log
 ```
@@ -184,7 +184,7 @@ stall in storage reads or device transfer. With five TP2 pairs sharing a HDD,
 storage contention is a plausible cause; confirm the cache mount and I/O activity
 before changing transfer code. For a new collection, use a local SSD/NVMe cache
 with adequate space. A larger timeout only helps a slow but progressing transfer;
-the launcher currently exposes no `.env` timeout override. Do not rewrite a frozen
+the launcher currently exposes no `config/.env` timeout override. Do not rewrite a frozen
 run's settings/source hashes to apply this advice.
 
 The previous cache-inspection command only searched `group4` inventory failures.
@@ -198,7 +198,7 @@ keep its pinned logical cache path while placing a new empty cache root on the
 root SSD:
 
 1. Read the cache path from the existing experiment's `settings.json`. Keep the
-   existing checkout, `.env`, settings, protocol and result paths unchanged.
+   existing checkout, `config/.env`, settings, protocol and result paths unchanged.
 2. Use `l20_ruler_data.sh stop` for this experiment and require successful owned
    engine exit. Do not launch/resume concurrently with the filesystem change.
 3. Create a new, previously nonexistent directory such as
@@ -381,5 +381,5 @@ A800/L20 runtime performance or memory feasibility.
 
 The [thinking RULER guide](L20_RULER_THINKING_DATA.md) describes the separate
 `l20_ruler_thinking_data.sh` launcher:13×30,seed42,390 prompts,4,680 answers
-and390 probes. It uses `.env.l20.thinking` and fresh paths. Existing100/200-row
+and390 probes. It uses `config/.env.l20.thinking` and fresh paths. Existing100/200-row
 non-thinking collections and LongBench retain their protocols.

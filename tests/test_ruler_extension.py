@@ -198,7 +198,8 @@ class ExtensionTests(unittest.TestCase):
         launchers = self.root/'checkout/scripts/launcher'; shutil.copytree(ROOT/'scripts/launcher', launchers)
         fake = self.root/'fake-python'
         fake.write_text(f'#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n'); fake.chmod(0o755)
-        config = self.root/'checkout/.env.l40.thinking'
+        config = self.root/'checkout/config/.env.l40.thinking'
+        config.parent.mkdir()
         config.write_text(f'PYTHON_BIN="{fake}"\nGPU_DEVICES=from-env\nSAMPLES_PER_TASK=30\n')
         env = dict(PATH=os.environ['PATH'], EXTEND_FROM=str(self.old), SAMPLES_PER_TASK='200',
                    EXPERIMENT_DIR=str(self.new), PREPARED_DIR=str(self.args.prepared), CACHE_ROOT=str(self.args.cache_root))

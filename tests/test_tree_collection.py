@@ -18,7 +18,7 @@ from runner.thinking_budget import KEY
 from scripts.collection_v3 import declaration
 from scripts import tree_prophetkv_data as collection
 from scripts import longbench_a800_control as control
-from test_l20_traj4f import fixture as ruler_fixture, GPUS
+from collection_fixtures import fixture as ruler_fixture, GPUS
 from test_ruler_thinking import Tokenizer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -213,7 +213,7 @@ class TreeCollectionTests(unittest.TestCase):
         protocol = dict(schema=SCHEMA, tree_protocol=PROTOCOL, percentages=[5,20,40,60],
             actions=definitions, scheduled_actions=[a['id'] for a in definitions],
             phase_order=['cached'], answer_validation='native-answer-diagnostics-v1')
-        from runner.naive_reuse import inventory
+        from runner.tree_policy import inventory
         self.assertEqual(list(inventory(protocol)), protocol['scheduled_actions'])
         for profile, hardware, window in (('ruler-thinking', 'l20-tp2', 82304), ('longbench-v2', 'server', 131072)):
             cfg = config('/model', profile, True, '/cache', hardware=hardware, tp=2)

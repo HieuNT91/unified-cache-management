@@ -44,7 +44,7 @@ def positional_kernel(sparse):
 
 
 def suffix_attention(sparse, query, key, value, positions):
-    """Keep native suffix scoring; retain the trajectory full-FA2 opt-in."""
+    """Keep native suffix scoring; retain the explicit full-FA2 kernel option."""
     if getattr(sparse, 'position_attention_kernel', DEFAULT_POSITION_ATTENTION_KERNEL) in (
             'original', DEFAULT_POSITION_ATTENTION_KERNEL):
         from torch.nn.attention.bias import causal_lower_right

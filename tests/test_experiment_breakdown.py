@@ -12,9 +12,10 @@ from runner.corpus_records import publish, record_dir
 from runner.reporting import OutputAnalyzer
 from runner.setups import atomic_json, file_hash
 from runner.thinking_budget import KEY, BudgetState
-from scripts import l20_ruler_traj4f_data as collection
+import json
+from scripts.collection_v3 import ACTIONS
 from scripts.ruler import TASKS
-from test_l20_traj4f import fixture, Tokenizer
+from collection_fixtures import fixture, Tokenizer
 from scripts import experiment_task_breakdown as breakdown
 
 
@@ -22,10 +23,26 @@ class L20ReportTests(unittest.TestCase):
     def setUp(self):
         temp=tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
         self.args=fixture(Path(temp.name))
-        with patch('scripts.router_control.code_hashes',return_value={}),redirect_stdout(io.StringIO()):
-            collection.adopt(self.args)
         self.base=self.args.root
-        self.protocol,self.rows=collection.stage(self.base,'ruler')
+        self.rows=[]
+        for line in (self.args.prepared/'manifest.jsonl').read_text().splitlines():
+            row=json.loads(line); path=self.args.prepared/row['prepared']
+            sample=json.loads(path.read_text())
+            self.rows.append(dict(row, ordinal=sample['source_row'], sha256=file_hash(path),
+                                  evaluation_protocol=sample['evaluation_protocol'], **{KEY:sample[KEY]}))
+        self.rows.sort(key=lambda row:(row['ordinal'], TASKS.index(row['subtask'])))
+        settings=dict(dataset='ruler')
+        atomic_json(self.base/'settings.json', settings)
+        atomic_json(self.base/'rows.json', self.rows)
+        plan=dict(settings_sha256=file_hash(self.base/'settings.json'),
+                  rows_sha256=file_hash(self.base/'rows.json'))
+        atomic_json(self.base/'plan.json', plan)
+        self.protocol=dict(dataset='ruler', execution_profile='ruler-thinking', tp=2,
+            evaluation_protocol=self.rows[0]['evaluation_protocol'], prepared=str(self.args.prepared),
+            groups=[self.args.devices.split(',')[i:i+2] for i in range(0,10,2)],
+            actions=ACTIONS, scheduled_actions=[a['id'] for a in ACTIONS],
+            answer_validation='native-answer-diagnostics-v1', plan_sha256=file_hash(self.base/'plan.json'))
+        atomic_json(self.base/'ruler/protocol.json', self.protocol)
         self.cases=self.protocol['scheduled_actions']
         atomic_json(self.base/'ruler/init.json',dict(validated=True,engine_config={}))
 
@@ -33,7 +50,7 @@ class L20ReportTests(unittest.TestCase):
         p=row[KEY]; tokens=[65,p['close_id']]+p['transition_ids']+p['prefix_ids']+[65,3]
         group=row['ordinal']%5
         record=dict(prompt_id=row['id'],method=case,executed_action=case,input_sha256=row['sha256'],group=group,
-            gpu_uuids=self.protocol['groups'][group],cache_immutable=True,initialization='init.json',
+            gpu_uuids=self.protocol['groups'][group],cache_immutable=True,num_cached_tokens=0,initialization='init.json',
             initialization_sha256=file_hash(self.base/'ruler/init.json'),
             answer_validation=self.protocol['answer_validation'],evaluation_protocol=row['evaluation_protocol'],
             retirement=[dict(rank=r,quiescent=True,transfers={'pending':0},request_bookkeeping=0) for r in range(2)],
@@ -52,7 +69,7 @@ class L20ReportTests(unittest.TestCase):
         atomic_json(record_dir(self.base/'ruler', self.cases[0], self.rows[2]['id'])/'result.json', {})
         pins = {p: (file_hash(p), p.stat().st_mtime_ns) for p in self.base.rglob('*') if p.is_file()}
         # Reporting must work even when the original prepared path is unavailable.
-        with patch.object(collection, 'load', side_effect=AssertionError('No launcher loading')):
+        with patch('scripts.longbench_a800_data.load', side_effect=AssertionError('No launcher loading')):
             raw_text, raw, _ = breakdown.report(self.base)
             text, tables, matching = breakdown.report(self.base, same_count=True)
         self.assertEqual(matching['matched_samples'], 2)
@@ -92,7 +109,7 @@ class L20ReportTests(unittest.TestCase):
                                     cwd='/tmp', capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('task/'+TASKS[-1], result.stdout)
-            self.assertIn('0/520', result.stdout)
+            self.assertIn('0/585', result.stdout)
 
     def test_seeded_collection_paths_and_file_hash_plan(self):
         from scripts.collection_v3 import declaration

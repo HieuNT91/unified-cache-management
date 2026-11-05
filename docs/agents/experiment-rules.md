@@ -31,7 +31,7 @@ that separation regardless of later progress or completion.
 
 | Package/source | Contract |
 |---|---|
-| New fixed controls via `scripts/rpkv_gpu_validation.py` | `answer_validation: native-answer-diagnostics-v1`; `expected_probes: 0`; new paths and source snapshot |
+| Current fixed answer controls | `answer_validation: native-answer-diagnostics-v1`; `expected_probes: 0`; new paths and source snapshot |
 | `outputs/rpkv-gpu-validation-20261001/` | Completed 210 answers and 70 independent probes; preserve final evidence and startup history |
 | `outputs/rpkv-ruler40-longbench20-20261001/` | Frozen scope of 1620 answers and 540 probes; preserve runtime, processes and original acceptance rules |
 | Router inference / explicit GPU diagnostic tests | Keep probes required by their declared algorithm or validation scope |

@@ -13,7 +13,7 @@ this protocol after separate authorization. GPU behavior remains unverified.
 
 ## Configuration and commands
 
-Copy [the example](../../.env.l20.thinking.example) to `.env.l20.thinking` at the
+Copy [the example](../../config/.env.l20.thinking.example) to `config/.env.l20.thinking` at the
 checkout root and set the model, pinned RULER source, interpreter and fresh paths.
 The launcher uses the shared trusted Bash loader: existing environment variables
 win; `UCM_ENV_FILE` can select another file. The usual `PYTHON_BIN`, `MODEL_PATH`,
@@ -22,7 +22,7 @@ win; `UCM_ENV_FILE` can select another file. The usual `PYTHON_BIN`, `MODEL_PATH
 for this profile. Configure resolves the ten devices to immutable UUID pairs.
 
 ```bash
-cp .env.l20.thinking.example .env.l20.thinking
+cp config/.env.l20.thinking.example config/.env.l20.thinking
 # Edit the copied configuration before use.
 bash scripts/launcher/l20_ruler_thinking_data.sh configure
 bash scripts/launcher/l20_ruler_thinking_data.sh prepare

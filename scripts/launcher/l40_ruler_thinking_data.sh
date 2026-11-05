@@ -2,7 +2,7 @@
 set -euo pipefail
 CODE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$CODE_ROOT/scripts/launcher/server_env.sh"
-UCM_ENV_FILE="${UCM_ENV_FILE:-$CODE_ROOT/.env.l40.thinking}"
+UCM_ENV_FILE="${UCM_ENV_FILE:-$CODE_ROOT/config/.env.l40.thinking}"
 ucm_load_server_env "$CODE_ROOT"
 command="${1:-}"
 if [[ -z "$command" ]]; then
@@ -21,7 +21,7 @@ if [[ "$command" == resume || "$command" == detach ]]; then
   case "${PROPHETKV_ONLY:-0}" in
     1) phase_args=(--cached-only) ;;
     0) ;;
-    *) echo 'PROPHETKV_ONLY must be 0 or 1 in .env.l40.thinking' >&2; exit 2 ;;
+    *) echo 'PROPHETKV_ONLY must be 0 or 1 in config/.env.l40.thinking' >&2; exit 2 ;;
   esac
 fi
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1
@@ -43,7 +43,7 @@ if [[ -n "${EXTEND_FROM:-}" ]]; then
   collection_args=(--collection-version legacy)
   extension_args=(--extend-from "$EXTEND_FROM")
   SAMPLES_PER_TASK="${SAMPLES_PER_TASK:-200}"
-  # Old .env paths are never used implicitly for an extension.
+  # Old config/.env paths are never used implicitly for an extension.
   for key in EXPERIMENT_DIR PREPARED_DIR CACHE_ROOT; do
     [[ -n "${!key:-}" ]] || { echo "Set a fresh $key for EXTEND_FROM" >&2; exit 2; }
   done
@@ -55,5 +55,5 @@ exec env CUDA_VISIBLE_DEVICES='' "${PYTHON_BIN:-python}" "$CODE_ROOT/scripts/lon
   --data "${RULER_PATH:-$CODE_ROOT/.cache/vendor/RULER}" \
   --prepared "${PREPARED_DIR:-$CODE_ROOT/inputs/$default_run}" \
   --cache-root "${CACHE_ROOT:-$CODE_ROOT/.cache/$default_run}" \
-  --tp "$TP" --devices "${GPU_DEVICES:?Set GPU_DEVICES in .env.l40.thinking to eight full UUIDs}" \
+  --tp "$TP" --devices "${GPU_DEVICES:?Set GPU_DEVICES in config/.env.l40.thinking to eight full UUIDs}" \
   --samples-per-task "${SAMPLES_PER_TASK:-500}" --seed "${SEED:-42}" "${collection_args[@]}" "${extension_args[@]}" "${phase_args[@]}" "$@"

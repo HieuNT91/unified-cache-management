@@ -28,7 +28,7 @@ cd /data/jh/unified-cache-management/.worktrees/l20-ruler-extend300
 unset UCM_ENV_FILE PROJECT_DIR PYTHON_BIN MODEL_PATH RULER_PATH EXTEND_FROM \
   EXPERIMENT_DIR PREPARED_DIR CACHE_ROOT TP GPU_DEVICES SAMPLES_PER_TASK SEED
 
-cat > .env.l20 <<'EOF'
+cat > config/.env.l20 <<'EOF'
 PROJECT_DIR=/data/jh/unified-cache-management
 PYTHON_BIN=/data/jh/envs/ucm/bin/python
 MODEL_PATH=/data/jh/ckpts/Qwen3-32B
@@ -98,7 +98,7 @@ git -C "$OLD_CHECKOUT" worktree add --detach \
   origin/prophetkv/tp2-router-data
 cd /data/jh/unified-cache-management/.worktrees/l20-ruler-extend300-v2
 
-export UCM_ENV_FILE="$OLD_CHECKOUT/.env.l20"
+export UCM_ENV_FILE="$OLD_CHECKOUT/config/.env.l20"
 export EXTEND_FROM=/data/jh/unified-cache-management/.results/ruler-l20-tp2-200-v2
 export EXPERIMENT_DIR=/data/jh/unified-cache-management/.results/ruler-l20-tp2-extra300-v2
 export PREPARED_DIR=/data/jh/unified-cache-management/.data/prepared/ruler-l20-tp2-500-v1

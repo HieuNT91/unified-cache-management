@@ -20,7 +20,7 @@ It supporst page size = 1.
 # https://github.com/ModelTC/lightllm/blob/f2a54f0912293f683bf1d1695fd12c4098a5bf82/lightllm/models/llama/triton_kernel/context_flashattention_nopad.py#L1
 # FA2 softmax candidate from ragged-fa2-softmax-tuning-20261014-v4.
 # Default ragged inference uses the measured tile heuristic in attention.py.
-# The explicit trajectory opt-in retains this wrapper's original tile default.
+# The explicit full-FA2 kernel option retains this wrapper's original tile default.
 # Kernel arithmetic is preserved from the supplied candidate.
 import torch
 import triton

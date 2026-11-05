@@ -28,6 +28,14 @@ def actions(value=None):
     return {item['id']:dict(item) for item in value}
 
 
+def inventory(protocol):
+    """Resolve fixed-control inventories without changing router action schemas."""
+    if protocol.get('schema') == 'tree-prophetkv-thinking-collection-v1':
+        from runner.tree_collection import inventory as tree_inventory
+        return tree_inventory(protocol)
+    return actions(protocol['actions'])
+
+
 def feature_spec(data):
     from runner.longbench_features import SCHEMA as LB_SCHEMA, FEATURES as LB_FEATURES, DEFINITIONS as LB_DEFINITIONS
     if data.get('schema')==SCHEMA:return FEATURES,FEATURE_DEFINITIONS

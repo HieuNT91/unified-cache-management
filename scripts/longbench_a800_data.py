@@ -45,8 +45,6 @@ def assign_folds(rows, seed=42):
 def roles(settings):
     if enabled(settings):
         return ('ruler', 'features') if settings['dataset'] == 'ruler' else ('primary', 'features')
-    if settings.get('naive_reuse'):
-        return ('ruler',) if settings['dataset'] == 'ruler' else ('primary',)
     return ('ruler', 'features') if settings['dataset'] == 'ruler' else ('primary', 'extra', 'features')
 
 
@@ -55,20 +53,15 @@ def scheduled(settings, role):
         if role not in roles(settings):
             raise ValueError('Collection v3 has no extra launcher')
         return ['probe'] if role == 'features' else [a['id'] for a in actions_for(settings)]
-    if settings.get('naive_reuse'):
-        if role not in roles(settings):
-            raise ValueError('Naive reuse has no extra or features stage')
-        return ['naive-reuse']
     return [a['id'] for a in ACTIONS] if role == 'ruler' else SCHEDULE[role]
 
 
 def actions_for(settings):
+    if settings.get('naive_reuse'):
+        raise ValueError('Naive reuse collections are no longer supported')
     if enabled(settings):
         from scripts.collection_v3 import ACTIONS as V3_ACTIONS
         return V3_ACTIONS
-    if settings.get('naive_reuse'):
-        from runner.naive_reuse import ACTION
-        return [dict(ACTION)]
     return ACTIONS
 
 
@@ -87,8 +80,6 @@ def protocol_for(settings, role, plan_sha, groups):
         protocol['evaluation_protocol'] = settings['evaluation_protocol']
     if 'hardware_preflight' in settings:
         protocol['hardware_preflight'] = settings['hardware_preflight']
-    if settings.get('naive_reuse'):
-        protocol['naive_reuse'] = True
     if role == 'features':
         protocol['feature_profile'] = DEFINITIONS
     if enabled(settings):
@@ -108,11 +99,9 @@ def publish_protocols(base):
 
 def prepare(base):
     base = Path(base); settings = read(base/'settings.json'); dataset = settings['dataset']
+    actions_for(settings)  # Reject removed collection modes before preparing inputs.
     prepared = Path(settings['prepared'])
-    if settings.get('naive_reuse'):
-        from scripts.naive_reuse_inputs import validate_existing
-        validate_existing(settings)
-    elif dataset == 'longbench-v2':
+    if dataset == 'longbench-v2':
         from scripts.longbench_v2 import prepare as prepare_inputs
         prepare_inputs(SimpleNamespace(model=Path(settings['model']), data=Path(settings['data']), output=prepared, collection_v3=enabled(settings),
                                        answers_per_question=settings.get('answers_per_question', 1)))
@@ -155,14 +144,12 @@ def prepare(base):
     plan = dict(schema='tp2-data-plan-v2', settings_sha256=file_hash(base/'settings.json'),
                 rows_sha256=file_hash(base/'rows.json'), preparation_sha256=file_hash(prepared/'preparation.json'),
                 samples=len(rows), answers=len(rows)*len(actions_for(settings))*len(seeds(settings)),
-                probes=0 if settings.get('naive_reuse') else len(rows), actions=actions_for(settings),
+                probes=len(rows), actions=actions_for(settings),
                 schedule={role: scheduled(settings, role) for role in roles(settings)},
-                feature_profile=None if settings.get('naive_reuse') else DEFINITIONS, evaluation='training', training_overlap=True,
+                feature_profile=DEFINITIONS, evaluation='training', training_overlap=True,
                 train_ids=[r['id'] for r in rows], heldout_ids=[], folds=assign_folds(rows), seed=42)
     if enabled(settings):
         plan.update(validate_declaration(settings), schema='tp2-data-plan-v3')
-    if settings.get('naive_reuse'):
-        plan.update(evaluation='fixed-control', training_overlap=False, train_ids=[], folds={})
     if 'extension' in settings:
         plan['extension_sha256'] = file_hash(base/'extension.json')
     freeze(base/'plan.json', plan)
@@ -241,11 +228,8 @@ def load(base, check_code=False):
     if 'extension' in settings and plan.get('extension_sha256') != file_hash(base/'extension.json'):
         raise ValueError('Extension preparation receipt changed')
     if (plan['actions'] != actions_for(settings) or plan['schedule'] != {r: scheduled(settings, r) for r in roles(settings)}
-            or plan['feature_profile'] != (None if settings.get('naive_reuse') else DEFINITIONS)):
+            or plan['feature_profile'] != DEFINITIONS):
         raise ValueError('Unexpected experiment scope')
-    if settings.get('naive_reuse') and (plan['probes'] != 0 or plan['answers'] != len(rows)
-            or file_hash(Path(settings['prepared'])/'preparation.json') != plan['preparation_sha256']):
-        raise ValueError('Naive reuse scope or prepared receipt changed')
     if enabled(settings):
         declaration = validate_declaration(settings)
         if (settings.get('schema') != 'tp2-data-config-v3' or plan.get('schema') != 'tp2-data-plan-v3'

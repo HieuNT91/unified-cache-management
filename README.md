@@ -13,7 +13,7 @@ keeps its own thinking, output budget and scoring protocol.
 For the new twelve-action **TP2 A800/L20 data collection and CPU router training**,
 follow [the deployment guide](docs/deployment/A800_LONGBENCH_DATA.md). A800 primary
 can start independently; configure extra later. The workflow automatically reads
-`.env.a800` / `.env.l20` and exports portable checksummed datasets. GPU execution
+`config/.env.a800` / `config/.env.l20` and exports portable checksummed datasets. GPU execution
 and real-data training have not been performed for this implementation.
 
 ## Code and documentation
@@ -31,7 +31,7 @@ and real-data training have not been performed for this implementation.
 | [tests/](tests/) | CPU regressions and opt-in GPU validation |
 | [docs/agents/](docs/agents/architecture.md) | Architecture, invariants, testing and experiment rules |
 | [docs/protocols/](docs/protocols/ruler.md) | RULER and LongBench v2 input/decoding/scoring contracts |
-| [docs/deployment/](docs/deployment/README.md) | A800/L20, `.env`, reporting and resume guides |
+| [docs/deployment/](docs/deployment/README.md) | A800/L20, `config/.env`, reporting and resume guides |
 | [docs/studies/](docs/studies/README.md) | Historical designs, results and archived agent notes |
 
 Local `inputs/`, `outputs/`, `.cache/` and `.exports/` hold generated material and

@@ -25,7 +25,7 @@ scripts/launcher/ruler_corpus.sh replay --decisions /data/decisions.jsonl \
   --output /results/replayed-decisions
 ```
 
-Set corpus paths through `.env`; see [training](../studies/RULER_CORPUS_TRAINING.md).
+Set corpus paths through `config/.env`; see [training](../studies/RULER_CORPUS_TRAINING.md).
 Offline reports estimate router TTFT from independent measurements. They cannot
 establish fresh GPU answer equivalence or measured live routing speed.
 
@@ -86,7 +86,7 @@ and speed targets are not assumed to transfer.
 
 ## A800/L20, controls, resume and timing
 
-Both adapters use `.env`, `PYTHON_BIN`, `MODEL_PATH`, `EXPERIMENT_DIR`,
+Both adapters use `config/.env`, `PYTHON_BIN`, `MODEL_PATH`, `EXPERIMENT_DIR`,
 `PREPARED_DIR`, `CACHE_ROOT`, `GPU_A`, optional `GPU_B`, and `ROUTER_POLICY_FILE`.
 See the [collection guide](RULER_CORPUS_COLLECTION.md) for A800/L20 path examples,
 explicit UUID configuration, capacity checks and disk planning. One or two TP4

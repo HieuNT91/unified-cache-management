@@ -77,9 +77,6 @@ class Engine:
         if self.cached:
             if 'position_attention_kernel' in protocol:
                 cfg['kv_transfer_config']['kv_connector_extra_config']['position_attention_kernel']=protocol['position_attention_kernel']
-            if protocol.get('naive_reuse'):
-                for value in cfg['kv_transfer_config']['kv_connector_extra_config']['ucm_sparse_config'].values():
-                    value['ratio'] = 0.0
             def context_layout(row):
                 sample = json.loads((Path(protocol['prepared'])/row['prepared']).read_text())
                 from runner.tree_collection import runtime_sample

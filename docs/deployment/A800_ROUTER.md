@@ -77,9 +77,9 @@ exporting a historical policy does not satisfy the new protocol identity checks.
 
 ## Local server settings
 
-Create a **new** `.env` in the clean server worktree. The same trusted Bash loader
+Create a **new** `config/.env` in the clean server worktree. The same trusted Bash loader
 and precedence rules as the existing launchers apply: exported environment values
-win, then `.env`, then defaults. `UCM_ENV_FILE` can select a different file. Paths
+win, then `config/.env`, then defaults. `UCM_ENV_FILE` can select a different file. Paths
 in later assignments expand using the values already selected. Quote paths with
 spaces. Avoid reusing the LongBench/RULER result, prepared, or cache directories.
 

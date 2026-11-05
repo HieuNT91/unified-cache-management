@@ -30,7 +30,7 @@ settings stay unchanged. Runtime compatibility includes releases `8c2685f` and
 ## Server commands
 
 First commit and push the implementation from the development checkout. Then,
-in the existing server checkout with its existing `.env`, stop the output-owned
+in the existing server checkout with its existing `config/.env`, stop the output-owned
 processes before updating code:
 
 ```bash
@@ -53,7 +53,7 @@ nohup setsid bash scripts/launcher/a800_longbench.sh resume >"$RESUME_LOG" 2>&1 
 echo "Coordinator PID: $!; log: $RESUME_LOG"
 ```
 
-Alternatively save these three values as `KEY=VALUE` assignments in `.env`, using
+Alternatively save these three values as `KEY=VALUE` assignments in `config/.env`, using
 the actual comma-separated UUID list for `GPU_A`. `GPU_B` is ignored in this mode.
 These options apply to `resume` only; `run` rejects them.
 

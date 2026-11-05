@@ -14,7 +14,7 @@ For A800 with only GPUs 0–3 and without ProphetKV 15%, use
 results, revises the active total to 3018 and keeps both status commands working.
 That workflow explicitly overrides the default two-group/six-ratio scope below.
 
-**Preferred setup:** use a Git-ignored `.env` on each server. See
+**Preferred setup:** use a Git-ignored `config/.env` on each server. See
 [Server settings and exact fetch/stop/resume commands](SERVER_ENV.md) to avoid
 repeating exports. The export-based instructions below remain supported.
 
@@ -114,7 +114,7 @@ read-only snapshot without stopping jobs or starting preparation:
 bash "$LAUNCHER" counts
 ```
 
-To avoid repeated saved-attention replay, set this in the server's `.env`:
+To avoid repeated saved-attention replay, set this in the server's `config/.env`:
 
 ```bash
 RESUME_VALIDATION=fast

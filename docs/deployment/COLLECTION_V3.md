@@ -80,13 +80,13 @@ the legacy compact exporter remains usable as a standalone copied file.
 ## Review, commit and push from the primary workspace
 
 Run after reviewing the diff and the [CPU evidence](../agents/testing.md). The
-explicit list excludes local `.env` files, datasets, artifacts, `.gitignore` and
+explicit list excludes local `config/.env` files, datasets, artifacts, `.gitignore` and
 unrelated study changes. No commit or push was performed during implementation.
 
 ```bash
 git add -- \
-  .env.a800.example .env.l20.example \
-  .env.l40.thinking.example docs/agents/testing.md \
+  config/.env.a800.example config/.env.l20.example \
+  config/.env.l40.thinking.example docs/agents/testing.md \
   docs/deployment/README.md docs/deployment/COLLECTION_V3.md \
   docs/deployment/A800_COLLECTION_V3.md docs/deployment/L20_COLLECTION_V3.md \
   docs/deployment/L40_COLLECTION_V3.md docs/protocols/ruler.md \

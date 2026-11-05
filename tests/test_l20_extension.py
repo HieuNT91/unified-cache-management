@@ -126,7 +126,8 @@ class L20ExtensionTests(unittest.TestCase):
             fake = Path(tmp)/'python'
             fake.write_text(f'#!{sys.executable}\nimport json,sys,os\nprint(json.dumps([sys.argv[1:],os.environ["CUDA_VISIBLE_DEVICES"]]))\n')
             fake.chmod(0o755)
-            (root/'.env.l20').write_text(f'PYTHON_BIN="{fake}"\nSAMPLES_PER_TASK=200\n')
+            (root/'config').mkdir()
+            (root/'config/.env.l20').write_text(f'PYTHON_BIN="{fake}"\nSAMPLES_PER_TASK=200\n')
             env = dict(PATH=os.environ['PATH'], EXTEND_FROM='/old200', SAMPLES_PER_TASK='500',
                        EXPERIMENT_DIR='/new300', PREPARED_DIR='/prepared500', CACHE_ROOT='/cache300')
             for command in ('configure', 'prepare', 'detach', 'resume', 'status', 'merge'):

@@ -2,7 +2,7 @@
 set -euo pipefail
 CODE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$CODE_ROOT/scripts/launcher/server_env.sh"
-UCM_ENV_FILE="${UCM_ENV_FILE:-$CODE_ROOT/.env.l20.thinking}"
+UCM_ENV_FILE="${UCM_ENV_FILE:-$CODE_ROOT/config/.env.l20.thinking}"
 ucm_load_server_env "$CODE_ROOT"
 command="${1:-}"
 if [[ -z "$command" ]]; then

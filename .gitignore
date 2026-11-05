@@ -8,15 +8,11 @@ outputs/
 .exports/
 *.log
 
-# Server-local configuration (templates remain tracked).
+# Server-local configuration lives only in config/; templates remain tracked.
 .env
 .env.*
-!.env.example
-!.env.a800.example
-!.env.l20.example
-!.env.l20.thinking.example
-!.env.l40.thinking.example
-!.env.l20.thinking.traj4f.example
+!/config/.env.example
+!/config/.env.*.example
 
 # Local workspace data, archived files and agent configuration.
 /.analysis/
@@ -24,7 +20,3 @@ outputs/
 /.worktrees/
 /.codex/
 /.aws/
-
-# Tree-prophetkv server templates; local configuration remains ignored.
-!/config/.env.l20.tree-prophetkv.example
-!/config/.env.a800.tree-prophetkv.example

@@ -209,7 +209,8 @@ class L40LauncherTimeoutTests(unittest.TestCase):
                         content = f'PYTHON_BIN="{fake}"\nGPU_DEVICES=GPU-fixture\nTP={tp}\n'
                         if file_timeout is not None:
                             content += f'VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS={file_timeout}\n'
-                        (root / '.env.l40.thinking').write_text(content)
+                        (root / 'config').mkdir(exist_ok=True)
+                        (root / 'config/.env.l40.thinking').write_text(content)
                         env = {'PATH': os.environ['PATH']}
                         if inherited is not None:
                             env['VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS'] = inherited

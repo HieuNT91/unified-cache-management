@@ -356,7 +356,7 @@ class ResumeTests(unittest.TestCase):
 
     def test_fast_upgrade_accepts_old_continuation_cohort_and_repeated_resume(self):
         scope=resume.prepare(self.args)
-        # Emulate the released resume runtime (also used by the .env release).
+        # Emulate the released resume runtime (also used by the config/.env release).
         runtime=next(row for row in json.loads((resume.ROOT/'runner/legacy_sweep_runtimes.json').read_text())
                      if row['commit'].startswith('16c1f75'))
         old_current=fingerprint(dict(self.args.identity_spec,runtime=runtime['runtime']))

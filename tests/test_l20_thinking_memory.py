@@ -77,7 +77,7 @@ class L20ThinkingMemoryTests(unittest.TestCase):
 
     def test_engine_stops_before_warmup_when_measured_kv_is_insufficient(self):
         from runner.corpus_runtime import Engine
-        from test_l20_traj4f import fixture, GPUS
+        from collection_fixtures import fixture, GPUS
         from scripts.ruler import TASKS
         args=fixture(self.root/'engine',n=1)
         protocol=dict(dataset='ruler',execution_profile='ruler-thinking',hardware_profile='l20-tp2',

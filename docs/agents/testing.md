@@ -1,5 +1,22 @@
 # Testing and evidence limits
 
+## AdaTreeV1 method cleanup (2026-11-05)
+
+Trajectory and naive-reuse methods and the legacy GPU orchestration/recovery
+entry points were removed. Shared synthetic prepared inputs now live in
+`tests/collection_fixtures.py`; generic report tests use baseline/ProphetKV
+records. The shared native-answer/receipt tests remain in `test_rpkv_no_probe`.
+Removed methods are rejected before worker setup or input regeneration.
+
+CPU checks passed in three focused batches: 31 trajectory/fixture regressions,
+54 collection/TP2/tree/resume checks, and 229 final runtime regressions (some
+coverage overlaps). The final batch covers baseline, router, corpus, setup,
+sweep/resume, thinking, tree selection/chunks/seeds/storage, reporting, env
+loading, method rejection, and the FA2 CPU interpreter. All passed, with no
+skips. Python 3.10 syntax, remaining shell syntax, deleted-module import scans
+and `git diff --check` passed. No GPU, SSH, real-data job or training ran; CPU
+fixtures do not establish GPU performance or end-to-end answer equivalence.
+
 ## L20 thinking memory admission (2026-10-16)
 
 33 focused CPU tests passed:5 new `test_l20_thinking_memory`,20 TP2 collection,
@@ -44,7 +61,9 @@ The new suites are `test_collection_no_priming`, `test_l20_traj4f` and
 `test_collection_v3`, `test_source_updates`, `test_lightweight_loading` and the
 math/runtime/native-evidence classes from `test_last_traj_4`/`test_last_traj_4f`.
 Shell/Python3.10 syntax and diff checks passed. No GPU, SSH, commit or push ran.
-See [deployment commands](../deployment/L20_RULER_THINKING_TRAJ4F.md).
+The trajectory launcher and its dedicated tests were removed from AdaTreeV1
+on 2026-11-05. These results describe the earlier source snapshot; shared
+prepared-input fixtures now live in `tests/collection_fixtures.py`.
 
 ## Resume cached answers without features (2026-10-16)
 
@@ -65,7 +84,7 @@ unresolved priming timeout shared by feature and cached-answer workers.
 
 34 focused CPU tests passed:8 transfer/launcher tests,6 source-update tests and
 20 TP2 collection tests. The launcher test exercises15 combinations of commands,
-TP2/TP4 defaults, `.env` values and inherited overrides, including a child process.
+TP2/TP4 defaults, `config/.env` values and inherited overrides, including a child process.
 A simulated1,017-block load completes16 batches below120 seconds each but exceeds
 300 seconds overall; progress reports the final batch only after its wait succeeds.
 Failed waits retain pending tasks and timing state, with no false completion log.
@@ -209,7 +228,7 @@ do not reopen the complete prompt/raw corpus or replay saved attention archives.
 | Original-token layout, phase, hashes, real EOT, duplicates, partial chunks and suffix | `tests/test_rpkv.py`, `tests/test_ruler.py`, `tests/test_longbench.py` |
 | Local/global KV positions, causal mask, 0/100% repair and multi-step prefill | `tests/test_chunked_prefill.py`, `tests/test_cpu.py`, `tests/test_rpkv.py` |
 | Missing shards, readiness, immutable KV, setup and retirement | `tests/test_setups.py`, `tests/test_sweep.py`, `tests/test_rpkv.py` |
-| No independent fixed-control probes, historical compatibility and result counts | `tests/test_rpkv_no_probe.py`, `tests/test_rpkv_reporting.py` |
+| No independent fixed-control probes and historical validation identity | `tests/test_rpkv_no_probe.py`, `tests/test_tree_collection.py` |
 | Manifest-only loading, removed verify CLI, fast resume and report without a model/replay | `tests/test_lightweight_loading.py`, `tests/test_rpkv_no_probe.py` |
 | Router training, resume, reporting and server environment | Other `tests/test_*.py` suites relevant to the changed path |
 
@@ -252,7 +271,7 @@ tokenizer/model, and runtime rejection of changed input or model identity.
 No GPU inference or frozen experiment mutation was performed for this change.
 
 After moving shell launchers into `scripts/launcher/`, all 206 CPU tests passed,
-including all six launchers resolving a relocated checkout's root `.env` and
+including all six launchers resolving a relocated checkout's root `config/.env` and
 controller paths when called from `/tmp` with spaces in the checkout path.
 
 After the 2026-10-02 source cleanup, all 205 retained CPU tests passed. Python

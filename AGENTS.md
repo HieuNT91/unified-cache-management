@@ -34,14 +34,14 @@ These rules govern the primary workspace. Historical notes under
   ProphetKV attention. Pull/resume instructions: `docs/deployment/L40_TRANSFER_TIMEOUT.md`.
   This supersedes earlier source-pin restrictions for these controllers; it does
   not authorize remote execution or modification of historical frozen packages.
-- Naive reuse controls: `l20_ruler_naive_reuse.sh` runs full prepared500/task
-  non-thinking (6500 answers, five TP2 pairs); `a800_longbench_naive_reuse.sh`
-  runs all503 prepared thinking inputs (two TP2 pairs, GPU0/1 and2/3). Both retain
-  95% automatic KV, read-only prepared inputs and fresh result/cache/checkouts.
-  Only `naive-reuse` runs: zero context repair, no attention scoring or independent
-  probes; all-layer alignment, suffix computation, lifecycle and result checks
-  remain required. Existing router action inventories are unchanged. Guide:
-  `docs/deployment/NAIVE_REUSE_L20_A800.md`. No remote/GPU launch authorized here.
+- Environment files and templates live only under `config/` in AdaTreeV1.
+  Launchers default to `config/.env` or a server-specific `config/.env.*`;
+  local values remain Git-ignored. Preserve other checkouts and running jobs.
+- AdaTreeV1 cleanup (2026-11-05): trajectory comparisons and naive reuse
+  are removed from this branch, including runtime dispatch and dedicated launchers.
+  Legacy GPU control orchestration and the standalone cache-staging recovery
+  copier are also removed. Preserve baseline, router, tree-prophetkv, ordinary
+  resume, runtime checks, frozen historical packages and the original workspace.
 - L40 thinking RULER on `noah`: `scripts/launcher/l40_ruler_thinking_data.sh`
   and `docs/deployment/L40_RULER_THINKING_DATA.md`. Latest user preference: eight
   supplied UUIDs form four TP2 pairs (0/1,2/3,4/5,6/7), with104/104/91/91 prompts
@@ -134,7 +134,7 @@ These rules govern the primary workspace. Historical notes under
   local GPU 0 and dummy jobs are forbidden. Never duplicate supervisors/exporters.
   Verify live process identities before authorized intervention; status on request.
 - Run checks appropriate to the change. Keep data, weights, caches, logs, local
-  `.env` files and experiment artifacts out of Git. Do not edit site-packages.
+  `config/.env` files and experiment artifacts out of Git. Do not edit site-packages.
 
 Read the relevant details before changing behavior:
 

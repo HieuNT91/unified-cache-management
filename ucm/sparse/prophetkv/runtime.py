@@ -99,9 +99,7 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     b=meta.boundaries
     suffix_tokens=b[-1]-b[-2]
     device=positions.device
-    trajectory = sparse.method in ('last_traj_4', 'last_traj_4f', 'query_traj_4f')
-    query_trajectory = sparse.method == 'query_traj_4f'
-    probe_positions = (b[-1] - 1,) if trajectory and not query_trajectory else meta.question_positions
+    probe_positions = meta.question_positions
     tree = sparse.method == 'tree-prophetkv'
     if tree:
         if getattr(sparse, 'router_capture', False) or getattr(sparse, 'gpu_router', None) is not None:
@@ -123,9 +121,6 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     scoring_layers = sparse.scoring_layers
     capture = getattr(sparse, 'router_capture', False)
     gpu_router = getattr(sparse, 'gpu_router', None)
-    if trajectory and (capture or gpu_router is not None or list(scoring_layers) != list(range(64))):
-        raise RuntimeError('last_traj_4 requires all layers without router capture')
-    suffix_kv = []
     capture_layers = capture or (gpu_router is not None and any(
         name != 'head_top1_global_jaccard_mean' for name in gpu_router['names']))
     captured = []
@@ -169,8 +164,6 @@ def probe(sparse,positions,embeddings,query_budget=16384):
         if sparse.method == "selective_prophetkv" and i == scoring_layers[-1]:
             del ck,cv,q,k,v
             break
-        if trajectory:
-            suffix_kv.append((k, v))
         full_k=torch.cat((ck,k));full_v=torch.cat((cv,v))
         next_hidden, next_residual = [], []
         for a in range(0, suffix_tokens, query_budget):
@@ -192,33 +185,7 @@ def probe(sparse,positions,embeddings,query_budget=16384):
     local_mean = scores.detach().clone() if capture else None
     native_probe_seconds = time.perf_counter()-started
     extra = {}
-    if trajectory:
-        from .draft_readers import draft_readers
-        from .trajectory import gated_selection
-        from vllm.distributed import tensor_model_parallel_all_reduce, get_tp_group
-        rows, tokens = draft_readers(sparse, context, slots, hidden, residual, suffix_kv, b, 4)
-        del suffix_kv
-        group = get_tp_group()
-        rows = tensor_model_parallel_all_reduce(rows) / group.world_size
-        scores = tensor_model_parallel_all_reduce(scores) / group.world_size
-        fixed = sparse.method in ('last_traj_4f', 'query_traj_4f')
-        # query_traj_4f replaces row 0 with the question-query mean for both
-        # the copy gate/chain and non-copy top-k; draft generation is unchanged.
-        selected, z, copying = gated_selection(torch.cat((scores[None], rows)), b[1], sparse.ratio,
-            unbiased=fixed, lam_rel=1.0 if fixed else 0.0)
-        # Every rank consumes one identical original-position repair set.
-        if group.world_size > 1 and selected.numel():
-            selected = group.broadcast(selected, src=0)
-        eligible = scores[b[1]:]
-        extra = dict(selection_method=sparse.method, drafts=4, draft_tokens=tokens,
-            copy_z=float(z), copying=bool(copying), copy_z_threshold=2.0,
-            trajectory_lambda=16384.0, trajectory_lam_rel=1.0 if fixed else 0.0, traj_unbiased=fixed,
-            probe_question_positions=list(probe_positions),
-            selection_validation='budget-gate-range-tp-and-all-layer-coverage-v1')
-        if query_trajectory:
-            extra['trajectory_head_positions'] = list(meta.question_positions)
-            extra['trajectory_head_fusion'] = 'mean_query_tokens'
-    elif tree:
+    if tree:
         from .tree_runtime import tree_selection
         eligible, selected, extra = tree_selection(sparse, scores, b)
     elif gpu_router is None:

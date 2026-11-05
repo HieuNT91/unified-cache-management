@@ -20,8 +20,8 @@ are relative to the repository root.
 | Router | `runner/router_*.py`, `runner/tree_policy.py`, `runner/tree_profiles.py` | Feature collection, compatible policy decisions, dense/sparse dispatch and reporting |
 | Reporting/recovery | `runner/reporting.py`, `runner/resume.py`, `runner/matched_status.py` | Accepted records, aggregation and resume validation |
 | Dataset adapters | `scripts/ruler.py`, `scripts/longbench_v2.py` | Source preparation and protocol-specific formatting/scoring |
-| Fixed controls | `scripts/rpkv_gpu_validation.py`, `scripts/rpkv_gpu_sequence.py`, `scripts/rpkv_gpu_results.py`, `scripts/rpkv_longbench_inputs.py` | Cohort execution, sequencing, reporting and full-text fitting selection |
-| Launchers | `scripts/launcher/*.sh` | Server and corpus/router shell entry points; shared `.env` loader |
+| Fixed controls | `scripts/longbench_a800_control.py`, `scripts/tree_prophetkv_data.py` | Baseline/ProphetKV collection and native tree-prophetkv controls |
+| Launchers | `scripts/launcher/*.sh` | Server and corpus/router shell entry points; shared `config/.env` loader |
 | Router training and evidence | `runner/corpus*.py`, `scripts/corpus_*.py`, `scripts/launcher/ruler_corpus*.sh` | Collect baseline/ProphetKV outcomes and router probe features, train/export policies, replay and validate evidence |
 
 `run.py` handles CLI dispatch only. Runtime modules and dataset adapters import

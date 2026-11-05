@@ -29,7 +29,7 @@ Với Python trong môi trường A800 đã khai báo:
 ```
 
 Truyền đúng result root của experiment thực tế, không phải prepared dir hoặc
-thư mục con `primary`/`extra`/`features`. Script không tự source `.env`.
+thư mục con `primary`/`extra`/`features`. Script không tự source `config/.env`.
 
 Đầu ra mặc định, nhận diện dataset từ manifest:
 

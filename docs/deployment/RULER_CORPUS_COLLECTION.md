@@ -24,7 +24,7 @@ with the clean `scripts/ruler.py download --ruler ...` command (see its
 and preparation package version. A fresh download whose hashes differ is rejected.
 Never substitute a different source or tokenizer under the same collection version.
 
-Use a new, Git-ignored `.env` at the worktree root, or select a trusted file with
+Use a new, Git-ignored `config/.env` under the worktree’s `config/` directory, or select a trusted file with
 `UCM_ENV_FILE=/absolute/path/corpus.env`. The existing `server_env.sh` loader is
 used: exported environment variables win over file values; later assignments
 expand earlier effective values. UUIDs have no defaults in these new launchers.
@@ -152,7 +152,7 @@ files, replaying diagnostics/attention, or invoking model/GPU verification.
 Do **not** update the code checkout used by an active corpus run: its code hashes
 are frozen. To add live reporting to an older running deployment, publish/fetch
 the updated code into a **separate reporting checkout**, then run its CPU reporter
-against the existing results (it does not load `.env`; pass paths explicitly):
+against the existing results (it does not load `config/.env`; pass paths explicitly):
 
 ```bash
 CUDA_VISIBLE_DEVICES='' /data/jh/envs/ucm/bin/python \

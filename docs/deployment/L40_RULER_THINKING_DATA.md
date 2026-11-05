@@ -1,6 +1,6 @@
 # RULER thinking trên 8×L40 (`noah`)
 
-Launcher: `scripts/launcher/l40_ruler_thinking_data.sh`, env `.env.l40.thinking`.
+Launcher: `scripts/launcher/l40_ruler_thinking_data.sh`, env `config/.env.l40.thinking`.
 Dùng bốn cặp **TP2**, GPU(0,1), (2,3), (4,5), (6,7) theo tám UUID đã cung cấp.
 Chia theo ordinal modulo4: hai nhóm đầu nhận104 prompts/nhóm (8/task), hai nhóm
 sau nhận91 prompts/nhóm (7/task); mọi action và probe của một prompt dùng cùng cặp.
@@ -46,7 +46,7 @@ Dùng lại env đã cài theo [installation guide](NEW_SERVER_ENV.md). Launcher
 đường dẫn Python tuyệt đối nên không cần activate Conda. Model/source/data NLTK
 trong các bước sau là những đường dẫn đã dùng trên `noah`.
 
-## 3. Tạo `.env.l40.thinking`
+## 3. Tạo `config/.env.l40.thinking`
 
 File mới dưới đây dùng lại **thư mục prepared của TP4**. Tên thư mục có `tp4`
 không ảnh hưởng dữ liệu: TP không nằm trong spec chuẩn bị prompts.
@@ -55,7 +55,7 @@ không ảnh hưởng dữ liệu: TP không nằm trong spec chuẩn bị promp
 # Bỏ các giá trị cũ trong shell để loader dùng đúng file env mới.
 unset UCM_ENV_FILE PROJECT PYTHON_BIN MODEL_PATH RULER_PATH EXPERIMENT_DIR PREPARED_DIR CACHE_ROOT TP GPU_DEVICES SAMPLES_PER_TASK SEED
 
-cat > .env.l40.thinking <<'EOF'
+cat > config/.env.l40.thinking <<'EOF'
 PROJECT=/home/zhufangzhou/jh/projects/ruler-l40-tp2
 PYTHON_BIN=/home/zhufangzhou/jh/envs/ucm/bin/python
 CUDA_HOME=/home/zhufangzhou/jh/envs/cuda-12.8
@@ -146,7 +146,7 @@ không cần tạo lại worktree. Lỗi đó xảy ra trước khi ghi settings
 Không cập nhật checkout đã configure/chạy thành công; giữ source pins của nó.
 
 ```bash
-export UCM_ENV_FILE="/home/zhufangzhou/jh/projects/unified-cache-management/.env.l40.thinking"
+export UCM_ENV_FILE="/home/zhufangzhou/jh/projects/unified-cache-management/config/.env.l40.thinking"
 export EXTEND_FROM="/home/zhufangzhou/jh/projects/unified-cache-management/outputs/ruler-l40-tp2-thinking-30-v1"
 export SAMPLES_PER_TASK=200 TP=2 SEED=42
 export EXPERIMENT_DIR="$PWD/outputs/ruler-l40-tp2-thinking-extra170-v1"
@@ -210,7 +210,7 @@ git -C "$REPO" worktree add --detach \
   "$REPO/.worktrees/ruler-l40-extend170-adapterfix" origin/prophetkv/tp2-router-data
 cd "$REPO/.worktrees/ruler-l40-extend170-adapterfix"
 
-export UCM_ENV_FILE="$REPO/.env.l40.thinking"
+export UCM_ENV_FILE="$REPO/config/.env.l40.thinking"
 export EXTEND_FROM="$REPO/outputs/ruler-l40-tp2-thinking-30-v1"
 export SAMPLES_PER_TASK=200 TP=2 SEED=42
 export PREPARED_DIR="$REPO/.worktrees/ruler-l40-extend170/inputs/ruler-l40-thinking-200-v1"
@@ -250,45 +250,10 @@ staging không biến mất sẽ timeout và được giữ làm bằng chứng.
 `.temp` để ép pass. Bản sửa chỉ được kiểm tra bằng CPU fixtures, chưa xác nhận
 trên noah; file kẹt hoặc lỗi I/O cần chẩn đoán riêng từ log/receipt.
 
-Run đã configure pin toàn bộ source: không `git pull` rồi sửa `settings.json`
-hay `plan.json` để ép resume. Giữ checkout/results/prepared cũ; áp dụng source
-mới bằng recovery bên dưới. Resume code cũ có thể tái hiện lỗi này.
-
-Sau khi bản sửa được commit/push, lấy tool vào checkout riêng (không pull vào
-checkout run cũ):
-
-```bash
-REPO=/home/zhufangzhou/jh/projects/unified-cache-management
-OLD="$REPO/.worktrees/ruler-l40-extend170"
-TOOLS="$REPO/.worktrees/l40-staging-tools"
-RECOVERED="$REPO/.worktrees/ruler-l40-staging-recovery"
-RUN="$OLD/outputs/ruler-l40-tp2-thinking-extra170-v2"
-PY=/home/zhufangzhou/jh/envs/ucm/bin/python
-
-git -C "$OLD" fetch origin
-git -C "$OLD" worktree add --detach "$TOOLS" origin/prophetkv/tp2-router-data
-CUDA_VISIBLE_DEVICES='' "$PY" "$TOOLS/scripts/cache_staging_recovery.py" \
-  --source-checkout "$OLD" --destination "$RECOVERED" --root "$RUN" \
-  --failure "$RUN/ruler/sessions/cached-group3-53012fcd32e34ec3a988b20e043db457/failure.json"
-```
-
-Tool chỉ tạo bản sao source, không launch/kill process. Nó yêu cầu run đã idle,
-source cũ khớp pins và receipt chỉ có staging thuộc block mong đợi. Bản sao
-không phải Git worktree; chỉ chứa source đã pin cộng hotfix. Không pull vào đó.
-Ba thay đổi giới hạn: readiness, kiểm tra source recovery, và provenance trong
-initialization mới. Code khác vẫn phải khớp từng hash gốc; sửa ngoài phạm vi bị
-từ chối. Receipt nằm ở `runtime-recoveries/<id>/receipt.json` trong run; settings,
-plan, prepared, accepted results và source cũ giữ nguyên. Không bỏ kiểm tra
-ownership, protocol, lifecycle hay cache immutability.
-
-Sau khi tool thành công, resume **cùng root cũ** bằng controller trong bản sao:
-
-```bash
-CUDA_VISIBLE_DEVICES='' "$PY" "$RECOVERED/scripts/longbench_a800_control.py" \
-  resume --root "$RUN" --role ruler
-```
-
-Không configure/prepare lại. Controller bỏ qua accepted answers, dùng namespace
-cache mới và dọn cache thất bại theo ownership sau khi engine cũ đã thoát. Nếu
-readiness mới timeout thì giữ log/receipt để chẩn đoán backend I/O; không xóa
-`.temp` để tiếp tục. Bản sửa và recovery chỉ được kiểm tra CPU, chưa chạy noah.
+Công cụ recovery sao chép source cũ đã được loại khỏi `AdaTreeV1`.
+Source hiện tại cho phép cập nhật code giữa các lần chạy và ghi `execution_code`
+cho session mới; configure-time provenance vẫn được giữ nguyên. Xem
+[hướng dẫn cập nhật và resume](L40_TRANSFER_TIMEOUT.md). Không sửa settings,
+plan, prepared inputs hay accepted results để ép resume. Giữ các bản recovery
+và frozen runtime lịch sử trong package gốc; không sửa hoặc khởi chạy chúng
+chỉ vì dọn source ở branch này.

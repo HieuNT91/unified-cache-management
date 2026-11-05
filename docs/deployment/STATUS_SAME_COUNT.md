@@ -10,7 +10,7 @@
 > Shell commands remain relative to the worktree root, not this folder.
 
 Each launcher accepts `status_same_count` alongside `status`, using its existing
-`.env`, `EXPERIMENT_DIR` and prepared-input settings:
+`config/.env`, `EXPERIMENT_DIR` and prepared-input settings:
 
 ```bash
 bash scripts/launcher/a800_longbench.sh status_same_count
