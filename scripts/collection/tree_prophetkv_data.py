@@ -119,11 +119,15 @@ def adopt(args):
         settings['kv_chunk_size'] = args.kv_chunk_size
     chunk_size(settings)
     settings['phase_order'] = ['cached']
+    if local:
+        settings.update(local_validation=True, validation_prompt_ids=selected)
     adaptive = getattr(args, 'adatree_v1', False)
     baseline_source = getattr(args, 'baseline_source', None)
     if adaptive:
         from runner.router.adatree import SCHEMA as ADATREE_SCHEMA
-        if local or (baseline_source is None and not getattr(args, 'followup_nocache', False)):
+        if local and (not ruler or baseline_source is not None or getattr(args, 'followup_nocache', False)):
+            raise ValueError('Local AdaTreeV1 runs only prepared RULER at seed0, without baseline collection')
+        if not local and baseline_source is None and not getattr(args, 'followup_nocache', False):
             raise ValueError('A800 AdaTreeV1 requires server TP2 and an existing baseline or follow-up no-cache')
         settings.update(adaptive_routing=ADATREE_SCHEMA)
         if baseline_source is not None:
@@ -143,8 +147,6 @@ def adopt(args):
         raise ValueError('--adatree-thinking-8192 requires --adatree-v1')
     elif getattr(args, 'followup_nocache', False):
         raise ValueError('--followup-nocache requires --adatree-v1')
-    if local:
-        settings.update(local_validation=True, validation_prompt_ids=selected)
     if (args.root/'settings.json').exists():
         old, _, _ = load(args.root)
         if (any(old.get(k) != v for k, v in settings.items())
@@ -229,7 +231,7 @@ def adopt(args):
         rows.append(value)
     validate_rows(settings, rows)
     rows.sort(key=lambda r: (r['ordinal'], r['subtask']))
-    if adaptive and not settings.get('followup_nocache'):
+    if adaptive and not local and not settings.get('followup_nocache'):
         from runner.router.adatree import baseline_receipt
         settings['baseline_receipt'] = baseline_receipt(args.root, settings, rows)
     if file_hash(receipt_path) != receipt_hash or file_hash(args.prepared/'manifest.jsonl') != manifest_hash:
@@ -264,7 +266,7 @@ def load(base):
         raise ValueError('Run metadata or prepared receipts changed')
     rows = read(base/'rows.json'); validate_rows(settings, rows)
     expected = collection_actions(settings)
-    if settings.get('adaptive_routing') and not settings.get('followup_nocache'):
+    if settings.get('adaptive_routing') and not settings.get('local_validation') and not settings.get('followup_nocache'):
         from runner.router.adatree import check_baseline_metadata
         check_baseline_metadata(settings)
     if (plan['actions'] != expected or plan['answers'] != len(rows)*len(expected)*len(seeds(settings))

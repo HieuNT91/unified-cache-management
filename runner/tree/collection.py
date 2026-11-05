@@ -54,16 +54,20 @@ def collection_actions(protocol):
         from runner.router.adatree import answer_generation
         if protocol['answer_generation'] != answer_generation():
             raise ValueError('AdaTreeV1 generation override changed')
+    local_ruler = (protocol.get('local_validation') is True and protocol.get('dataset') == 'ruler'
+                   and protocol.get('tp') == 4 and len(protocol.get('groups', [])) == 1
+                   and protocol.get('hardware_profile') == 'rtx4500ada-tree-validation')
+    valid_schedule = (protocol.get('answer_seeds') == [0] and protocol.get('answers_per_question') == 1
+                      if local_ruler else protocol.get('dataset') == 'longbench-v2'
+                      and protocol.get('answer_seeds') == [0, 1] and protocol.get('answers_per_question') == 2)
     if (protocol['adaptive_routing'] != ADATREE_SCHEMA
             or protocol['percentages'] != [5, 20, 40]
             or protocol.get('kv_chunk_size') is not None
-            or protocol.get('dataset') != 'longbench-v2'
-            or protocol.get('answer_seeds') != [0, 1]
-            or protocol.get('answers_per_question') != 2):
-        raise ValueError('AdaTreeV1 requires exact prepared layout, LongBench and seeds 0/1')
+            or not valid_schedule):
+        raise ValueError('AdaTreeV1 requires exact prepared layout and its declared server/local seed schedule')
     result = [dict(id=METHOD, method=METHOD, ratio=None)]
     if 'followup_nocache' in protocol:
-        if protocol['followup_nocache'] is not True or not protocol.get('answer_generation'):
+        if local_ruler or protocol['followup_nocache'] is not True or not protocol.get('answer_generation'):
             raise ValueError('Follow-up no-cache requires the explicit new generation policy')
         result.append(dict(id='nocache', method='baseline', ratio=None))
     return result

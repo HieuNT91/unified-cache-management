@@ -156,8 +156,10 @@ def report(base, same_count=False):
     ]
     if settings.get('answer_generation'):
         lines.append('AdaTreeV1 generation: thinking <=8192, total <=10000; repetition 32..128 x4.')
-        lines.append('No-cache: same new generation policy.' if settings.get('followup_nocache')
-                     else 'Reused no-cache retains its original generation policy; budgets differ.')
+        if settings.get('followup_nocache'):
+            lines.append('No-cache: same new generation policy.')
+        elif settings.get('baseline_source'):
+            lines.append('Reused no-cache retains its original generation policy; budgets differ.')
     if imported:
         settings = read(Path(base)/'settings.json')
         lines += ['Baseline: '+str(settings.get('baseline_source', Path(base).resolve()/'baseline-source')),

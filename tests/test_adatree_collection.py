@@ -21,6 +21,37 @@ from test_baseline_breakdown import fixture as baseline_fixture, commit
 
 
 class AdaTreeCollectionTests(unittest.TestCase):
+    def test_local_ruler_uses_exact_selected_inputs_one_seed_and_no_baseline(self):
+        from collection_fixtures import GPUS
+        from scripts.data.ruler import TASKS
+        with tempfile.TemporaryDirectory() as temp:
+            args = fixture(Path(temp), 'ruler')
+            args.adatree_v1 = True; args.adatree_thinking_8192 = True
+            args.percentages = [5, 20, 40]; args.local_validation = True
+            args.tp = 4; args.devices = ','.join(GPUS[:4])
+            args.validation_prompt_ids = [f'{task}-{i:03d}' for task in TASKS for i in range(2)]
+            receipt = collection.read(args.prepared/'preparation.json')
+            for path in (args.prepared/'samples').glob('*.json'):
+                atomic_json(path, enlarged(collection.read(path)))
+                receipt['files'][str(path.relative_to(args.prepared))] = file_hash(path)
+            atomic_json(args.prepared/'preparation.json', receipt)
+            pins = {p:(file_hash(p),p.stat().st_mtime_ns) for p in args.prepared.rglob('*') if p.is_file()}
+            with patch('runner.router.adatree.baseline_receipt', side_effect=AssertionError('No baseline')), \
+                    patch('scripts.router.router_control.code_hashes', return_value={}):
+                collection.adopt(args)
+                protocol, rows = collection.stage(args.root, 'tree')
+                plan = collection.load(args.root)[1]
+                self.assertEqual({r['id'] for r in rows}, set(args.validation_prompt_ids))
+                self.assertEqual(protocol['answer_seeds'], [0])
+                self.assertEqual(protocol['scheduled_actions'], ['adatree-v1'])
+                self.assertEqual((plan['answers'],plan['baseline_answers'],plan['probes']), (26,0,0))
+                self.assertEqual(collection.report(args.root)['expected_answers'], 26)
+                self.assertNotIn('Reused no-cache', (args.root/'comparison.md').read_text())
+                collection.adopt(args)
+                for change in ({'tp':2}, {'answer_seeds':[0,1]}, {'followup_nocache':True}):
+                    with self.assertRaises(ValueError): collection_actions(dict(protocol, **change))
+            self.assertEqual(pins, {p:(file_hash(p),p.stat().st_mtime_ns) for p in pins})
+
     def test_adoption_keeps_exact_inputs_schedules_only_router_and_resumes(self):
         with tempfile.TemporaryDirectory() as temp:
             args = fixture(Path(temp), 'longbench-v2')
