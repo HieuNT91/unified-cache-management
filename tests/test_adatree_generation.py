@@ -186,7 +186,7 @@ class AdaTreeGenerationTests(unittest.TestCase):
                     routing.assert_called_once();verify.assert_not_called()
         self.assertEqual(sample,before)
 
-    def test_new_baseline_records_and_report_enforce_same_policy(self):
+    def test_new_baseline_policy_is_validated_and_reported_separately(self):
         from test_baseline_breakdown import fixture as report_fixture, commit
         from scripts.reporting import experiment_task_breakdown as report
         from runner.tree.collection import collection_actions
@@ -220,11 +220,18 @@ class AdaTreeGenerationTests(unittest.TestCase):
                 atomic_json(folder/'result.json',record)
                 receipt=report.read(folder/'validated.json');receipt['files']['result.json']=file_hash(folder/'result.json')
                 atomic_json(folder/'validated.json',receipt)
+                if method=='adatree-v1':
+                    _,tables,matching=report.report(base)
+                    self.assertEqual(matching['matched_samples'],1)
+                    self.assertEqual(tables['overall']['nocache']['mean_ttft_seconds'],999.)
+                    self.assertEqual(tables['followup/overall']['nocache-followup']['completed'],0)
             text,tables,matching=report.report(base)
             self.assertEqual(matching['matched_samples'],1)
-            self.assertEqual(tables['overall']['nocache']['mean_ttft_seconds'],4.)
+            self.assertEqual(tables['overall']['nocache']['mean_ttft_seconds'],999.)
+            self.assertEqual(tables['followup/overall']['nocache-followup']['mean_ttft_seconds'],4.)
             self.assertIn('same new generation policy',text)
-            self.assertNotIn('Baseline keeps its original',text)
+            self.assertIn('Baseline keeps its original',text)
+            self.assertIn('budgets differ',text)
             record['thinking_loop_breaker']=OLD_LOOP
             atomic_json(folder/'result.json',record)
             receipt['files']['result.json']=file_hash(folder/'result.json');atomic_json(folder/'validated.json',receipt)

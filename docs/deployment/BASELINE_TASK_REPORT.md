@@ -44,6 +44,27 @@ that case; `experiment_same_count.py EXPERIMENT_DIR` always uses the intersectio
 A copied baseline with missing metadata or corrupt committed records is an error
 rather than a silent fallback; missing answers are allowed.
 
+## AdaTree comparison and follow-up no-cache
+
+When a run schedules no-cache after AdaTree, the main comparison still reads
+`baseline-source/` (or the explicitly configured `baseline_source`). Its `nocache`
+row uses the original baseline's accepted records, matched to AdaTree by exact
+prepared input, token hash and seed. The pending or partially completed later
+no-cache run does not shrink this intersection or turn it into an empty table.
+
+The later run appears separately as `nocache-followup` in `followup/overall` and
+`followup/task/...` tables. These tables use all of its committed answers, even
+with `--same-count`. Before it starts, they show zero completed and N/A metrics.
+Without a copied source, the main tables show the available tree results and the
+follow-up tables remain independent. A corrupt copied source is still an error.
+
+The report identifies the source baseline and preserves its original hardware
+and generation policy. For the AdaTree 8192-thinking/10000-total override, the
+later no-cache uses the same new policy; the copied baseline retains its old
+budget. Neither baseline's receipts, results nor generation policy are rewritten.
+This separation applies to the task report; NPZ outcome export keeps its existing
+method selection (the in-run no-cache when scheduled).
+
 The copied RULER baseline comes from L40 and the tree answers from L20. Their
 original hardware provenance is retained; TTFT comparisons are cross-server
 measurements, not a measurement of method speedup on the same hardware.

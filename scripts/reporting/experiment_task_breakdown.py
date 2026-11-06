@@ -2,8 +2,9 @@
 """Print committed results by task: python SCRIPT EXPERIMENT_DIR.
 
 Supports RULER and LongBench v2, including copied baseline-source/ results.
-With a copied baseline, metrics use exact shared input/seed pairs. Read-only; no env, model,
-prepared-input access, report writes or GPU execution. Uses repository readers.
+With a copied baseline, comparison metrics use exact shared input/seed pairs.
+Later no-cache answers have separate all-available task tables. Read-only; no env,
+model, prepared-input access, report writes or GPU execution. Uses repository readers.
 """
 import argparse
 import json
@@ -116,14 +117,25 @@ def copied_baseline(base, settings, rows, protocol, data, pins, *, source=None):
     return dict(nocache=baseline['nocache'], **data)
 
 
-def snapshot(base):
+def baseline_source(base, settings):
+    return Path(settings['baseline_source']) if settings.get('baseline_source') else Path(base)/'baseline-source'
+
+
+def snapshot(base, *, separate_followup=False):
+    """Read accepted outcomes; reporting can separate the later no-cache run.
+
+    The default retains the outcome export's existing method selection.
+    """
     base = Path(base).resolve()
     pins = {}
     role, settings, rows, protocol, cases = metadata(base, pins)
     expected = [dict(prompt_id=json.dumps([r['id'], seed]), subtask=r['subtask'])
                 for r in rows for seed in seeds(protocol)]
     data = records(base, role, rows, protocol, cases, pins)
-    source = Path(settings['baseline_source']) if settings.get('baseline_source') else base/'baseline-source'
+    source = baseline_source(base, settings)
+    if (separate_followup and role == 'tree' and 'nocache' in data
+            and (settings.get('followup_nocache') or settings.get('baseline_source') or source.exists())):
+        data['nocache-followup'] = data.pop('nocache')
     if role == 'tree' and 'nocache' not in data and (settings.get('baseline_source') or source.exists()):
         data = copied_baseline(base, settings, rows, protocol, data, pins, source=source)
     if any(file_hash(path) != digest for path, digest in pins.items()):
@@ -133,9 +145,10 @@ def snapshot(base):
 
 def report(base, same_count=False):
     from runner.reporting.status import match_records
-    expected, data = snapshot(base)
+    expected, data = snapshot(base, separate_followup=True)
     settings = read(Path(base)/'settings.json')
-    imported = not settings.get('followup_nocache') and 'nocache' in data and any(
+    followup = {'nocache-followup': data.pop('nocache-followup')} if 'nocache-followup' in data else {}
+    imported = 'nocache' in data and any(
         case.startswith('tree-prophetkv-') or case == 'adatree-v1' for case in data)
     same_count = same_count or imported or ('adatree-v1' in data and 'nocache' in data)
     # Validate all committed metrics, including records outside the intersection.
@@ -147,6 +160,13 @@ def report(base, same_count=False):
     tasks = sorted({r['subtask'] for r in expected})
     tables.update({'task/'+task: {case: summary['subtasks'][task] for case, summary in summaries.items()}
                    for task in tasks})
+    # Later no-cache answers never restrict the baseline-source comparison.
+    # Validate and report every committed follow-up answer, even with --same-count.
+    if followup:
+        later = aggregate(followup['nocache-followup'], expected, {}, 'running')
+        tables['followup/overall'] = {'nocache-followup': later['overall']}
+        tables.update({'followup/task/'+task: {'nocache-followup': later['subtasks'][task]}
+                       for task in tasks})
     lines = [
         f'Experiment: {Path(base).resolve()}',
         f'Committed answers: {sum(map(len, data.values()))}/{len(expected)*len(data)}',
@@ -156,16 +176,18 @@ def report(base, same_count=False):
     ]
     if settings.get('answer_generation'):
         lines.append('AdaTreeV1 generation: thinking <=8192, total <=10000; repetition 32..128 x4.')
-        if settings.get('followup_nocache'):
-            lines.append('No-cache: same new generation policy.')
-        elif settings.get('baseline_source'):
+        if followup:
+            lines.append('Follow-up no-cache: same new generation policy; reported separately.')
+        if imported:
             lines.append('Reused no-cache retains its original generation policy; budgets differ.')
     if imported:
-        settings = read(Path(base)/'settings.json')
-        lines += ['Baseline: '+str(settings.get('baseline_source', Path(base).resolve()/'baseline-source')),
+        lines += ['Baseline: '+str(baseline_source(Path(base).resolve(), settings)),
                   'Baseline keeps its original hardware provenance; TTFT may come from a different server.']
-    elif any(case.startswith('tree-prophetkv-') for case in data):
+    elif any(case.startswith('tree-prophetkv-') or case == 'adatree-v1' for case in data):
         lines.append('No baseline-source/ found: reporting tree methods only.')
+    if followup:
+        lines.append(f'Follow-up no-cache committed answers: {len(followup["nocache-followup"])}/{len(expected)}; '
+                     'all available answers, excluded from the comparison intersection (also with --same-count).')
     fmt = lambda value: 'N/A' if value is None else f'{value:.3f}'
     for scope, table in tables.items():
         lines += ['', scope, '',
@@ -180,13 +202,13 @@ def report(base, same_count=False):
 
 
 def main(same_count=False):
-    parser = argparse.ArgumentParser(description=(
-        'Print task breakdown on exact shared prompts across all scheduled methods.'
-        if same_count else __doc__))
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('experiment_dir', type=Path)
+    parser.add_argument('--same-count', action='store_true', default=same_count,
+                        help='Use exact shared prompt/seed pairs for comparison; follow-up no-cache stays independent')
     args = parser.parse_args()
     try:
-        text, _, _ = report(args.experiment_dir, same_count=same_count)
+        text, _, _ = report(args.experiment_dir, same_count=args.same_count)
     except (OSError, ValueError, KeyError) as error:
         parser.exit(1, f'Cannot report {args.experiment_dir}: {error}\n')
     print(text, end='')

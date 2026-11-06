@@ -67,6 +67,60 @@ def commit(stage, case, i=0, seed=0, score=1., ttft=2., token_hash='a'*64):
 
 
 class BaselineBreakdownTests(unittest.TestCase):
+    def test_followup_never_restricts_source_comparison_and_is_readonly(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp); target,baseline=fixture(base,'longbench-v2')
+            settings=report.read(base/'settings.json');settings['followup_nocache']=True
+            atomic_json(base/'settings.json',settings)
+            plan=report.read(base/'plan.json');plan['settings_sha256']=file_hash(base/'settings.json')
+            atomic_json(base/'plan.json',plan)
+            protocol=dict(target[1],**settings,plan_sha256=fingerprint(plan))
+            protocol['scheduled_actions']=[*protocol['scheduled_actions'],'nocache']
+            protocol['actions']=[*protocol['actions'],dict(id='nocache',method='baseline',ratio=None)]
+            atomic_json(base/'tree/protocol.json',protocol)
+            target=(target[0],protocol,target[2])
+            for case in protocol['scheduled_actions'][:-1]:commit(target,case,seed=1,ttft=3.)
+            commit(baseline,'nocache',seed=1,ttft=6.)
+            commit(baseline,'nocache',seed=2,ttft=999.)
+            # Pending follow-up must not make the comparison empty.
+            _,tables,matching=report.report(base)
+            self.assertEqual(matching['matched_samples'],1)
+            self.assertEqual(tables['followup/overall']['nocache-followup']['completed'],0)
+            self.assertIsNone(tables['followup/overall']['nocache-followup']['accuracy_percent'])
+            # Disjoint prompt/seed pairs still appear in the independent follow-up table.
+            commit(target,'nocache',i=1,seed=0,score=0.,ttft=9.)
+            commit(target,'nocache',i=2,seed=1,score=1.,ttft=11.)
+            pins={p:(file_hash(p),p.stat().st_mtime_ns) for p in base.rglob('*') if p.is_file()}
+            for same_count in (False,True):
+                text,tables,matching=report.report(base,same_count=same_count)
+                self.assertEqual(matching['matched_samples'],1)
+                self.assertNotIn('nocache-followup',matching['available_counts'])
+                self.assertEqual(tables['overall']['nocache']['mean_ttft_seconds'],6.)
+                later=tables['followup/overall']['nocache-followup']
+                self.assertEqual((later['completed'],later['accuracy_percent'],later['mean_ttft_seconds']),(2,50.,10.))
+                self.assertEqual(tables['followup/task/task-1']['nocache-followup']['accuracy_percent'],0.)
+                self.assertIn('excluded from the comparison intersection',text)
+            self.assertEqual(pins,{p:(file_hash(p),p.stat().st_mtime_ns) for p in pins})
+            cli=subprocess.run([sys.executable,str(Path(report.__file__).resolve()),str(base),'--same-count'],
+                               cwd='/tmp',capture_output=True,text=True)
+            self.assertEqual(cli.returncode,0,cli.stderr)
+            self.assertIn('| nocache | 1/6 |',cli.stdout)
+            self.assertIn('| nocache-followup | 2/6 |',cli.stdout)
+            # Existing exports keep their previous choice of the in-run baseline.
+            _,export_data=report.snapshot(base)
+            self.assertEqual(len(export_data['nocache']),2)
+            self.assertNotIn('nocache-followup',export_data)
+            (base/'baseline-source').rename(base/'saved-baseline')
+            text,tables,matching=report.report(base,same_count=True)
+            self.assertEqual(matching['matched_samples'],1)
+            self.assertNotIn('nocache',tables['overall'])
+            self.assertEqual(tables['followup/overall']['nocache-followup']['completed'],2)
+            self.assertIn('No baseline-source/',text)
+            (base/'saved-baseline').rename(base/'baseline-source')
+            # A valid follow-up never hides an invalid copied source.
+            (base/'baseline-source/settings.json').unlink()
+            with self.assertRaises(OSError):report.report(base)
+
     def test_both_datasets_original_receipts_exact_intersection_and_seed_subset(self):
         for dataset in ('ruler','longbench-v2'):
             with self.subTest(dataset=dataset), tempfile.TemporaryDirectory() as temp:
