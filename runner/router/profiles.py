@@ -1,31 +1,10 @@
-"""Execution constraints are independent of a learned tree's actions/features."""
+"""Original prepared-input validation and hardware-independent runtime budgets."""
 from runner.inputs.config import engine_config,validate_sample
 PROFILES={
-    'ruler-thinking':dict(input_tokens=65536,output_tokens=None,thinking=True,kv_tokens=82304,kv_blocks=1286),
+    'ruler-thinking':dict(input_tokens=65536,output_tokens=None,thinking=True),
     'ruler':dict(input_tokens=65536,output_tokens=None,thinking=False,kv_tokens=65920,kv_blocks=1031),
-    'longbench-v2':dict(input_tokens=114688,output_tokens=16384,thinking=True,kv_tokens=131072,kv_blocks=2048),
+    'longbench-v2':dict(input_tokens=114688,output_tokens=16384,thinking=True),
 }
-
-
-def hardware_profile(name='server',dataset='ruler',tp=4):
-    if name=='rtx4500ada-tree-validation' and dataset in ('ruler-thinking','longbench-v2') and tp==4:
-        return dict(names=('RTX 4500 Ada Generation',),memory=.95,workspace_gib=2.5,
-                    kv_cache_mode='fixed',cpu_offload_gb=4.)
-    if name=='server':
-        return dict(names=('A800','L20','A100','H20'),memory=.95 if tp==2 else .9,workspace_gib=8.,
-                    kv_cache_mode='auto' if tp==2 else 'fixed')
-    if name=='l20-tp2' and dataset in ('ruler','ruler-thinking'):
-        return dict(names=('L20',),memory=.95,workspace_gib=3.,
-                    kv_cache_mode='auto' if tp==2 else 'fixed')
-    if name=='l40-tp4' and dataset=='ruler-thinking' and tp==4:
-        return dict(names=('L40',),memory=.9,workspace_gib=8.,kv_cache_mode='fixed')
-    if name=='l40-tp2' and dataset=='ruler-thinking' and tp==2:
-        return dict(names=('L40',),memory=.96,workspace_gib=3.,kv_cache_mode='auto')
-    if name=='rtx4500ada' and dataset in PROFILES:
-        # Local 24 GiB TP4 profile: validated clean YaRN4/16K-prefill runs,
-        # with 4096-token activation tiles and full original-position KV.
-        return dict(names=('RTX 4500 Ada Generation',),memory=.95,workspace_gib=2.5,kv_cache_mode='fixed')
-    raise ValueError('Unsupported hardware/dataset profile')
 
 
 def validate(sample,dataset):
@@ -44,47 +23,43 @@ def validate(sample,dataset):
     return sample
 
 
-def allocation(dataset,hardware='server'):
-    p=dict(PROFILES[dataset])
-    if hardware=='rtx4500ada':p.update(kv_tokens=65920,kv_blocks=1031)
+def allocation(dataset):
+    """Runtime capacity; prepared samples keep their original generation metadata."""
+    from runner.router.adatree import answer_generation
+    p = dict(PROFILES[dataset])
+    if p['thinking']:
+        p['output_tokens'] = answer_generation()['output_reserve']
+        p['kv_tokens'] = p['input_tokens'] + p['output_tokens']
+        p['kv_blocks'] = (p['kv_tokens'] + 63) // 64
     return p
 
 
-def config(model,dataset,cached,cache,delimiter=None,hardware='server',tp=4):
+def config(model,dataset,cached,cache,delimiter=None,*,tp=4,memory=.95):
     from runner.runtime.tensor_parallel import validate_tp
     validate_tp(tp)
-    p=allocation(dataset,hardware)
-    profile=hardware_profile(hardware,dataset,tp)
-    result=engine_config(model,'prophetkv' if cached else 'baseline',ratio=.01,tp=tp,cache_dir=cache,
-                        memory=profile['memory'])
-    # In TP2 server runs vLLM profiles runtime memory and spends the remaining
-    # budget on KV. Context/output limits remain independent of cache capacity.
+    if not 0 < memory < 1:
+        raise ValueError('GPU memory utilization must be between 0 and 1')
+    p=allocation(dataset)
+    result=engine_config(model,'prophetkv' if cached else 'baseline',ratio=.01,tp=tp,
+                        cache_dir=cache,memory=memory)
+    # Let vLLM measure activation/workspace and available KV blocks. Do not
+    # override its measured block capacity or offload model weights to the CPU.
     result.update(max_model_len=p['kv_tokens'],
                   hf_overrides=dict(max_position_embeddings=32768,ucm_activation_tile=4096))
-    if profile.get('cpu_offload_gb'):
-        result['cpu_offload_gb']=profile['cpu_offload_gb']
-    if profile['kv_cache_mode']=='fixed':result['num_gpu_blocks_override']=p['kv_blocks']
-    if cached and hardware == 'l40-tp2':
-        # Bound each PcStore task to one context chunk instead of all 64K KV.
-        # This is captured in initialization.json with the rest of the config.
-        result['kv_transfer_config']['kv_connector_extra_config']['max_load_blocks'] = 64
     return result
 
 
-def validate_initialization(receipts,dataset,hardware='server',tp=4):
+def validate_initialization(receipts,dataset,*,tp=4):
     from runner.runtime.tensor_parallel import validate_tp
     validate_tp(tp)
-    p=allocation(dataset,hardware)
-    automatic=hardware_profile(hardware,dataset,tp)['kv_cache_mode']=='auto'
-    ranks = [r.get('rank') for r in receipts]
-    # Legacy TP4 initialization receipts did not include rank IDs.
-    if len(receipts)!=tp or ((tp==2 or any(r is not None for r in ranks)) and
-                            sorted(-1 if r is None else r for r in ranks)!=list(range(tp))):
+    p=allocation(dataset)
+    if (len(receipts)!=tp or
+            sorted(r.get('rank', -1) for r in receipts)!=list(range(tp))):
         raise ValueError('Missing initialization rank')
     blocks=[r.get('kv_blocks') for r in receipts]
-    if (any(type(n) is not int or n<p['kv_blocks'] for n in blocks) or
-            len(set(blocks))!=1 or (not automatic and blocks[0]!=p['kv_blocks'])):
-        raise ValueError('KV cache capacity audit failed: insufficient, inconsistent or unexpected blocks')
+    if (any(type(n) is not int or n<p['kv_blocks'] for n in blocks)
+            or len(set(blocks))!=1):
+        raise ValueError('KV cache capacity audit failed: insufficient or inconsistent blocks')
     for r in receipts:
         if (r['kv_tokens']!=p['kv_tokens'] or r['block_size']!=64 or
                 len(r['rope'])!=64 or any(not a['formula_bitwise_equal'] or a['table_positions']!=131072 for a in r['rope'])):

@@ -98,13 +98,18 @@ class Chunk2048Tests(unittest.TestCase):
             configure_sparse(sparse, 'adatree-v1', None, adatree_chunk_size=1024)
 
     def test_integrated_tp_packet_names_and_schema_use_explicit_chunk(self):
+        for tp in (1, 2):
+            with self.subTest(tp=tp):
+                self.check_tp_packet(tp)
+
+    def check_tp_packet(self, tp):
         from ucm.sparse.prophetkv.tree_runtime import route_adatree
         bounds = [0, 64, 2112, 4160, 4224]
         layers = [torch.ones(bounds[-2]) for _ in range(64)]
         sparse = NS(model=NS(layers=[None]*64), scoring_layers=tuple(range(64)),
                     adatree_chunk_size=2048, selection_diagnostics=[], request=NS(request_id='read'))
-        group = NS(world_size=2, broadcast=lambda packet, src: packet)
-        with patch.dict('sys.modules', {'vllm.distributed': NS(tensor_model_parallel_all_reduce=lambda a: a*2)}):
+        group = NS(world_size=tp, broadcast=lambda packet, src: packet)
+        with patch.dict('sys.modules', {'vllm.distributed': NS(tensor_model_parallel_all_reduce=lambda a: a*tp)}):
             route_adatree(sparse, layers, torch.ones(4096), bounds, group)
         event, = sparse.selection_diagnostics
         self.assertEqual(event['chunk_size'], 2048)

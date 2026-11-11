@@ -6,7 +6,7 @@ from runner.cache.setups import atomic_json, file_hash, fingerprint
 from runner.inputs.layout import stamp_sample
 from runner.runtime.output_budget import make_policy, RULER_PROTOCOL, LONGBENCH_PROTOCOL
 from runner.runtime.thinking_budget import KEY
-from scripts.collection.collection_v3 import declaration
+from scripts.collection.collection_v3 import VERSION, GENERATION_PROTOCOL
 from scripts.data.ruler import TASKS
 
 GPUS = [f'GPU-00000000-0000-0000-0000-{i:012d}' for i in range(4)]
@@ -20,16 +20,16 @@ class Tokenizer:
     def encode(self, text, **kwargs): return list(map(ord, text))
 
 
-def fixture(base, dataset, chunk):
+def fixture(base, dataset, chunk, *, samples=500, seed=42):
     model, prepared = base/'model', base/'prepared'
     atomic_json(model/'config.json', {'model_type': 'qwen3'})
     atomic_json(model/'tokenizer.json', {'synthetic': True})
     hashes = {name: file_hash(model/name) for name in ('config.json', 'tokenizer.json')}
     ruler = dataset == 'ruler'
-    spec = (dict(samples=500, seed=42, protocol=RULER_PROTOCOL, execution_profile='ruler-thinking',
+    spec = (dict(samples=samples, seed=seed, protocol=RULER_PROTOCOL, execution_profile='ruler-thinking',
                  tasks=list(TASKS), tokenizer_hashes=hashes) if ruler else
             dict(model_config_sha256=hashes['config.json'], tokenizer_files=hashes,
-                 **declaration(dataset, 4, thinking=True)))
+                 collection_protocol=VERSION, generation_protocol=GENERATION_PROTOCOL))
     rows, files = [], {}
     for i in range(2):
         name = f'samples/{i}.json'
@@ -52,6 +52,6 @@ def fixture(base, dataset, chunk):
     return NS(root=base/'results', prepared=prepared, model=model, cache_root=base/'cache',
               dataset=dataset, adatree_v1=True, baseline_source=None,
               local_validation=True, validation_prompt_ids=['input-0','input-1'],
-              tp=4, number_gpus=4, devices=','.join(GPUS), hardware_profile='rtx4500ada-tree-validation',
-              samples_per_task=500, seed=42, answers_per_question=1, answer_seeds=None if ruler else [0],
+              tp=4, number_gpus=4, devices=','.join(GPUS), gpu_memory_utilization=.95,
+              samples_per_task=samples, seed=seed, answer_seeds=None if ruler else [0],
               kv_chunk_size=chunk, percentages=[5,20,40] if chunk==4096 else [5,20,60])

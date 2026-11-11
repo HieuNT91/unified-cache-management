@@ -146,19 +146,14 @@ class BoundedLoadTests(unittest.TestCase):
             store.load_data([b'a'], [0], [[1]])
         backend.load_data.assert_not_called()
 
-    def test_limits_apply_to_l40_only_and_baseline_has_no_connector(self):
-        for tp in (2, 4):
-            cfg = config('/model', 'ruler-thinking', True, '/cache', hardware=f'l40-tp{tp}', tp=tp)
+    def test_baseline_has_no_connector_for_any_supported_tp(self):
+        for tp in (1, 2, 4):
+            cfg = config('/model', 'ruler-thinking', True, '/cache', tp=tp)
             extra = cfg['kv_transfer_config']['kv_connector_extra_config']
-            if tp == 2:
-                self.assertEqual(extra['max_load_blocks'], 64)
-            else:
-                self.assertNotIn('max_load_blocks', extra)
+            self.assertNotIn('max_load_blocks', extra)
             self.assertEqual(extra['ucm_connectors'][0]['ucm_connector_config']['timeout_ms'], 120000)
-            dense = config('/model', 'ruler-thinking', False, '/cache', hardware=f'l40-tp{tp}', tp=tp)
+            dense = config('/model', 'ruler-thinking', False, '/cache', tp=tp)
             self.assertNotIn('kv_transfer_config', dense)
-        cfg = config('/model', 'ruler', True, '/cache', hardware='l20-tp2', tp=2)
-        self.assertNotIn('max_load_blocks', cfg['kv_transfer_config']['kv_connector_extra_config'])
 
     def test_connector_propagates_limit_to_every_store_policy(self):
         # Execute the actual override without importing unavailable vLLM/CUDA.

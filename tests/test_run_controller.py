@@ -47,6 +47,70 @@ class RunControllerTests(unittest.TestCase):
                     args.percentages=[5,20,60] if args.kv_chunk_size==2048 else [5,20,40]
                     with self.assertRaisesRegex(ValueError,'parameters differ'):collection.adopt(args)
 
+    def test_tp1_adopts_configurable_cohorts_and_preparation_seed(self):
+        for dataset in ('ruler', 'longbench-v2'):
+            for chunk in (2048, 4096):
+                with tempfile.TemporaryDirectory() as tmp:
+                    args = fixture(Path(tmp), dataset, chunk, samples=200, seed=7)
+                    args.tp = args.number_gpus = 1
+                    args.devices = GPUS[0]
+                    args.local_validation = False
+                    args.validation_prompt_ids = None
+                    before = {p:p.read_bytes() for p in args.prepared.rglob('*') if p.is_file()}
+                    collection.adopt(args)
+                    settings, plan, rows = collection.load(args.root)
+                    self.assertEqual(settings['groups'], [GPUS[:1]])
+                    self.assertEqual(settings['seed'], 7)
+                    self.assertEqual(plan['samples'], 2)
+                    self.assertEqual(plan['answers'], 4)
+                    self.assertNotIn('hardware_profile', settings)
+                    collection.adopt(args)
+                    self.assertEqual(before, {p:p.read_bytes() for p in before})
+                    args.tp = 2
+                    args.number_gpus = 2
+                    args.devices = ','.join(GPUS[:2])
+                    with self.assertRaisesRegex(ValueError, 'parameters differ'):
+                        collection.adopt(args)
+
+    def test_prepare_forwards_requested_count_and_seed(self):
+        with patch.object(sys, 'argv', ['run.py', 'prepare', 'ruler', '--source', '/source',
+                '--model', '/model', '--output', '/prepared', '--samples-per-task', '200', '--seed', '7']), \
+                patch.dict(os.environ, {'CUDA_VISIBLE_DEVICES': ''}), \
+                patch.object(run, 'validate_ruler_versions'), patch.object(run, 'validate_ruler_assets'), \
+                patch('scripts.data.ruler.prepare') as prepare:
+            run.main()
+        args = prepare.call_args.args[0]
+        self.assertEqual((args.samples, args.seed), (200, 7))
+
+    def test_longbench_seeds_are_independent_of_prepared_inputs(self):
+        from runner.reporting.run import report
+        from scripts.collection.collection_v3 import declaration, seeds
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as tmp:
+                args = fixture(Path(tmp), 'longbench-v2', 4096)
+                if legacy:
+                    receipt_path = args.prepared / 'preparation.json'
+                    receipt = json.loads(receipt_path.read_text())
+                    receipt['spec'].update(declaration('longbench-v2', 4))
+                    receipt_path.write_text(json.dumps(receipt))
+                pins = {p: (file_hash(p), p.stat().st_mtime_ns)
+                        for p in args.prepared.rglob('*') if p.is_file()}
+                for index, selected in enumerate(([0], [7], [42, 0, 7], [9, 8, 7, 6, 5])):
+                    args.root = Path(tmp) / f'run-{index}'
+                    args.answer_seeds = selected
+                    collection.adopt(args)
+                    settings, plan, rows = collection.load(args.root)
+                    protocol, _ = collection.stage(args.root, 'tree')
+                    self.assertEqual(seeds(protocol), selected)
+                    self.assertEqual(settings['answers_per_question'], len(selected))
+                    self.assertEqual(plan['answers'], len(rows) * 2 * len(selected))
+                    self.assertEqual(plan['baseline_answers'], len(rows) * len(selected))
+                    _, tables, _ = report(args.root)
+                    for value in tables['overall'].values():
+                        self.assertEqual(value['expected'], len(rows) * len(selected))
+                    collection.adopt(args)
+                self.assertEqual(pins, {p: (file_hash(p), p.stat().st_mtime_ns) for p in pins})
+
     def test_rejects_device_counts_before_writing_results(self):
         with tempfile.TemporaryDirectory() as tmp:
             args=fixture(Path(tmp),'ruler',4096)
@@ -80,12 +144,36 @@ class RunControllerTests(unittest.TestCase):
                     env=dict(PATH=os.environ['PATH'],UCM_ENV_FILE=str(env_file)),text=True,capture_output=True)
                 self.assertEqual(proc.returncode,0,proc.stderr)
                 argv,cuda=json.loads(proc.stdout);self.assertEqual(cuda,'')
-                if command=='prepare':self.assertIn('--prepared-answer-seeds',argv)
+                if command=='prepare':self.assertNotIn('--prepared-answer-seeds',argv)
                 else:
                     self.assertIn('--followup-nocache',argv)
                     self.assertEqual(argv[argv.index('--number-gpus')+1],'4')
                     self.assertIn(str(temp/'results'),argv[argv.index('--root')+1])
                     if command=='smoke':self.assertEqual(argv[argv.index('--tp')+1],'4');self.assertIn('--local-validation',argv)
+            # Exercise edited user settings without touching the checkout launcher.
+            for selected in ('0', '42 0 7'):
+                script = (ROOT / 'run.sh').read_text().replace(
+                    'LONGBENCH_ANSWER_SEEDS=(0 1)', f'LONGBENCH_ANSWER_SEEDS=({selected})')
+                script = '\n'.join(f'CODE_ROOT="{ROOT}"' if line.startswith('CODE_ROOT=') else line
+                                   for line in script.splitlines())
+                targets = []
+                for command in ('configure', 'smoke', 'status', 'stop', 'smoke-status', 'smoke-stop'):
+                    proc = subprocess.run(['bash', '-c', script, 'run.sh', command, 'longbench-v2',
+                                           *(['input-0'] if command == 'smoke' else [])],
+                        env=dict(PATH=os.environ['PATH'], UCM_ENV_FILE=str(env_file)),
+                        text=True, capture_output=True)
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                    argv, _ = json.loads(proc.stdout)
+                    target = argv[argv.index('--root')+1] if '--root' in argv else argv[-1]
+                    targets.append(target)
+                    self.assertTrue(target.endswith('/chunk4096-seeds-' + selected.replace(' ', '-')))
+                    if command in ('configure', 'smoke'):
+                        start = argv.index('--answer-seeds') + 1
+                        self.assertEqual(argv[start:argv.index('--percentages')], selected.split())
+                self.assertEqual(targets[0], targets[2])
+                self.assertEqual(targets[0], targets[3])
+                self.assertEqual(targets[1], targets[4])
+                self.assertEqual(targets[1], targets[5])
 
     def test_stop_uses_process_receipts_when_prepared_inputs_are_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:

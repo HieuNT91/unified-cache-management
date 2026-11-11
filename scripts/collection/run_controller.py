@@ -23,33 +23,20 @@ from runner.runtime.output_budget import RULER_PROTOCOL, LONGBENCH_PROTOCOL, val
 from scripts.collection.collection_v3 import declaration, seeds, answer_metrics
 from scripts.collection import run_control as control
 from scripts.collection.run_metadata import read, freeze
-from scripts.data.ruler import TASKS
 
 ROLE = 'tree'
 
 
 def validate_rows(settings, rows):
-    ruler = settings['dataset'] == 'ruler'
-    local = settings.get('local_validation', False)
     selected = settings.get('validation_prompt_ids', [])
-    count = len(TASKS)*settings['samples_per_task'] if ruler else 503
-    if local:
-        if (settings['tp'] != 4 or len(settings['groups']) != 1
-                or settings['hardware_profile'] != 'rtx4500ada-tree-validation'
-                or not selected or len(set(selected)) != len(selected)
-                or {r['id'] for r in rows} != set(selected)):
-            raise ValueError('Invalid explicit local validation selection/profile')
-        count = len(selected)
-    if len(rows) != count or len({r['id'] for r in rows}) != count:
-        raise ValueError('Incomplete or duplicate prepared cohort')
-    if ruler and not local:
-        if (set(r['subtask'] for r in rows) != set(TASKS)
-                or any(sorted(r['ordinal'] for r in rows if r['subtask'] == task)
-                       != list(range(settings['samples_per_task'])) for task in TASKS)):
-            raise ValueError('Expected all original RULER task ordinals')
-    elif not ruler and not local and (len({r['source_id'] for r in rows}) != 503
-          or sorted(r['ordinal'] for r in rows) != list(range(503))):
-        raise ValueError('Expected all 503 distinct LongBench v2 source rows')
+    if not rows or len({r['id'] for r in rows}) != len(rows):
+        raise ValueError('Empty or duplicate prepared cohort')
+    if settings.get('local_validation') and (not selected or len(set(selected)) != len(selected)
+            or {r['id'] for r in rows} != set(selected)):
+        raise ValueError('Prepared rows differ from the explicit prompt selection')
+    identities = [(r['subtask'], r['ordinal']) for r in rows] if settings['dataset'] == 'ruler' else [r['source_id'] for r in rows]
+    if len(set(identities)) != len(rows):
+        raise ValueError('Duplicate source rows')
     for row in rows:
         if (not re.fullmatch('[a-zA-Z0-9_-]+', row['id'])
                 or row['evaluation_protocol'] != settings['evaluation_protocol']):
@@ -90,36 +77,41 @@ def adopt(args):
     selected = getattr(args, 'validation_prompt_ids', None)
     if local != bool(selected) or (selected and len(set(selected)) != len(selected)):
         raise ValueError('Local validation requires explicit distinct --validation-prompt-ids')
-    tp = args.tp
-    if args.dataset not in ('ruler', 'longbench-v2') or tp not in (2, 4) or args.seed != 42:
-        raise ValueError('Expected RULER/LongBench v2, TP2 or TP4 and preparation seed42')
-    if args.samples_per_task != 500:
-        raise ValueError('This run requires the original 500/task RULER preparation')
+    from runner.runtime.tensor_parallel import validate_tp
+    tp = validate_tp(args.tp)
+    if args.dataset not in ('ruler', 'longbench-v2'):
+        raise ValueError('Expected RULER or LongBench v2')
+    if type(args.samples_per_task) is not int or args.samples_per_task <= 0:
+        raise ValueError('Samples per task must be positive')
     percentages = args.percentages or ([5, 20, 60] if args.kv_chunk_size == 2048 else [5, 20, 40])
     definitions = actions(percentages)
     number_gpus = getattr(args, 'number_gpus', None)
     if type(number_gpus) is not int or number_gpus < tp or number_gpus % tp:
         raise ValueError('Number of GPUs must be a positive multiple of TP')
     groups = control.resolve_groups(args.devices, number_gpus, tp=tp, query_inventory=False)
-    profile = getattr(args, 'hardware_profile', None)
-    profile = profile or ('rtx4500ada-tree-validation' if local else 'l20-tp2' if ruler else 'server')
-    if local and (tp != 4 or len(groups) != 1 or profile != 'rtx4500ada-tree-validation'):
-        raise ValueError('Local smoke validation requires one TP4 RTX 4500 Ada group')
-    from runner.router.profiles import hardware_profile
-    hardware_profile(profile, 'ruler-thinking' if ruler else 'longbench-v2', tp)
+    from runner.router.profiles import allocation
+    memory = getattr(args, 'gpu_memory_utilization', .95)
+    if not 0 < memory < 1:
+        raise ValueError('GPU memory utilization must be between 0 and 1')
+    selected_seeds = getattr(args, 'answer_seeds', None)
+    if ruler:
+        if selected_seeds is not None:
+            raise ValueError('Explicit answer seeds are supported only for LongBench v2')
+        selected_seeds = [0]
+    if not selected_seeds:
+        raise ValueError('LongBench requires a nonempty --answer-seeds list')
+    selected_seeds = list(selected_seeds)
+    answers = len(selected_seeds)
     settings = dict(schema=SCHEMA, dataset=args.dataset, tree_protocol=PROTOCOL,
         execution_profile='ruler-thinking' if ruler else 'longbench-v2',
         evaluation_protocol=RULER_PROTOCOL if ruler else LONGBENCH_PROTOCOL,
         model=str(args.model), prepared=str(args.prepared), cache_root=str(args.cache_root),
-        tp=tp, hardware_profile=profile, groups=groups,
-        samples_per_task=args.samples_per_task if ruler else None, seed=42,
+        tp=tp, groups=groups, gpu_memory_utilization=memory,
+        runtime_max_model_len=allocation('ruler-thinking' if ruler else 'longbench-v2')['kv_tokens'],
+        samples_per_task=args.samples_per_task if ruler else None, seed=args.seed,
         percentages=percentages, watchdog_seconds=7200,
-        **declaration(args.dataset, args.answers_per_question, thinking=True))
-    selected_seeds = getattr(args, 'answer_seeds', None)
-    if selected_seeds is not None:
-        if ruler:
-            raise ValueError('Explicit answer seeds are supported only for LongBench v2 tree runs')
-        settings['answer_seeds'] = list(selected_seeds)
+        **declaration(args.dataset, answers, thinking=True))
+    settings['answer_seeds'] = selected_seeds
     seeds(settings)  # Validate before adopting inputs or creating any run files.
     from runner.tree.collection import chunk_size, runtime_sample
     if getattr(args, 'kv_chunk_size', None) is not None:
@@ -154,18 +146,13 @@ def adopt(args):
     receipt = read(receipt_path); spec = receipt['spec']
     if ruler:
         if (spec.get('protocol') != RULER_PROTOCOL or spec.get('execution_profile') != 'ruler-thinking'
-                or spec.get('samples') != args.samples_per_task or spec.get('seed') != 42
-                or set(spec.get('tasks', ())) != set(TASKS)):
-            raise ValueError('Expected original complete thinking RULER v3 preparation')
+                or spec.get('samples') != args.samples_per_task or spec.get('seed') != args.seed):
+            raise ValueError('RULER preparation protocol, sample count or seed differs from the run settings')
         model_hashes = spec.get('tokenizer_hashes', {})
     else:
         if (spec.get('collection_protocol') != settings['collection_protocol']
-                or spec.get('generation_protocol') != settings['generation_protocol']
-                or type(spec.get('answers_per_question')) is not int
-                or spec['answers_per_question'] < args.answers_per_question
-                or spec.get('answer_seeds') != list(range(spec['answers_per_question']))
-                or not set(seeds(settings)).issubset(spec['answer_seeds'])):
-            raise ValueError('LongBench prepared generation/answer seeds differ from this run')
+                or spec.get('generation_protocol') != settings['generation_protocol']):
+            raise ValueError('LongBench prepared input protocol differs from this run')
         model_hashes = spec.get('tokenizer_files', {})
         if spec.get('model_config_sha256') != file_hash(args.model/'config.json'):
             raise ValueError('Prepared LongBench model differs')
@@ -231,8 +218,8 @@ def adopt(args):
         plan = dict(schema=SCHEMA, settings_sha256=file_hash(args.root/'settings.json'),
             rows_sha256=file_hash(args.root/'rows.json'), preparation_sha256=receipt_hash,
             manifest_sha256=manifest_hash, samples=len(rows), probes=0,
-            baseline_answers=len(rows)*args.answers_per_question if settings.get('followup_nocache') else 0,
-            answers=len(rows)*len(definitions)*args.answers_per_question,
+            baseline_answers=len(rows)*answers if settings.get('followup_nocache') else 0,
+            answers=len(rows)*len(definitions)*answers,
             actions=definitions, phase_order=settings['phase_order'])
         freeze(args.root/'plan.json', plan)
         freeze(args.root/ROLE/'protocol.json', protocol_for(settings, plan))
@@ -341,18 +328,17 @@ def main():
     p.add_argument('--devices', default='')
     p.add_argument('--tp', type=int, default=2)
     p.add_argument('--number-gpus', type=int)
-    p.add_argument('--hardware-profile', choices=('server', 'l20-tp2', 'l40-tp2', 'l40-tp4', 'rtx4500ada-tree-validation'))
-    p.add_argument('--local-validation', action='store_true', help='Explicit TP4 RTX 4500 Ada test only; never a server default')
+    p.add_argument('--gpu-memory-utilization', type=float, default=.95)
+    p.add_argument('--local-validation', action='store_true', help='Run only the explicitly selected prepared prompt IDs')
     p.add_argument('--validation-prompt-ids', nargs='+')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--samples-per-task', type=int, default=500)
-    p.add_argument('--answers-per-question', type=int, default=1)
     p.add_argument('--answer-seeds', type=int, nargs='+',
-                   help='LongBench tree only: distinct ascending seeds from prepared provenance; count must match answers-per-question')
+                   help='LongBench output seeds, in execution order; independent of prepared inputs')
     p.add_argument('--kv-chunk-size', type=int, choices=(2048, 4096), default=4096,
                    help='Derive runtime chunk boundaries from unchanged prepared tokens; requires a new experiment')
     p.add_argument('--percentages', type=int, nargs='+', help='Fixed leaf inventory, determined by chunk size')
-    p.add_argument('--adatree-v1', action='store_true', help='Only the fixed native-probe router, seeds 0/1')
+    p.add_argument('--adatree-v1', action='store_true', help='Only the fixed native-probe router')
     p.add_argument('--adatree-thinking-8192', action='store_true',
                    help='8192 thinking / 10000 total; repetition patterns 32..128 repeated 4 times')
     p.add_argument('--followup-nocache', action='store_true', help='After all router engines exit, run no-cache with the same new policy')

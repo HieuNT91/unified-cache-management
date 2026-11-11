@@ -24,7 +24,7 @@ def seeds(value, case=None):
     if tree_longbench:
         valid = (isinstance(selected, list) and len(selected) == n
                  and all(type(seed) is int and seed >= 0 for seed in selected)
-                 and selected == sorted(set(selected)))
+                 and len(set(selected)) == len(selected))
     else:
         valid = selected == list(range(n))
     if not valid:

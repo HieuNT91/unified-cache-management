@@ -64,10 +64,12 @@ class Engine:
             if self.profile=='ruler-thinking':
                 from runner.runtime.thinking_budget import validate_sample_policy
                 validate_sample_policy(sample)
-            if len(sample['token_ids'])+sample['max_output_tokens']>allocation(self.profile,protocol.get('hardware_profile','server'))['kv_tokens']:
+            from runner.router.adatree import generation_sample
+            effective = generation_sample(sample, protocol)
+            if len(effective['token_ids'])+effective['max_output_tokens']>allocation(self.profile)['kv_tokens']:
                 raise ValueError('Complete input plus output reserve exceeds assigned hardware KV capacity')
         cfg=config(protocol['model'],self.profile,self.cached,self.cache,None,
-                   protocol.get('hardware_profile','server'),tp=self.tp)
+                   tp=self.tp,memory=protocol.get('gpu_memory_utilization',.95))
         self.tree_cached = protocol.get('schema') == 'tree-prophetkv-thinking-collection-v1'
         if self.tree_cached and not self.cached and protocol.get('followup_nocache'):
             from runner.tree.collection import inventory
@@ -91,7 +93,7 @@ class Engine:
         try:
             from runner.operations import code_hashes
             init=dict(model_load_seconds=time.perf_counter()-start,engine_config=cfg,execution_code=code_hashes())
-            init['setup']=self.llm.collective_rpc(setup);validate_initialization(init['setup'],self.profile,protocol.get('hardware_profile','server'),tp=self.tp)
+            init['setup']=self.llm.collective_rpc(setup);validate_initialization(init['setup'],self.profile,tp=self.tp)
             self.analyzer=OutputAnalyzer(self.llm.get_tokenizer())
             warmup_started=time.perf_counter()
             warm_namespace=uuid.uuid4().hex;warm=[100,200,300,400]*32

@@ -46,11 +46,10 @@ PY
 ```
 
 Trong `config/.env`, đặt `PYTHON_BIN` bằng kết quả `which python`, cùng `GPU_UUIDS`.
-Trong `run.sh`: A100/H20 dùng `HARDWARE_PROFILE="server"`; L20 dùng `l20-tp2`
-cho RULER TP2, `server` cho LongBench. Chỉnh `TP` và `NUMBER_GPUS` theo máy;
-kiểm tra dung lượng KV vẫn bắt buộc.
+Trong `run.sh`, chỉnh `TP` (1/2/4), `NUMBER_GPUS`, `GPU_MEMORY_UTILIZATION` theo máy.
+Không giới hạn tên GPU, không CPU offload; vLLM kiểm tra dung lượng KV thực tế.
 
 Riêng máy hiện tại có driver kernel/userspace lệch phiên bản: giữ
 `PYTHON_WRAPPER=/home/thnguyen/.local/bin/nvidia-driver-run` trong `.env`, và thêm
 wrapper này trước `python` khi kiểm tra. Máy có driver đồng bộ để wrapper trống.
-Đã kiểm tra 142 test CPU và GPU smoke trên RTX 4500 Ada; chưa chạy trực tiếp trên L20/A100/H20.
+Môi trường đã được smoke-test trên RTX 4500 Ada; chưa chạy Qwen3-32B TP1 trên H20.

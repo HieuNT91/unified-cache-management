@@ -1,6 +1,6 @@
 # AdaTreeV1.1
 
-Run **no-cache + AdaTree**, Qwen3-32B BF16, LongBench v2 (503 inputs, seeds 0/1)
+Run **no-cache + AdaTree**, Qwen3-32B BF16. Defaults: LongBench v2 (503 inputs, seeds 0/1)
 and RULER64K thinking (13×500 inputs, seed 42; answer seed 0). Chunk 4096 uses the
 AdaTreeV1 router; chunk 2048 uses the supplied D60/T5_1/D20 tree. Both methods keep
 8192 thinking / 10000 total output tokens and loop breaker 32..128 repeated 4 times.
@@ -8,8 +8,9 @@ AdaTreeV1 router; chunk 2048 uses the supplied D60/T5_1/D20 tree. Both methods k
 Create the Conda `ucm` environment using [docs/create_env.md](docs/create_env.md),
 including the native CUDA build. Model/tokenizer files must be the original
 Qwen3-32B snapshot (`9216db5781bf21249d130ec9da846c4624c16137`). Copy
-`config/.env.example` to `config/.env` and edit paths and GPU UUIDs. Edit `TP`, `NUMBER_GPUS`, `MODEL_NAME`, `CHUNK_SIZE` and hardware profile
-at the top of `run.sh` (TP2/TP4; UUID count must equal NUMBER_GPUS).
+`config/.env.example` to `config/.env` and edit paths and GPU UUIDs. Edit `TP`,
+`NUMBER_GPUS`, `CHUNK_SIZE` and `GPU_MEMORY_UTILIZATION` at the top of `run.sh`
+(TP1/TP2/TP4; UUID count must equal NUMBER_GPUS). GPU models are not restricted.
 
 ```bash
 cp config/.env.example config/.env
@@ -28,9 +29,23 @@ prepared folders and skip download/prepare. Inputs stay read-only; both chunk
 sizes preserve identical token IDs. Source folders do not need Git metadata;
 fresh preparation checks asset hashes and package versions. RULER64K follows
 the original 65536 generation bound, not a forced exact 64000-token prompt.
+`RULER_SAMPLES_PER_TASK` and `PREPARATION_SEED` are configurable; they must match
+existing RULER preparation metadata. Runs use the supplied manifest, without a
+fixed cohort size. LongBench runtime reserves 114688 input + 10000 output tokens
+(minimum 1949 KV blocks); prepared files retain their original output metadata.
+No CPU offload is used. vLLM measures available KV capacity before answering.
+For H20 TP1, set `TP=1`, `NUMBER_GPUS=1` and one GPU UUID. If needed, increase
+`GPU_MEMORY_UTILIZATION` (for example 0.98); fitting the full window still depends
+on measured activation/workspace memory.
+
+LongBench answer seeds are controlled only by `LONGBENCH_ANSWER_SEEDS` in `run.sh`:
+`(0)`, `(0 1)` or any list of distinct nonnegative integers, in any order.
+Changing seeds reuses the same prepared inputs; smoke uses this list too.
 
 Set `CHUNK_SIZE=2048` and repeat `start` for the second configuration. Each run
-is isolated in `results/adatree-v1.1/DATASET/chunkSIZE/`. `resume` runs missing
+is isolated in `results/adatree-v1.1/DATASET/chunkSIZE/`; LongBench adds a seed
+suffix, e.g. `chunk4096-seeds-0-1/`, so changing seeds selects a separate run.
+`resume` runs missing
 answers; `stop` stops only that run's verified owned processes. Reusing an
 existing run requires the same configuration; set a new RUN_NAME for a new run.
 
@@ -38,7 +53,7 @@ existing run requires the same configuration; set a new RUN_NAME for a new run.
 python status.py                                      # all runs, full results
 python status.py results/adatree-v1.1/ruler/chunk4096
 python status.py results/adatree-v1.1/ruler/chunk4096 --mode same-input
-# Optional TP4 RTX 4500 Ada smoke, exact existing prompt IDs:
+# Optional smoke: set SMOKE_TP/SMOKE_NUMBER_GPUS; use existing prompt IDs:
 bash run.sh smoke longbench-v2 longbench-v2-461
 bash run.sh smoke ruler niah_single_1-000
 bash run.sh smoke-status ruler
@@ -48,5 +63,4 @@ bash run.sh smoke-stop ruler
 Reports show accuracy, TTFT (seconds), thinking/answer tokens and per-task counts.
 `full` uses all committed answers per method; `same-input` uses the intersection
 of prompt/seed/token identities. TTFT includes online routing and excludes
-independent KV construction; the local smoke profile offloads 4 GiB/rank, so its
-latency is not a server benchmark. Full-dataset results require the full runs.
+independent KV construction. Full-dataset results require the full runs.

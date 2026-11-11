@@ -24,7 +24,7 @@ def features(attention, prefix, end):
     heads = np.asarray(attention['heads'])
     scores = np.asarray(attention['scores'])
     tp = layers.shape[0] if layers.ndim == 3 else 0
-    if (tp not in (2, 4) or layers.dtype != np.float32 or layers.shape != (tp, 64, end)
+    if (tp not in (1, 2, 4) or layers.dtype != np.float32 or layers.shape != (tp, 64, end)
             or heads.dtype != np.float32 or heads.ndim != 4
             or heads.shape[:2] != (tp, len(HEAD_LAYERS)) or heads.shape[2] != 64//tp or heads.shape[3] != end
             or tuple(attention['head_layers']) != HEAD_LAYERS

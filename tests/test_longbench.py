@@ -1,8 +1,14 @@
 """LongBench adapter contracts; no model or GPU construction."""
 from pathlib import Path
+import copy
+import json
+import os
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
-from scripts.data.longbench_v2 import prepare_prompt, render
+from scripts.data.longbench_v2 import prepare, prepare_prompt, render
 from runner.reporting.aggregate import evaluation_metadata, score_answer
 
 
@@ -21,6 +27,41 @@ class Tokenizer:
 
 
 class LongBenchTests(unittest.TestCase):
+    def test_preparation_has_no_seed_schedule_and_reuses_legacy_data(self):
+        from run_fixtures import Tokenizer as PolicyTokenizer, fixture
+        from scripts.collection.collection_v3 import declaration
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            run_args = fixture(base, 'longbench-v2', 4096)
+            sample = json.loads((run_args.prepared / 'samples/0.json').read_text())
+            sample.update(query=dict(positions=sample['question_positions']),
+                          formatted_text='<think>\n', truncation=dict(truncated=False))
+            data = base / 'data.json'
+            data.write_text(json.dumps([dict(_id='source', domain='d', sub_domain='s',
+                                            difficulty='easy', length='short', answer='A')]))
+            args = SimpleNamespace(model=run_args.model, data=data, output=base/'fresh', collection_v3=True)
+            with patch.dict(os.environ, CUDA_VISIBLE_DEVICES=''), \
+                    patch('runner.inputs.preparation.check_model'), \
+                    patch('transformers.AutoTokenizer.from_pretrained', return_value=PolicyTokenizer()), \
+                    patch('scripts.data.longbench_v2.prepare_prompt', side_effect=lambda *a: copy.deepcopy(sample)), \
+                    patch('scripts.data.longbench_v2.bytes_per_shard', return_value=1):
+                prepare(args)
+                receipt_path = args.output / 'preparation.json'
+                receipt = json.loads(receipt_path.read_text())
+                self.assertNotIn('answer_seeds', receipt['spec'])
+                self.assertNotIn('answers_per_question', receipt['spec'])
+                self.assertNotIn('answers', receipt['summary'])
+                receipt['spec'].update(declaration('longbench-v2', 4))
+                receipt['spec']['adapter_sha256'] = 'old-adapter-receipt'
+                receipt_path.write_text(json.dumps(receipt))
+                before = {p: (p.read_bytes(), p.stat().st_mtime_ns)
+                          for p in args.output.rglob('*') if p.is_file()}
+                prepare(args)
+                self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before})
+                (args.output / 'samples/000.json').write_text('{}')
+                with self.assertRaisesRegex(ValueError, 'Prepared file changed'):
+                    prepare(args)
+
     def test_middle_truncation_recounts_formatting_and_preserves_complete_tail(self):
         template=(Path(__file__).resolve().parents[1]/'scripts/data/longbench_0shot.txt').read_text()
         row=dict(context='first '+('abcdef '*3000)+' last',question='Which choice?',

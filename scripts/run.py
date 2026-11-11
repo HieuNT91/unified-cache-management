@@ -34,7 +34,7 @@ def validate_ruler_assets(source):
     source_check(source)
     for name, expected in RULER_ASSETS.items():
         if file_hash(source/'scripts/data/synthetic/json'/name) != expected:
-            raise ValueError('RULER asset differs from the original 6500-row corpus: '+name)
+            raise ValueError('RULER asset differs from the original source: '+name)
 
 
 def validate_ruler_versions():
@@ -82,7 +82,6 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--samples-per-task', type=int, default=500)
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--prepared-answer-seeds', type=int, default=4)
     args = parser.parse_args()
     if os.environ.get('CUDA_VISIBLE_DEVICES', ''):
         parser.error('Data download/preparation must be CPU-only')
@@ -99,19 +98,18 @@ def main():
         return
     if args.model is None or args.output is None:
         parser.error('prepare requires --model and --output')
-    if args.seed != 42 or args.samples_per_task != 500:
-        parser.error('This run requires the original seed42 and complete 500/task RULER batch')
+    if args.samples_per_task <= 0:
+        parser.error('samples-per-task must be positive')
     if args.dataset == 'ruler':
         validate_ruler_versions()
         validate_ruler_assets(args.source)
         from scripts.data.ruler import prepare
         prepare(SimpleNamespace(ruler=args.source, model=args.model, output=args.output,
-                                samples=500, seed=42, thinking=True, collection_v3=True))
+                                samples=args.samples_per_task, seed=args.seed, thinking=True, collection_v3=True))
     else:
         from scripts.data.longbench_v2 import prepare
-        validate_longbench(args.source)
         prepare(SimpleNamespace(data=args.source, model=args.model, output=args.output,
-                                collection_v3=True, answers_per_question=args.prepared_answer_seeds))
+                                collection_v3=True))
 
 
 if __name__ == '__main__':

@@ -1,7 +1,7 @@
 """Explicit TP contract shared by collection, replay and resource checks."""
 def validate_tp(tp):
-    if type(tp) is not int or tp not in (2, 4):
-        raise ValueError('Qwen3 collection supports TP2 or TP4')
+    if type(tp) is not int or tp not in (1, 2, 4):
+        raise ValueError('Qwen3 collection supports TP1, TP2 or TP4')
     return tp
 
 

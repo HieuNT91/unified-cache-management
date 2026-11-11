@@ -22,7 +22,7 @@ def resolve_groups(devices, expected, tp=2, query_inventory=True):
     if len(tokens) != expected or len(set(tokens)) != expected:
         raise ValueError(f'Expected {expected} distinct devices')
     if not query_inventory:
-        # L40 assignments are supplied as full UUIDs; hardware is user-managed.
+        # Explicit identities are resolved without initializing CUDA.
         if expected % tp or any(not re.fullmatch(
                 r'GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', v) for v in tokens):
             raise ValueError('Provide distinct full GPU UUIDs in complete TP groups')
@@ -103,34 +103,7 @@ def worker(base, role, phase, attempt, group=0, *, stage_loader=None):
                 print(f'Engine shutdown also failed: {shutdown_error}', file=sys.stderr, flush=True)
 
 def hardware(protocol):
-    if protocol.get('run_profile', protocol.get('reproduction')) == 'adatree-v1.1':
-        # Explicit profile validates each assigned UUID and free memory. Busy
-        # devices abort the launch; the controller never cancels external jobs.
-        return check_hardware(protocol)
-    if protocol.get('hardware_profile') == 'rtx4500ada-tree-validation':
-        if (protocol.get('schema') != 'tree-prophetkv-thinking-collection-v1'
-                or not protocol.get('local_validation') or protocol.get('tp') != 4
-                or len(protocol.get('groups', [])) != 1):
-            raise ValueError('Local tree validation requires an explicit single TP4 group')
-        return check_hardware(protocol)
-    if protocol.get('hardware_profile') in ('l40-tp2', 'l40-tp4'):
-        from runner.runtime.tensor_parallel import protocol_tp
-        from runner.router.profiles import hardware_profile
-        tp = 2 if protocol['hardware_profile'] == 'l40-tp2' else 4
-        if (protocol_tp(protocol) != tp or len(protocol['groups']) != 8//tp
-                or protocol.get('execution_profile') != 'ruler-thinking'
-                or protocol.get('hardware_preflight') != 'user-managed'):
-            raise ValueError('Invalid L40 thinking deployment')
-        # User explicitly owns device availability checks. Do not query GPUs or
-        # claim measured memory/identity evidence in this preflight receipt.
-        profile = hardware_profile(protocol['hardware_profile'], 'ruler-thinking', tp)
-        return dict(hardware_preflight='user-managed', configured_groups=protocol['groups'],
-                    tp=tp, gpu_memory_utilization=profile['memory'], kv_cache_mode=profile['kv_cache_mode'])
-    receipt = check_hardware(protocol)
-    name = 'L20' if protocol['dataset'] == 'ruler' else 'A800'
-    if any(name not in device['name'] for group in receipt['groups'] for device in group):
-        raise ValueError(f'This deployment requires {name} GPUs; no local GPU fallback')
-    return receipt
+    return check_hardware(protocol)
 
 def engines_idle(root):
     for path in [*(root/'processes').glob('*.json'), *(root/'sessions').glob('*/ownership.json')]:

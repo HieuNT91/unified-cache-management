@@ -178,7 +178,7 @@ def validate_record(protocol, result):
 
 
 def answer_generation():
-    """Explicit A800 override; original prepared generation policy stays intact."""
+    """Runtime generation override; original prepared generation policy stays intact."""
     from runner.runtime.output_budget import ADATREE_PROTOCOL
     from runner.runtime.thinking_loop import ADATREE_CONFIG
     return dict(protocol=ADATREE_PROTOCOL, thinking_cap=8192, output_reserve=10000,

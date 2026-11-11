@@ -98,6 +98,21 @@ class StatusTests(unittest.TestCase):
             _, _, matching = run.report(self.base, mode='same-input')
         self.assertEqual(matching['matched_samples'], 0)
 
+    def test_arbitrary_seed_order_reports_committed_answers(self):
+        self.protocol.update(answers_per_question=3, answer_seeds=[42, 0, 7])
+        atomic_json(self.base / 'tree/protocol.json', self.protocol)
+        for seed in (42, 0, 7):
+            self.commit('adatree-v1', 0, seed=seed)
+            self.commit('nocache', 0, seed=seed)
+        with patch('runner.corpus.records.accepted', side_effect=self.accepted):
+            for mode in ('full', 'same-input'):
+                _, tables, matching = run.report(self.base, mode=mode)
+                self.assertEqual(matching['matched_samples'], 3)
+                for value in tables['overall'].values():
+                    self.assertEqual(value['completed'], 3)
+                    self.assertEqual(value['expected'], 9)
+                    self.assertEqual(value['accuracy_percent'], 100.)
+
     def test_changed_token_identity_fails_in_both_modes(self):
         self.commit('adatree-v1', 0)
         self.commit('nocache', 0)

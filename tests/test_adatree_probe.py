@@ -14,6 +14,11 @@ from runner.tree.prophetkv import write_f3
 
 class IntegratedProbeTests(unittest.TestCase):
     def test_one_post_s4_probe_routes_before_the_only_tree_selection(self):
+        for tp in (1, 2):
+            with self.subTest(tp=tp):
+                self.check_probe(tp)
+
+    def check_probe(self, tp):
         layers = [NS(self_attn=NS(o_proj=lambda x: (x, None), head_dim=2),
                      post_attention_layernorm=lambda x, r: (x, r), mlp=lambda x: x)
                   for _ in range(64)]
@@ -39,9 +44,13 @@ class IntegratedProbeTests(unittest.TestCase):
 
         def reduce(value):
             reductions.append(tuple(value.shape))
-            return 2 * value
+            return tp * value
 
-        group = NS(world_size=2, broadcast=lambda value, src: value)
+        def broadcast(value, src):
+            self.assertGreater(tp, 1)
+            return value
+
+        group = NS(world_size=tp, broadcast=broadcast)
         modules = {'vllm.forward_context': NS(get_forward_context=lambda: context),
                    'vllm.distributed': NS(get_tp_group=lambda: group, tensor_model_parallel_all_reduce=reduce)}
         with tempfile.TemporaryDirectory() as root:

@@ -83,6 +83,14 @@ def prepare_prompt(tokenizer, row, template, limit=INPUT):
     return encoded
 
 
+def preparation_identity(spec):
+    """Compare input provenance, ignoring old answer schedules and code receipts."""
+    metadata_only = {'answers_per_question', 'answer_seeds', 'phase_order',
+                     'traversal', 'shard_assignment', 'adapter_sha256',
+                     'chunker_sha256', 'budget_adapter_sha256'}
+    return {key: value for key, value in spec.items() if key not in metadata_only}
+
+
 def prepare(args):
     if os.environ.get('CUDA_VISIBLE_DEVICES') != '':
         raise ValueError("CPU preparation requires CUDA_VISIBLE_DEVICES=''")
@@ -90,8 +98,8 @@ def prepare(args):
     from transformers import AutoTokenizer
     check_model(args.model)
     rows = json.loads(args.data.read_text())
-    if len(rows) != 503 or len({row['_id'] for row in rows}) != 503:
-        raise ValueError('Expected all 503 distinct LongBench v2 source rows')
+    if not rows or len({row['_id'] for row in rows}) != len(rows):
+        raise ValueError('Expected nonempty, distinct LongBench v2 source rows')
     template_path = ROOT / 'scripts/data/longbench_0shot.txt'
     spec = dict(data_sha256=file_hash(args.data), model_config_sha256=file_hash(args.model/'config.json'),
                 tokenizer_files={p.name:file_hash(p) for p in args.model.iterdir() if p.is_file() and
@@ -100,8 +108,6 @@ def prepare(args):
                 chunker_sha256=file_hash(ROOT/'runner/cache/lifecycle.py'), input_limit=INPUT, output_limit=16384)
     if getattr(args, 'collection_v3', False):
         from runner.runtime.output_budget import PROTOCOL
-        from scripts.collection.collection_v3 import declaration
-        spec.update(declaration('longbench-v2', getattr(args, 'answers_per_question', 4)))
         spec.update(collection_protocol='tp2-data-v3', generation_protocol=PROTOCOL,
                     budget_adapter_sha256=file_hash(ROOT/'runner/runtime/output_budget.py'))
     args.output = args.output.resolve()
@@ -109,12 +115,14 @@ def prepare(args):
         receipt_path = args.output/'preparation.json'
         if receipt_path.exists():
             receipt = json.loads(receipt_path.read_text())
-            if receipt['spec'] != spec:
+            if preparation_identity(receipt['spec']) != preparation_identity(spec):
                 raise ValueError('Preparation settings changed; use another output directory')
             for name, digest in receipt['files'].items():
                 if file_hash(args.output/name) != digest:
                     raise ValueError(f'Prepared file changed: {name}')
-            print(json.dumps(receipt['summary'],indent=2))
+            summary = {key: value for key, value in receipt['summary'].items()
+                       if key not in ('answers', 'probes', 'measurements')}
+            print(json.dumps(summary,indent=2))
             return
         tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
         template = template_path.read_text()
@@ -142,23 +150,20 @@ def prepare(args):
             context_lengths.append(sample['boundaries'][-2])
             truncated += sample['truncation']['truncated']
             if (index+1)%20 == 0:
-                print(f'Prepared {index+1}/503',flush=True)
+                print(f'Prepared {index+1}/{len(rows)}',flush=True)
         manifest_path=args.output/'manifest.jsonl'
         temporary=manifest_path.with_suffix('.tmp')
         temporary.write_text(''.join(json.dumps(row)+'\n' for row in manifest))
         temporary.replace(manifest_path)
         files['manifest.jsonl']=file_hash(manifest_path)
-        # Only one prompt per group is retained by the remote sweep.
+        # Only one prompt per group is retained during a run.
         kv_bytes=max(context_lengths)//64*bytes_per_shard(args.model,4)*4
-        summary=dict(samples=503, measurements=503*13,truncated=truncated,
+        summary=dict(samples=len(rows), truncated=truncated,
                      min_input_tokens=min(lengths),max_input_tokens=max(lengths),
-                     mean_input_tokens=sum(lengths)/503,context_tokens=sum(context_lengths),
+                     mean_input_tokens=sum(lengths)/len(rows),context_tokens=sum(context_lengths),
                      max_temporary_kv_bytes_per_group=kv_bytes,
                      max_temporary_kv_GiB_two_groups=2*kv_bytes/2**30,
                      subtasks=dict(Counter(row['subtask'] for row in manifest)))
-        if getattr(args, 'collection_v3', False):
-            summary.update(answers=503*9*spec['answers_per_question'], probes=503,
-                           measurements=503*(9*spec['answers_per_question']+1))
         atomic_json(receipt_path,dict(spec=spec,files=files,summary=summary))
         print(json.dumps(summary,indent=2))
 

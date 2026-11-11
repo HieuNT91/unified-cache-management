@@ -35,16 +35,16 @@ class PromptCacheTests(unittest.TestCase):
         self.args=NS(model=self.model,tp=2,memory=.9,output=self.root/'out')
 
     def write_chunk(self, namespace, chunk):
-        hasher=BlockHasher(str(self.model),2,0)
+        hasher=BlockHasher(str(self.model),self.args.tp,0)
         for key in block_keys(hasher,chunk,seed_value(namespace)):
-            for rank in range(2):
-                name=shard_name(key,str(self.model),2,rank)
+            for rank in range(self.args.tp):
+                name=shard_name(key,str(self.model),self.args.tp,rank)
                 path=self.cache/'kv'/name[:8]/name
                 path.parent.mkdir(parents=True,exist_ok=True)
-                path.write_bytes(b'K'*bytes_per_shard(self.model,2))
+                path.write_bytes(b'K'*bytes_per_shard(self.model,self.args.tp))
 
     def populated(self, sample=None):
-        cache=sweep.PromptCache(self.cache,self.model,2,self.namespace,sample or self.sample)
+        cache=sweep.PromptCache(self.cache,self.model,self.args.tp,self.namespace,sample or self.sample)
         for chunk in cache.chunks:
             self.write_chunk(self.namespace,chunk)
         return cache
@@ -68,6 +68,13 @@ class PromptCacheTests(unittest.TestCase):
         extra.unlink()
         self.assertEqual(cache.delete()['deleted_shards'],2)
         self.assertFalse(list((self.cache/'kv').glob('*/*')))
+
+    def test_tp1_cache_checks_one_full_sized_shard_per_block(self):
+        self.args.tp = 1
+        cache = self.populated()
+        self.assertEqual(cache.ready()['verified_shards'], 2)
+        self.assertEqual(bytes_per_shard(self.model,1), 2*bytes_per_shard(self.model,2))
+        self.assertEqual(cache.delete()['deleted_shards'], 2)
 
     def test_incomplete_shard_fails_readiness(self):
         cache=self.populated()
@@ -189,7 +196,7 @@ class PromptCacheTests(unittest.TestCase):
         connector.persistent_setup=None
         connector.temporary_layouts={'prompt-0':self.sample['boundaries']}
         connector.block_size=64;connector.min_blend_threshold=1;connector.metrics_config=None
-        connector.request_hasher=BlockHasher(str(self.model),2,0)
+        connector.request_hasher=BlockHasher(str(self.model),self.args.tp,0)
         connector.requests_blend_meta={};connector.prompt_lengths={}
         connector.store=Mock()
         connector.store.lookup.side_effect=lambda keys:[True]*len(keys)
