@@ -13,7 +13,7 @@ from runner.cache.setups import atomic_json, file_hash
 from runner.router.process import identity, alive, group_alive
 from runner.corpus.records import accepted, publish, record_dir
 from runner.operations import code_hashes, environment, terminate_owned, cleanup_caches, idle, check_hardware
-from scripts.collection.longbench_a800_data import read
+from scripts.collection.run_metadata import read
 from scripts.collection.collection_v3 import seeds, ordered_rows
 ROOT = Path(__file__).resolve().parents[2]
 

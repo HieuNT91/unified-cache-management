@@ -21,8 +21,8 @@ from runner.router.profiles import validate
 from runner.runtime.thinking_budget import KEY
 from runner.runtime.output_budget import RULER_PROTOCOL, LONGBENCH_PROTOCOL, validate_sample_policy, validate_policy
 from scripts.collection.collection_v3 import declaration, seeds, answer_metrics
-from scripts.collection import longbench_a800_control as control
-from scripts.collection.longbench_a800_data import read, freeze
+from scripts.collection import run_control as control
+from scripts.collection.run_metadata import read, freeze
 from scripts.data.ruler import TASKS
 
 ROLE = 'tree'

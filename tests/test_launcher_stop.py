@@ -25,7 +25,7 @@ class LauncherStopTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def launch(self, controller='tree_prophetkv_data.py', role='supervise', code=None, root=None):
+    def launch(self, controller='run_controller.py', role='supervise', code=None, root=None):
         command = [sys.executable, '-c', code or 'import time; time.sleep(120)',
                    controller, role, '--root', str(root or self.root)]
         child = subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL,
@@ -56,7 +56,7 @@ class LauncherStopTests(unittest.TestCase):
         for name in ('records/answer.json', 'cache/shard', 'protocol.json'):
             self.write(self.root/name, {'preserve': name})
         original = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
-        result = control.stop(self.root, 'tree_prophetkv_data.py')
+        result = control.stop(self.root, 'run_controller.py')
         supervisor.wait(timeout=5)
         worker.wait(timeout=5)
         self.assertIsNone(unrelated.poll())
@@ -64,15 +64,15 @@ class LauncherStopTests(unittest.TestCase):
         for path, contents in original.items():
             self.assertEqual(path.read_bytes(), contents)
         # A second stop is harmless, including stale receipts for exited PIDs.
-        control.stop(self.root, 'tree_prophetkv_data.py')
+        control.stop(self.root, 'run_controller.py')
 
     def test_stage_stop_leaves_sibling_controller_and_receipts_untouched(self):
         base, base_saved = self.launch()
         self.write(self.root/'supervisor.json', base_saved)
-        child, saved = self.launch('tree_prophetkv_data.py')
+        child, saved = self.launch('run_controller.py')
         state = self.root/'tree'
         self.write(state/'supervisor.json', saved)
-        control.stop(self.root, 'tree_prophetkv_data.py', state)
+        control.stop(self.root, 'run_controller.py', state)
         child.wait(timeout=5)
         self.assertIsNone(base.poll())
         self.assertEqual(json.loads((self.root/'supervisor.json').read_text()), base_saved)
@@ -85,14 +85,14 @@ class LauncherStopTests(unittest.TestCase):
                 'p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(120)"])\n'
                 f'Path({str(ready)!r}).write_text(str(p.pid))\n'
                 'time.sleep(120)\n')
-        leader, saved = self.launch('tree_prophetkv_data.py', 'worker', code)
+        leader, saved = self.launch('run_controller.py', 'worker', code)
         self.ready(ready)
         orphan = int(ready.read_text())
         self.write(self.root/'sessions/attempt/ownership.json', saved)
         leader.terminate()
         leader.wait(timeout=5)
         self.assertIn(orphan, control.process_table())
-        control.stop(self.root, 'tree_prophetkv_data.py')
+        control.stop(self.root, 'run_controller.py')
         self.assertNotIn(orphan, control.process_table())
 
     def test_unpublished_worker_child_is_discovered_before_supervisor_exit(self):
@@ -111,7 +111,7 @@ class LauncherStopTests(unittest.TestCase):
             except ProcessLookupError:
                 pass
         self.addCleanup(cleanup)
-        control.stop(self.root, 'tree_prophetkv_data.py')
+        control.stop(self.root, 'run_controller.py')
         child.wait(timeout=5)
         self.assertNotIn(worker, control.process_table())
 
@@ -120,12 +120,12 @@ class LauncherStopTests(unittest.TestCase):
         code = ('import signal,time\nfrom pathlib import Path\n'
                 'signal.signal(signal.SIGTERM,signal.SIG_IGN)\n'
                 f'Path({str(ready)!r}).touch()\ntime.sleep(120)')
-        child, saved = self.launch('tree_prophetkv_data.py', 'worker', code)
+        child, saved = self.launch('run_controller.py', 'worker', code)
         self.write(self.root/'processes/attempt.json', saved)
         self.ready(ready)
         wait = control.wait_exit
         with patch.object(control, 'wait_exit', side_effect=lambda rows, seconds: wait(rows, min(seconds, .3))):
-            control.stop(self.root, 'tree_prophetkv_data.py')
+            control.stop(self.root, 'run_controller.py')
         self.assertEqual(child.wait(timeout=5), -signal.SIGKILL)
 
     def test_changed_pid_identity_is_rejected_without_signalling(self):
@@ -134,7 +134,7 @@ class LauncherStopTests(unittest.TestCase):
         self.write(self.root/'supervisor.json', saved)
         with patch.object(control.os, 'killpg') as kill:
             with self.assertRaisesRegex(RuntimeError, 'identity changed'):
-                control.stop(self.root, 'tree_prophetkv_data.py')
+                control.stop(self.root, 'run_controller.py')
             kill.assert_not_called()
         self.assertIsNone(child.poll())
 
@@ -143,7 +143,7 @@ class LauncherStopTests(unittest.TestCase):
         self.write(self.root/'supervisor.json', saved)
         with patch.object(control.os, 'killpg') as kill:
             with self.assertRaisesRegex(ValueError, 'another experiment'):
-                control.stop(self.root, 'tree_prophetkv_data.py')
+                control.stop(self.root, 'run_controller.py')
             kill.assert_not_called()
         self.assertIsNone(child.poll())
 
@@ -151,14 +151,14 @@ class LauncherStopTests(unittest.TestCase):
         with (self.root/'launch.lock').open('a') as handle:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             with self.assertRaises(BlockingIOError):
-                control.stop(self.root, 'tree_prophetkv_data.py')
+                control.stop(self.root, 'run_controller.py')
         self.assertFalse((self.root/'stop-receipt.json').exists())
 
     def test_configured_idle_stop_and_missing_root(self):
-        control.stop(self.root, 'tree_prophetkv_data.py')
+        control.stop(self.root, 'run_controller.py')
         missing = self.root/'missing'
         with self.assertRaises(ValueError):
-            control.stop(missing, 'tree_prophetkv_data.py')
+            control.stop(missing, 'run_controller.py')
         self.assertFalse(missing.exists())
 
 

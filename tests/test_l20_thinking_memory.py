@@ -64,6 +64,8 @@ class L20ThinkingMemoryTests(unittest.TestCase):
 
     def test_other_profiles_keep_static_workspace_reserve(self):
         for profile,dataset,tp,name in [('l20-tp2','ruler',2,'L20'),('server','longbench-v2',2,'A800'),
+                                       ('server','longbench-v2',2,'A100-SXM4-80GB'),
+                                       ('server','ruler-thinking',4,'H20'),
                                        ('rtx4500ada','ruler',4,'RTX 4500 Ada Generation')]:
             settings=dict(self.settings,execution_profile=dataset,hardware_profile=profile,tp=tp,
                           groups=[[str(i) for i in range(tp)]])
@@ -77,7 +79,7 @@ class L20ThinkingMemoryTests(unittest.TestCase):
 
     def test_engine_stops_before_warmup_when_measured_kv_is_insufficient(self):
         from runner.corpus.runtime import Engine
-        from test_run_controller import fixture, GPUS
+        from run_fixtures import fixture, GPUS
         from scripts.data.ruler import TASKS
         args=fixture(self.root/'engine','ruler',4096)
         protocol=dict(dataset='ruler',execution_profile='ruler-thinking',hardware_profile='l20-tp2',

@@ -1,4 +1,5 @@
-# Install an ABI-compatible CUDA uc-manager==0.3.0 build separately (README).
+# Direct requirements. Full environment and native CUDA build: docs/create_env.md.
+# requirements.lock.txt pins the tested transitive dependencies and build tools.
 vllm==0.9.2
 torch==2.7.0
 transformers==4.53.2

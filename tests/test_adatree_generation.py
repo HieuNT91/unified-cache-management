@@ -15,9 +15,8 @@ from runner.runtime.thinking_loop import ADATREE_CONFIG, ThinkingLoop
 from runner.reporting.aggregate import OutputAnalyzer
 from runner.cache.setups import atomic_json, file_hash
 from runner.corpus.runtime import Engine
-from scripts.collection import tree_prophetkv_data as collection
-from test_tree_collection import fixture
-from test_tree_chunk_size import enlarged
+from scripts.collection import run_controller as collection
+from run_fixtures import fixture
 from test_ruler_thinking import Tokenizer
 
 
@@ -93,7 +92,7 @@ class AdaTreeGenerationTests(unittest.TestCase):
             output_budget.validate_policy(dict(effective[KEY],output_reserve=8192))
 
     def adopt(self, root):
-        args = fixture(root, 'longbench-v2')
+        args = fixture(root, 'longbench-v2', 4096)
         with patch('runner.operations.code_hashes', return_value={}):
             collection.adopt(args)
         return args

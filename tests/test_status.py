@@ -162,8 +162,8 @@ class StatusTests(unittest.TestCase):
         from runner.router.adatree import generation_policy
         from runner.runtime.thinking_budget import KEY, BudgetState
         from runner.runtime.thinking_loop import ADATREE_CONFIG
-        from scripts.collection import tree_prophetkv_data as collection
-        from test_run_controller import fixture
+        from scripts.collection import run_controller as collection
+        from run_fixtures import fixture
         from test_ruler_thinking import Tokenizer
         from ucm.sparse.prophetkv.adatree import protocol_for
 
@@ -223,8 +223,8 @@ class StatusTests(unittest.TestCase):
                         run.report(args.root)
 
     def test_legacy_run_marker_is_readable_without_rewriting_saved_metadata(self):
-        from scripts.collection import tree_prophetkv_data as collection
-        from test_run_controller import fixture
+        from scripts.collection import run_controller as collection
+        from run_fixtures import fixture
 
         for chunk in (4096, 2048):
             with self.subTest(chunk=chunk), tempfile.TemporaryDirectory() as temp:

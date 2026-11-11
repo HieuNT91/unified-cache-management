@@ -54,6 +54,10 @@ def send_group(receipt, sig):
 
 
 def receipts(state, root, controller):
+    controllers = {controller}
+    if controller == 'run_controller.py':
+        # Earlier runs saved this filename in immutable process receipts.
+        controllers.add('tree_prophetkv_data.py')
     paths = [state/name for name in ('supervisor.json', 'launch.json', 'detachment.json')]
     paths += sorted((state/'processes').glob('*.json'))
     paths += sorted((state/'sessions').glob('*/ownership.json'))
@@ -93,8 +97,8 @@ def receipts(state, root, controller):
             target = Path(command[command.index('--root')+1])
         except (ValueError, IndexError):
             raise ValueError(f'Missing experiment identity: {path}') from None
-        supervisor = any(Path(arg).name == controller for arg in command) and 'supervise' in command
-        is_worker = any(Path(arg).name == controller for arg in command) and 'worker' in command
+        supervisor = any(Path(arg).name in controllers for arg in command) and 'supervise' in command
+        is_worker = any(Path(arg).name in controllers for arg in command) and 'worker' in command
         if not target.is_absolute() or target.resolve() != root or not (supervisor or is_worker):
             raise ValueError(f'Process receipt belongs to another experiment: {path}')
         found[(pid, ident['start'])] = dict(pid=pid, identity=ident, supervisor=supervisor)

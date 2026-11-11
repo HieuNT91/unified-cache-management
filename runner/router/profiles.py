@@ -12,7 +12,7 @@ def hardware_profile(name='server',dataset='ruler',tp=4):
         return dict(names=('RTX 4500 Ada Generation',),memory=.95,workspace_gib=2.5,
                     kv_cache_mode='fixed',cpu_offload_gb=4.)
     if name=='server':
-        return dict(names=('A800','L20'),memory=.95 if tp==2 else .9,workspace_gib=8.,
+        return dict(names=('A800','L20','A100','H20'),memory=.95 if tp==2 else .9,workspace_gib=8.,
                     kv_cache_mode='auto' if tp==2 else 'fixed')
     if name=='l20-tp2' and dataset in ('ruler','ruler-thinking'):
         return dict(names=('L20',),memory=.95,workspace_gib=3.,

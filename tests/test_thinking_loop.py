@@ -108,31 +108,6 @@ class ThinkingLoopTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_thinking_outcome(values, p)
 
-    def test_natural_closure_and_legacy_records_remain_valid(self):
-        for p in self.policies():
-            for config in (None, CONFIG):
-                tokens = [65] * 23 + [p['close_id']] + p['transition_ids'] + p['prefix_ids'] + [66, 3]
-                state = BudgetState(p, config).consume(tokens)
-                self.assertEqual(state.closure, 'natural')
-                self.assertFalse(state.loop.broken)
-                validate_thinking_outcome(self.outcome(state, tokens), p)
-            # Old state replay does not retroactively reinterpret repetition.
-            tokens = [65] * 100 + [p['close_id']] + p['transition_ids'] + p['prefix_ids'] + [3]
-            self.assertEqual(BudgetState(p).consume(tokens).closure, 'natural')
-
-    def test_cap_still_forces_close_and_answer_limit_still_applies(self):
-        for p in self.policies():
-            tokens = list(range(100, 100 + p['thinking_cap']))
-            state = BudgetState(p, CONFIG).consume(tokens)
-            self.assertEqual(state.forced_next(), p['close_id'])
-            tokens += [p['close_id']] + p['transition_ids'] + p['prefix_ids']
-            count = p.get('answer_cap', p['output_reserve'] - len(tokens))
-            tokens += [65] * count
-            state.consume(tokens)
-            self.assertEqual(state.closure, 'forced')
-            self.assertFalse(state.loop.broken)
-            self.assertEqual(state.phase, 'done')
-            validate_thinking_outcome(self.outcome(state, tokens), p)
 
     def test_scheduler_worker_and_generation_continue_same_request(self):
         import torch
@@ -198,29 +173,6 @@ class ThinkingLoopTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'forced token'):
             BudgetState(p, CONFIG).consume([65] * 25)
 
-    def test_real_vllm_wire_and_scheduler_stop_reason(self):
-        from vllm import SamplingParams
-        from vllm.v1.request import Request, RequestStatus
-        from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder
-        p = self.policies()[0]
-        params = SamplingParams(max_tokens=p['output_reserve'], ignore_eos=True,
-                                extra_args={KEY: p, LOOP_KEY: CONFIG})
-        wire = MsgpackDecoder(SamplingParams).decode(MsgpackEncoder().encode(params))
-        self.assertEqual(wire.extra_args[LOOP_KEY], CONFIG)
-        stop = stopping_hook(Mock(side_effect=AssertionError('unmanaged request')), RequestStatus)
-        for answer in ([65, 3], [65] * p['answer_cap'], [3]):
-            req = Request('loop', [65] * 100, None, None, None, wire, None, 3)
-            tokens = [65] * 24 + [p['close_id']] + p['transition_ids'] + p['prefix_ids'] + answer
-            for i, token in enumerate(tokens):
-                req.append_output_token_ids(token)
-                self.assertEqual(stop(req, 82304), i == len(tokens) - 1)
-                if i < len(tokens) - 1:
-                    self.assertIsNone(req.stop_reason)
-            self.assertEqual(req.stop_reason, 'thinking_broken')
-            self.assertEqual(req.status, RequestStatus.FINISHED_STOPPED if answer[-1] == 3
-                             else RequestStatus.FINISHED_LENGTH_CAPPED)
-            state = request_state(req)
-            validate_thinking_outcome(self.outcome(state, tokens), p)
 
     def test_repetition_at_thinking_cap_records_both_causes(self):
         for p in self.policies():

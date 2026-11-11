@@ -5,8 +5,8 @@ and RULER64K thinking (13×500 inputs, seed 42; answer seed 0). Chunk 4096 uses 
 AdaTreeV1 router; chunk 2048 uses the supplied D60/T5_1/D20 tree. Both methods keep
 8192 thinking / 10000 total output tokens and loop breaker 32..128 repeated 4 times.
 
-Use Python 3.10, a compatible CUDA build of `uc-manager==0.3.0`, and
-`pip install -r requirements.txt`. Model/tokenizer files must be the original
+Create the Conda `ucm` environment using [docs/create_env.md](docs/create_env.md),
+including the native CUDA build. Model/tokenizer files must be the original
 Qwen3-32B snapshot (`9216db5781bf21249d130ec9da846c4624c16137`). Copy
 `config/.env.example` to `config/.env` and edit paths and GPU UUIDs. Edit `TP`, `NUMBER_GPUS`, `MODEL_NAME`, `CHUNK_SIZE` and hardware profile
 at the top of `run.sh` (TP2/TP4; UUID count must equal NUMBER_GPUS).

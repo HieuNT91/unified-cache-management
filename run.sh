@@ -76,12 +76,12 @@ if [[ "$command" == status ]]; then
   exec "${python_command[@]}" "$CODE_ROOT/status.py" "$result"
 fi
 if [[ "$command" == stop ]]; then
-  exec "${python_command[@]}" "$CODE_ROOT/scripts/collection/tree_prophetkv_data.py" stop --root "$result"
+  exec "${python_command[@]}" "$CODE_ROOT/scripts/collection/run_controller.py" stop --root "$result"
 fi
 case "$command" in configure|start|resume|stop) ;; *) echo 'Unknown run command.' >&2; exit 2 ;; esac
 percentages=(5 20 40)
 [[ "$CHUNK_SIZE" != 2048 ]] || percentages=(5 20 60)
-exec "${python_command[@]}" "$CODE_ROOT/scripts/collection/tree_prophetkv_data.py" "$command" \
+exec "${python_command[@]}" "$CODE_ROOT/scripts/collection/run_controller.py" "$command" \
   --adatree-v1 --adatree-thinking-8192 --followup-nocache \
   --dataset "$dataset" --root "$result" --model "${MODEL_PATH:?Set MODEL_PATH in config/.env}" \
   --prepared "${prepared:?Set RULER_PREPARED or LONGBENCH_PREPARED in config/.env}" \
