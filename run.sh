@@ -11,17 +11,16 @@ RUN_NAME="adatree-v1.1"
 RULER_SAMPLES_PER_TASK=500
 PREPARATION_SEED=42
 LONGBENCH_ANSWER_SEEDS=(0 1)
-SMOKE_TP=4
-SMOKE_NUMBER_GPUS=4
 # Frozen output policy: thinking <=8192, total <=10000; loop32..128 repeated4.
 
 CODE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$CODE_ROOT/scripts/launcher/server_env.sh"
 UCM_ENV_FILE="${UCM_ENV_FILE:-$CODE_ROOT/config/.env}"
 ucm_load_server_env "$CODE_ROOT"
-command="${1:?Usage: run.sh configure|start|resume|stop|status|smoke|smoke-stop|smoke-status DATASET [PROMPT_ID ...]}"
+command="${1:?Usage: run.sh configure|start|resume|stop|status DATASET}"
 dataset="${2:?Dataset must be ruler or longbench-v2}"
 shift 2
+[[ $# == 0 ]] || { echo 'Expected a command and dataset only.' >&2; exit 2; }
 [[ "$MODEL_NAME" == Qwen3-32B ]] || { echo 'This run supports Qwen3-32B only.' >&2; exit 2; }
 [[ "$CHUNK_SIZE" == 4096 || "$CHUNK_SIZE" == 2048 ]] || { echo 'CHUNK_SIZE must be 4096 or 2048.' >&2; exit 2; }
 case "$dataset" in
@@ -36,29 +35,12 @@ esac
 python_command=("${PYTHON_BIN:?Set PYTHON_BIN in config/.env}")
 [[ -z "${PYTHON_WRAPPER:-}" ]] || python_command=("$PYTHON_WRAPPER" "${python_command[@]}")
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES='' OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
-local_args=()
-smoke_run=false
 run_label="$RUN_NAME/$dataset/chunk$CHUNK_SIZE"
-if [[ "$command" == smoke-stop || "$command" == smoke-status ]]; then
-  run_label="$RUN_NAME/smoke/$dataset/chunk$CHUNK_SIZE"
-  command="${command#smoke-}"
-fi
-if [[ "$command" == smoke ]]; then
-  [[ $# -gt 0 ]] || { echo 'Smoke requires exact existing prepared prompt IDs.' >&2; exit 2; }
-  TP=$SMOKE_TP; NUMBER_GPUS=$SMOKE_NUMBER_GPUS
-  local_args=(--local-validation --validation-prompt-ids "$@")
-  run_label="$RUN_NAME/smoke/$dataset/chunk$CHUNK_SIZE"
-  smoke_run=true
-  command=start
-elif [[ $# != 0 ]]; then
-  echo 'Only smoke accepts explicit prompt IDs.' >&2; exit 2
-fi
 if [[ "$dataset" == longbench-v2 ]]; then
   seed_label="$(IFS=-; echo "${LONGBENCH_ANSWER_SEEDS[*]}")"
   run_label="$run_label-seeds-$seed_label"
 fi
 result="${RESULTS_DIR:-$CODE_ROOT/results}/$run_label"
-if $smoke_run && [[ -f "$result/settings.json" ]]; then command=resume; fi
 if [[ "$command" == status ]]; then
   exec "${python_command[@]}" "$CODE_ROOT/status.py" "$result"
 fi
@@ -76,4 +58,4 @@ exec "${python_command[@]}" "$CODE_ROOT/scripts/collection/run_controller.py" "$
   --devices "${GPU_UUIDS:?Set explicit GPU_UUIDS in config/.env}" --tp "$TP" --number-gpus "$NUMBER_GPUS" \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" --kv-chunk-size "$CHUNK_SIZE" \
   --samples-per-task "$RULER_SAMPLES_PER_TASK" --seed "$PREPARATION_SEED" \
-  "${seeds[@]}" --percentages "${percentages[@]}" "${local_args[@]}"
+  "${seeds[@]}" --percentages "${percentages[@]}"

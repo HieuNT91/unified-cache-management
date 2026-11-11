@@ -129,7 +129,7 @@ class RunControllerTests(unittest.TestCase):
                 with self.assertRaises(FileExistsError):run.download_longbench(path)
                 self.assertEqual(temporary.read_text(),'owned elsewhere')
 
-    def test_launcher_env_paths_hyperparameters_and_explicit_smoke(self):
+    def test_launcher_env_paths_and_hyperparameters(self):
         with tempfile.TemporaryDirectory() as tmp:
             temp=Path(tmp); fake=temp/'python'
             fake.write_text(f'#!{sys.executable}\nimport json,sys,os\nprint(json.dumps([sys.argv[1:],os.environ["CUDA_VISIBLE_DEVICES"]]))\n')
@@ -139,7 +139,7 @@ class RunControllerTests(unittest.TestCase):
                 PYTHON_BIN=fake,MODEL_PATH=temp/'Qwen3-32B',RULER_PATH=temp/'RULER',LONGBENCH_DATA=temp/'data.json',
                 RULER_PREPARED=temp/'ruler',LONGBENCH_PREPARED=temp/'longbench',CACHE_ROOT=temp/'cache',
                 RESULTS_DIR=temp/'results',GPU_UUIDS=','.join(GPUS)).items())+'\n')
-            for command,dataset,extra in [('prepare','ruler',[]),('configure','longbench-v2',[]),('smoke','ruler',['input-0'])]:
+            for command,dataset,extra in [('prepare','ruler',[]),('configure','longbench-v2',[]),('start','ruler',[])]:
                 launcher = ['prepare_data.sh'] if command == 'prepare' else ['run.sh', command]
                 proc=subprocess.run(['bash',str(ROOT/launcher[0]),*launcher[1:],dataset,*extra],cwd='/tmp',
                     env=dict(PATH=os.environ['PATH'],UCM_ENV_FILE=str(env_file)),text=True,capture_output=True)
@@ -150,7 +150,7 @@ class RunControllerTests(unittest.TestCase):
                     self.assertIn('--followup-nocache',argv)
                     self.assertEqual(argv[argv.index('--number-gpus')+1],'4')
                     self.assertIn(str(temp/'results'),argv[argv.index('--root')+1])
-                    if command=='smoke':self.assertEqual(argv[argv.index('--tp')+1],'4');self.assertIn('--local-validation',argv)
+                    self.assertEqual(argv[argv.index('--tp')+1],'2')
             # Exercise edited user settings without touching the checkout launcher.
             for selected in ('0', '42 0 7'):
                 script = (ROOT / 'run.sh').read_text().replace(
@@ -158,9 +158,8 @@ class RunControllerTests(unittest.TestCase):
                 script = '\n'.join(f'CODE_ROOT="{ROOT}"' if line.startswith('CODE_ROOT=') else line
                                    for line in script.splitlines())
                 targets = []
-                for command in ('configure', 'smoke', 'status', 'stop', 'smoke-status', 'smoke-stop'):
-                    proc = subprocess.run(['bash', '-c', script, 'run.sh', command, 'longbench-v2',
-                                           *(['input-0'] if command == 'smoke' else [])],
+                for command in ('configure', 'start', 'resume', 'status', 'stop'):
+                    proc = subprocess.run(['bash', '-c', script, 'run.sh', command, 'longbench-v2'],
                         env=dict(PATH=os.environ['PATH'], UCM_ENV_FILE=str(env_file)),
                         text=True, capture_output=True)
                     self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -168,13 +167,10 @@ class RunControllerTests(unittest.TestCase):
                     target = argv[argv.index('--root')+1] if '--root' in argv else argv[-1]
                     targets.append(target)
                     self.assertTrue(target.endswith('/chunk4096-seeds-' + selected.replace(' ', '-')))
-                    if command in ('configure', 'smoke'):
+                    if command in ('configure', 'start', 'resume'):
                         start = argv.index('--answer-seeds') + 1
                         self.assertEqual(argv[start:argv.index('--percentages')], selected.split())
-                self.assertEqual(targets[0], targets[2])
-                self.assertEqual(targets[0], targets[3])
-                self.assertEqual(targets[1], targets[4])
-                self.assertEqual(targets[1], targets[5])
+                self.assertEqual(len(set(targets)), 1)
 
     def test_stop_uses_process_receipts_when_prepared_inputs_are_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -188,20 +184,19 @@ class RunControllerTests(unittest.TestCase):
             self.assertTrue(receipt['owned_engines_exited'])
             self.assertEqual(receipt['processes'],[])
 
-    def test_smoke_stop_and_status_need_only_python_and_results_paths(self):
+    def test_stop_and_status_need_only_python_and_results_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             temp=Path(tmp); fake=temp/'python'
             fake.write_text(f'#!{sys.executable}\nimport json,sys,os\nprint(json.dumps([sys.argv[1:],os.environ["CUDA_VISIBLE_DEVICES"]]))\n')
             fake.chmod(0o755)
             env_file=temp/'config.env'
             env_file.write_text(f'PYTHON_BIN="{fake}"\nRESULTS_DIR="{temp}/results"\n')
-            for command in ('stop','status','smoke-stop','smoke-status'):
+            for command in ('stop','status'):
                 proc=subprocess.run(['bash',str(ROOT/'run.sh'),command,'ruler'],cwd='/tmp',
                     env=dict(PATH=os.environ['PATH'],UCM_ENV_FILE=str(env_file)),text=True,capture_output=True)
                 self.assertEqual(proc.returncode,0,proc.stderr)
                 argv,cuda=json.loads(proc.stdout);self.assertEqual(cuda,'')
                 target=temp/'results/adatree-v1.1'
-                if command.startswith('smoke-'):target=target/'smoke'
                 target=target/'ruler/chunk4096'
                 self.assertEqual(argv[-1],str(target))
                 if command.endswith('stop'):

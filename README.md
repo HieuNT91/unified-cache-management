@@ -57,12 +57,3 @@ Reports include accuracy, TTFT, thinking/answer tokens and per-task counts.
 The default `full` mode uses all committed answers; `same-input` compares the
 intersection of prompt/seed/token identities. TTFT includes online routing and
 excludes independent KV construction.
-
-For a small GPU test, set `SMOKE_TP`/`SMOKE_NUMBER_GPUS` and use existing prompt IDs:
-
-```bash
-bash run.sh smoke longbench-v2 longbench-v2-461
-bash run.sh smoke ruler niah_single_1-000
-bash run.sh smoke-status ruler
-bash run.sh smoke-stop ruler
-```
