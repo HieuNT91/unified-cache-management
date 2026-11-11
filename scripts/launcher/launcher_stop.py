@@ -1,4 +1,4 @@
-"""CPU-only stop for receipt-owned router/corpus sessions (Linux, stdlib only)."""
+"""CPU-only stop for receipt-owned AdaTree sessions (Linux, stdlib only)."""
 import fcntl
 import json
 import os
@@ -58,8 +58,6 @@ def receipts(state, root, controller):
     paths += sorted((state/'processes').glob('*.json'))
     paths += sorted((state/'sessions').glob('*/ownership.json'))
     found = {}
-    worker = {'router_control.py': 'runner.router.sweep',
-              'corpus_control.py': 'runner.corpus.collect'}.get(controller)
     for path in paths:
         if not path.exists():
             continue
@@ -96,8 +94,7 @@ def receipts(state, root, controller):
         except (ValueError, IndexError):
             raise ValueError(f'Missing experiment identity: {path}') from None
         supervisor = any(Path(arg).name == controller for arg in command) and 'supervise' in command
-        is_worker = (worker in command if worker else
-                     any(Path(arg).name == controller for arg in command) and 'worker' in command)
+        is_worker = any(Path(arg).name == controller for arg in command) and 'worker' in command
         if not target.is_absolute() or target.resolve() != root or not (supervisor or is_worker):
             raise ValueError(f'Process receipt belongs to another experiment: {path}')
         found[(pid, ident['start'])] = dict(pid=pid, identity=ident, supervisor=supervisor)

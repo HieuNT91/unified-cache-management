@@ -127,14 +127,14 @@ class TreeTemporaryStoreTests(unittest.TestCase):
             with patch.object(UCMBlendConnector, '_create_store', return_value=backend):
                 self.assertIs(type(connector._create_store()), SetupStore)
 
-    def test_delayed_file_queue_reproduces_old_failure_and_prevents_new_rewrite(self):
+    def test_delayed_file_queue_exposes_old_failure_and_prevents_new_rewrite(self):
         # Real PromptCache readiness/snapshot and real TP hash geometry; only
         # D2H and publication are simulated. No sleeping or GPU is required.
-        from test_sweep import SweepTests
+        from test_prompt_cache import PromptCacheTests
         from runner.runtime.sweep import PromptCache
         for policy in (TemporaryStore, TreeTemporaryStore):
             with self.subTest(policy=policy.__name__):
-                fixture = SweepTests()
+                fixture = PromptCacheTests()
                 fixture.setUp()
                 self.addCleanup(fixture.doCleanups)
                 sample = copy.deepcopy(fixture.sample)

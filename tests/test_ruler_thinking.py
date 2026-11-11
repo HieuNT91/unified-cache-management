@@ -1,4 +1,4 @@
-"""CPU-only phase budgets, native preparation, TP2 handoff and portable training."""
+"""CPU-only phase budgets, native preparation and runtime admission."""
 import copy
 import gc
 import json
@@ -212,98 +212,8 @@ class ThinkingTests(unittest.TestCase):
         self.assertEqual(values['thinking_tokens']+values['answer_tokens']+values['control_tokens'],len(tokens))
         self.assertEqual(report['natural_thinking_closures'],1)
 
-    def test_thinking_configure_prepare_scope_shards_and_pinned_policies(self):
-        from scripts.collection import longbench_a800_control as control
-        from scripts.collection import longbench_a800_data as data
-        from runner.cache.setups import atomic_json,file_hash
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);prepared=root/'inputs'
-            args=NS(root=root,role='ruler',model=Path('/m'),data=Path('/ruler'),prepared=prepared,
-                    cache_root=root/'cache',tp=2,samples_per_task=30,seed=42,devices='unused',thinking=True)
-            groups=[[str(i),str(i+1)] for i in range(0,10,2)]
-            with patch.object(control,'resolve_groups',return_value=groups),patch.object(control,'code_hashes',return_value={}):
-                control.configure(args)
-                pins=file_hash(root/'settings.json')
-                args.thinking=False;args.samples_per_task=100
-                with self.assertRaisesRegex(ValueError,'Frozen metadata'):control.configure(args)
-                self.assertEqual(pins,file_hash(root/'settings.json'))
-            entries=[];files={}
-            for task in TASKS:
-                # Full adapter tested above; synthetic tiny prepared JSON avoids a large fixture.
-                s=sample(task);s['token_ids']=[65]
-                for i in range(30):
-                    name=f'samples/{task}-{i}.json';atomic_json(prepared/name,s);files[name]=file_hash(prepared/name)
-                    entries.append(dict(id=f'{task}-{i}',prepared=name,subtask=task))
-            manifest=prepared/'manifest.jsonl';manifest.write_text(''.join(json.dumps(r)+'\n' for r in entries))
-            files['manifest.jsonl']=file_hash(manifest);atomic_json(prepared/'preparation.json',dict(files=files))
-            with patch('scripts.data.ruler.prepare') as prepare:
-                plan=data.prepare(root)
-            config=prepare.call_args.args[0]
-            self.assertTrue(config.thinking);self.assertEqual((config.samples,config.seed),(30,42))
-            self.assertEqual((plan['samples'],plan['answers'],plan['probes']),(390,4680,390))
-            protocol,rows=data.stage(root,'ruler')
-            self.assertEqual(protocol['execution_profile'],PROFILE)
-            self.assertEqual(data.stage(root,'features')[0]['execution_profile'],PROFILE)
-            for group in range(5):self.assertEqual(sum(r['ordinal']%5==group for r in rows),78)
-            self.assertEqual(data.roles(data.read(root/'settings.json')),('ruler','features'))
-            bad=copy.deepcopy(rows);bad[0]['evaluation_protocol']='legacy'
-            with self.assertRaises(ValueError):data.validate_rows(data.read(root/'settings.json'),bad)
 
-    def test_relocated_launcher_env_precedence_all_commands_and_fresh_defaults(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp)/'checkout with spaces';launchers=root/'scripts/launcher'
-            shutil.copytree(ROOT/'scripts/launcher',launchers)
-            fake=Path(tmp)/'fake python'
-            fake.write_text(f'#!{sys.executable}\nimport json,os,sys\nprint(json.dumps([sys.argv[1:],os.environ.get("CUDA_VISIBLE_DEVICES")]))\n')
-            fake.chmod(0o755)
-            (root/'config').mkdir()
-            (root/'config/.env.l20.thinking').write_text(f'PYTHON_BIN="{fake}"\nMODEL_PATH="/model from file"\n')
-            (root/'config/.env.l20').write_text('PYTHON_BIN=/must-not-run\n')
-            for command in ('configure','prepare','detach','resume','stop','status','status_same_count','report'):
-                result=subprocess.run(['bash',str(launchers/'l20_ruler_thinking_data.sh'),command],cwd='/tmp',
-                    env={'PATH':os.environ['PATH'],'MODEL_PATH':'/override'},capture_output=True,text=True)
-                self.assertEqual(result.returncode,0,result.stderr)
-                argv,cuda=json.loads(result.stdout)
-                self.assertEqual(cuda,'');self.assertEqual(argv[1],command);self.assertIn('--thinking',argv)
-                self.assertEqual(argv[argv.index('--model')+1],'/override')
-                self.assertEqual(argv[argv.index('--samples-per-task')+1],'30')
-                for flag in ('--root','--prepared','--cache-root'):
-                    self.assertIn('thinking-30',argv[argv.index(flag)+1])
 
-    def test_synthetic390_export_import_training_and_provenance(self):
-        from scripts.export import router_dataset as portable
-        from scripts.router import train_router as training
-        from scripts.collection.longbench_a800_data import ACTIONS
-        from runner.cache.setups import fingerprint
-        from runner.router.tree_policy import load as load_tree
-        from test_portable_training import synthetic_rows,SMALL_GRID,bundle
-        rows=synthetic_rows('ruler',390)
-        for row in rows:
-            p=make_policy(Tokenizer(),' Answer:',CAPS[row['subtask']]);row[KEY]=p;row['evaluation_protocol']=PROTOCOL
-            forced=len(p['transition_ids'])+len(p['prefix_ids'])
-            for value in row['outcomes'].values():
-                value.update(thinking_tokens=4,answer_tokens=forced+2,control_tokens=2,output_tokens=forced+8,
-                    generated_answer_tokens=2,generated_thinking_open_tokens=0,forced_tokens=forced,thinking_cap_reached=False,
-                    answer_cap_reached=False,thinking_closure='natural',first_answer_content_seconds=value['ttft_seconds']+1)
-        provenance=dict(tp=2,seed=42,samples_per_task=30,execution_profile=PROFILE,evaluation_protocol=PROTOCOL)
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);path=root/'ruler-data.json'
-            value=portable.save(path,'ruler',ACTIONS,rows,provenance)
-            self.assertEqual(len(portable.load(path)['rows']),390)
-            for mutate in (lambda d:d['provenance'].pop('execution_profile'),
-                           lambda d:d['rows'][0].update(evaluation_protocol='legacy'),
-                           lambda d:d['rows'][0]['outcomes']['nocache'].update(forced_tokens=0),
-                           lambda d:d['rows'][0][KEY].update(answer_cap=999)):
-                bad=copy.deepcopy(value);mutate(bad);bad['payload_sha256']=fingerprint({k:v for k,v in bad.items() if k!='payload_sha256'})
-                with self.assertRaises(ValueError):portable.validate(bad)
-            selected,inventory,meta=training.select_data('ruler',path)
-            self.assertEqual(meta['dataset_provenance']['ruler'],provenance)
-            with patch('runner.corpus.train.GRID',SMALL_GRID),patch.object(training,'GRID',SMALL_GRID):
-                report=training.train(selected,inventory,meta,root/'synthetic-fit')
-            self.assertEqual(report['samples'],390);self.assertEqual(len(report['policies']),3)
-            tree=load_tree(root/'synthetic-fit/router1.json')
-            self.assertEqual(tree['compatible_evaluation_protocols'],[PROTOCOL])
-            self.assertEqual(len(training.select_data('both',path,bundle(root,'longbench-v2'))[0]),893)
 
     def test_initial_opener_is_control_and_no_second_block_can_start(self):
         p=make_policy(Tokenizer(),' Answer:',32)
@@ -340,7 +250,7 @@ class ThinkingTests(unittest.TestCase):
 
     def test_admission_checks_expanded_window_and_phase_overflow(self):
         from runner.runtime.thinking_budget import validate_sample_policy
-        from scripts.router.corpus_control import check_hardware
+        from runner.operations import check_hardware
         from runner.cache.setups import atomic_json
         s=sample();s['token_ids']=[65]*(WINDOW-s['max_output_tokens'])
         validate_sample_policy(s)
@@ -350,39 +260,8 @@ class ThinkingTests(unittest.TestCase):
             root=Path(tmp);atomic_json(root/'model.safetensors.index.json',dict(metadata=dict(total_size=61.2*2**30)))
             settings=dict(dataset='ruler',execution_profile=PROFILE,hardware_profile='l20-tp2',model=str(root),tp=2,groups=[['a','b']])
             raw='a,NVIDIA L20,49152,49152\nb,NVIDIA L20,49152,49152'
-            with patch('scripts.router.corpus_control.subprocess.check_output',side_effect=[raw,'']):
+            with patch('runner.operations.subprocess.check_output',side_effect=[raw,'']):
                 receipt=check_hardware(settings)
             self.assertAlmostEqual(receipt['required_mib_per_rank'],(30.6*2**30+82304*262144/2)/.95/2**20)
             self.assertAlmostEqual(receipt['estimated_required_mib_per_rank'],(30.6*2**30+82304*262144/2+3*2**30)/.95/2**20)
             self.assertEqual(receipt['workspace_validation'],'runtime-kv-capacity-audit')
-
-    def test_live_report_and_portable_example_preserve_phase_metrics(self):
-        from scripts.reporting.longbench_a800_report import report
-        from scripts.collection.longbench_a800_data import ACTIONS
-        from scripts.export.router_dataset import example
-        from runner.reporting.aggregate import OutputAnalyzer
-        tok=Tokenizer();s=sample();p=s[KEY]
-        ids=closed(p,tok.encode('TARGET'),[3])
-        state=BudgetState(p).consume(ids)
-        metrics=OutputAnalyzer(tok).analyze(ids,[],True);metrics.update(state.metrics(tok))
-        row=dict(id='qa_1-0',subtask='qa_1',sha256='0'*64,evaluation_protocol=PROTOCOL,**{KEY:p})
-        record=dict(metrics,prompt_id=row['id'],subtask='qa_1',prediction='TARGET',scoring='ruler_any',
-            accuracy=0.,output_cap_reached=False,gpu_uuids=['gpu-a','gpu-b'],
-            timings=dict(ttft_seconds=1.,first_answer_content_seconds=None))
-        probe=dict(features={},timings=dict(routing_overhead_seconds=.1))
-        exported=example(row,probe,{a['id']:record for a in ACTIONS},{'r':'0'*64},'ruler')
-        self.assertEqual(exported[KEY],p)
-        self.assertIsNone(exported['outcomes']['nocache']['first_answer_content_seconds'])
-        settings=dict(dataset='ruler',execution_profile=PROFILE,tp=2)
-        plan=dict(answers=4680,probes=390)
-        with tempfile.TemporaryDirectory() as tmp:
-            base=Path(tmp)
-            with patch('scripts.reporting.longbench_a800_report.load',return_value=(settings,plan,[row])), \
-                 patch('scripts.reporting.longbench_a800_report.records',return_value={a['id']:[record] for a in ACTIONS}):
-                value=report(base,emit=False)
-            overall=value['methods']['nocache']['overall']
-            self.assertEqual(overall['ruler_nulls'],'1/1')
-            self.assertEqual(overall['natural_thinking_closures'],1)
-            self.assertIsNone(overall['mean_first_answer_content_seconds'])
-            self.assertIn('First answer content s',(base/'status.md').read_text())
-            self.assertIn('thinking_cap_reached',(base/'status.csv').read_text())

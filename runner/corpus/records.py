@@ -35,6 +35,8 @@ def protocol_identity(protocol):
 
 
 def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
+    if case == 'router' or protocol.get('schema') in ('live-study-confirm-v1', 'live-study-gpu-router-v2'):
+        raise ValueError('Learned-router and search-study records are outside AdaTree runs')
     from runner.runtime.tensor_parallel import protocol_tp
     tp=protocol_tp(protocol)
     mode=answer_validation(protocol)
@@ -92,18 +94,10 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
         if result['internal_tokens']!=1 or len(result.get('artifacts',[]))!=tp:raise ValueError('Incomplete independent probe')
         if any(saved['files'].get(a['path'])!=a['sha256'] for a in result['artifacts']):raise ValueError('Unpinned attention')
     else:
-        study_router=(protocol.get('schema') in ('live-study-confirm-v1','live-study-gpu-router-v2') and
-                      case in {p['id'] for p in protocol.get('policies',[])})
-        if study_router:
-            if protocol.get('schema')=='live-study-gpu-router-v2':
-                from runner.gpu_router import validate_record
-            else:
-                from runner.live_study import validate_record
-            validate_record(root,case,protocol,result,folder,full)
-        elif case=='adatree-v1':
+        if case=='adatree-v1':
             from runner.router.adatree import validate_record
             validate_record(protocol, result)
-        elif case!='router' and result['executed_action']!=case:raise ValueError('Accepted action differs from inventory')
+        elif result['executed_action']!=case:raise ValueError('Accepted action differs from inventory')
         if not math.isfinite(result['accuracy']) or not 0<=result['accuracy']<=1:raise ValueError('Invalid score')
         if case=='nocache' and (result['num_cached_tokens']!=0 or initial['engine_config'].get('kv_transfer_config')):
             raise ValueError('Baseline is not connector-free')
@@ -126,8 +120,7 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
             raise ValueError('Thinking result policy/provenance changed')
         validate_thinking_outcome(dict(result,ttft_seconds=result['timings']['ttft_seconds'],
             first_answer_content_seconds=result['timings'].get('first_answer_content_seconds')),expected_policy)
-    if full and case=='router':validate_routed(root,folder,row,protocol,result)
-    if full and case!='router' and not (protocol.get('schema') in ('live-study-confirm-v1','live-study-gpu-router-v2') and case in {p['id'] for p in protocol.get('policies',[])}):
+    if full:
         from runner.runtime.generation import verify_diagnostics
         from runner.corpus.dataset import load_attention,match_answer
         sample=json.loads(relative(prepared or protocol['prepared'],row['prepared']).read_text())
@@ -136,7 +129,10 @@ def accepted(root,case,row,protocol,prepared=None,full=False,*,seed=None):
         definition=dict(method='prophetkv',ratio=.01) if case=='probe' else inventory(protocol)[case]
         if case == 'adatree-v1':
             from runner.router.adatree import validate_routing
-            if validate_routing(ds, sample, result['routing']['request_id'], tp) != result['routing']:
+            from runner.tree.collection import runtime_sample
+            sample = runtime_sample(sample, protocol)
+            if validate_routing(ds, sample, result['routing']['request_id'], tp,
+                                chunk_size=protocol.get('kv_chunk_size') or 4096) != result['routing']:
                 raise ValueError('Accepted AdaTreeV1 routing evidence changed')
         else:
             verify_diagnostics(ds,sample,definition['method'],definition['ratio'],tp,range(64))
@@ -169,24 +165,3 @@ def publish(root,case,row,protocol,result,diagnostics,*,seed=None):
         files={str(p.relative_to(folder)):file_hash(p) for p in folder.rglob('*') if p.is_file() and not p.name.endswith('.tmp')}
         atomic_json(folder/'validated.json',dict(complete=True,protocol_sha256=protocol_identity(protocol),files=files))
     return result
-
-
-def validate_routed(root,folder,row,protocol,result):
-    """Revalidate stored live controls; changing any evidence halts resume."""
-    from runner.router.tree_policy import load,decide
-    from runner.corpus.runtime import paired
-    tree=load(Path(root)/'tree.json')
-    if result['tree_sha256']!=tree['payload_sha256'] or decide(tree,result['probe']['features'])!=result['decision']:
-        raise ValueError('Accepted tree decision changed')
-    control=json.loads((folder/'control.json').read_text())
-    if result['executed_action']!=result['decision']['action'] or control['executed_action']!=result['decision']['action']:
-        raise ValueError('Stored control action differs from tree')
-    control_ds=json.loads((folder/'control-diagnostics.json').read_text())
-    ds=json.loads((folder/'diagnostics.json').read_text())
-    if paired(result,ds,control,control_ds)!=result['paired_validation']:raise ValueError('Invalid stored control comparison')
-    if result['decision']['action']=='nocache':
-        baseline=accepted(root,'nocache',row,protocol)
-        if baseline is None or baseline!=control:raise ValueError('Dense control is not the connector-free baseline')
-        checks=result['dense_receipts'];names=sorted(f'model.layers.{i}.self_attn.attn' for i in range(64))
-        if sorted(c['rank'] for c in checks)!=list(range(protocol.get('tp',4))) or any(c['native_layers']!=names or c['store_operations']!=dict(lookup=0,load=0,store=0) for c in checks):
-            raise ValueError('Dense fallback native/zero-store audit failed')

@@ -47,36 +47,31 @@ def inventory(protocol):
 
 
 def collection_actions(protocol):
-    if 'adaptive_routing' not in protocol:
-        return actions(protocol['percentages'])
-    from runner.router.adatree import SCHEMA as ADATREE_SCHEMA, METHOD
-    if 'answer_generation' in protocol:
-        from runner.router.adatree import answer_generation
-        if protocol['answer_generation'] != answer_generation():
-            raise ValueError('AdaTreeV1 generation override changed')
-    local_ruler = (protocol.get('local_validation') is True and protocol.get('dataset') == 'ruler'
-                   and protocol.get('tp') == 4 and len(protocol.get('groups', [])) == 1
-                   and protocol.get('hardware_profile') == 'rtx4500ada-tree-validation')
-    valid_schedule = (protocol.get('answer_seeds') == [0] and protocol.get('answers_per_question') == 1
-                      if local_ruler else protocol.get('dataset') == 'longbench-v2'
-                      and protocol.get('answer_seeds') == [0, 1] and protocol.get('answers_per_question') == 2)
-    if (protocol['adaptive_routing'] != ADATREE_SCHEMA
-            or protocol['percentages'] != [5, 20, 40]
-            or protocol.get('kv_chunk_size') is not None
-            or not valid_schedule):
-        raise ValueError('AdaTreeV1 requires exact prepared layout and its declared server/local seed schedule')
-    result = [dict(id=METHOD, method=METHOD, ratio=None)]
-    if 'followup_nocache' in protocol:
-        if local_ruler or protocol['followup_nocache'] is not True or not protocol.get('answer_generation'):
-            raise ValueError('Follow-up no-cache requires the explicit new generation policy')
-        result.append(dict(id='nocache', method='baseline', ratio=None))
-    return result
+    from runner.router.adatree import METHOD, answer_generation
+    from ucm.sparse.prophetkv.adatree import protocol_for
+    from scripts.collection.collection_v3 import seeds
+    size = chunk_size(protocol)
+    selected_seeds = seeds(protocol)
+    if (protocol.get('run_profile', protocol.get('reproduction')) != 'adatree-v1.1'
+            or size not in (2048, 4096)
+            or protocol.get('adaptive_routing') != protocol_for(size)
+            or protocol.get('percentages') != ([5, 20, 40] if size == 4096 else [5, 20, 60])
+            or protocol.get('dataset') not in ('ruler', 'longbench-v2')
+            or (protocol['dataset'] == 'ruler' and selected_seeds != [0])
+            or protocol.get('answer_generation') != answer_generation()
+            or protocol.get('followup_nocache') is not True
+            or protocol.get('baseline_source') is not None):
+        raise ValueError('AdaTreeV1.1 requires its fixed chunk router and matching new no-cache answers')
+    return [dict(id=METHOD, method=METHOD, ratio=None),
+            dict(id='nocache', method='baseline', ratio=None)]
 
 
 def configure_engine(config, cache, protocol):
     """Opt in only this collection's cached engines, including F3 warmup."""
     inventory(protocol)
     extra = config['kv_transfer_config']['kv_connector_extra_config']
+    if protocol.get('run_profile', protocol.get('reproduction')) == 'adatree-v1.1':
+        extra['adatree_chunk_size'] = protocol['kv_chunk_size']
     if protocol.get('hardware_profile') == 'l20-tp2' and protocol.get('tp') == 2:
         # Qwen3-32B TP2: each buffer holds one 8 MiB all-layer KV block.
         # 1152 covers the <=1024 context blocks while reserving 9 GiB/rank,

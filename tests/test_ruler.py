@@ -1,6 +1,7 @@
 """Exact RULER input lengths, native thinking, scope and final-report gates."""
 import copy
 import csv
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -9,10 +10,10 @@ import unittest
 from unittest.mock import patch
 
 from scripts.data.ruler import TASKS, PERCENTAGES, format_sample, generator_command, query_span, CAPS
-from scripts.sweep.sweep_report import collect
 from runner.reporting.aggregate import aggregate, score_answer
 from runner.cache.setups import atomic_json
-from runner.runtime.sweep import configurations
+from scripts.data import ruler
+from scripts import run
 
 
 class CharacterTokenizer:
@@ -31,6 +32,44 @@ def original_row(content):
 
 
 class RulerTests(unittest.TestCase):
+    def source_fixture(self, root):
+        for name in ('scripts/synthetic.yaml','scripts/data/synthetic/constants.py'):
+            path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('fixture')
+        path=root/'scripts/data/synthetic/json/english_words.json'
+        path.parent.mkdir(parents=True)
+        path.write_text('version https://git-lfs.github.com/spec/v1\n'
+                        f'oid sha256:{ruler.ENGLISH_WORDS_SHA256}\nsize 1\n')
+        return path
+
+    def test_source_validation_does_not_require_git_or_a_matching_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);self.source_fixture(root)
+            with patch.object(ruler.subprocess,'check_output',side_effect=AssertionError('No Git revision gate')):
+                ruler.source_check(root)
+                (root/'.git').mkdir();(root/'.git/HEAD').write_text('unrelated local revision\n')
+                ruler.source_check(root)
+
+    def test_source_validation_still_rejects_missing_files_and_changed_wordlist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);wordlist=self.source_fixture(root)
+            wordlist.write_text('{"changed":"asset"}')
+            with self.assertRaisesRegex(ValueError,'digest'):ruler.source_check(root)
+            wordlist.unlink()
+            with self.assertRaisesRegex(ValueError,'Missing RULER'):ruler.source_check(root)
+
+    def test_run_checks_other_asset_content_without_git(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);wordlist=self.source_fixture(root);expected={}
+            for name in run.RULER_ASSETS:
+                path=wordlist.with_name(name)
+                if name!=wordlist.name:path.write_text(name)
+                expected[name]=hashlib.sha256(path.read_bytes()).hexdigest()
+            with patch.object(run,'RULER_ASSETS',expected), \
+                    patch.object(ruler.subprocess,'check_output',side_effect=AssertionError('No Git revision gate')):
+                run.validate_ruler_assets(root)
+                wordlist.with_name('squad.json').write_text('changed content')
+                with self.assertRaisesRegex(ValueError,'asset differs'):run.validate_ruler_assets(root)
+
     def test_all_tasks_original_tokens_prefix_and_caps(self):
         tokenizer=CharacterTokenizer()
         for task in TASKS:
@@ -75,44 +114,6 @@ class RulerTests(unittest.TestCase):
                            ('--tokens_to_generate','32'),('--dataset','squad')]:
             self.assertEqual(command[command.index(flag)+1],value)
 
-    def test_19_configurations_and_balanced_task_shards(self):
-        configs=configurations(PERCENTAGES)
-        self.assertEqual(len(configs),19)
-        self.assertEqual([c['ratio'] for c in configs[1:10]],[p/100 for p in PERCENTAGES])
-        self.assertTrue(all(c['layers']==[11,12,13,14,15] for c in configs[10:]))
-        tasks=[task for task in TASKS for _ in range(100)]
-        from collections import Counter
-        for shard in (0,1):
-            self.assertEqual(Counter(tasks[shard::2]),dict.fromkeys(TASKS,50))
-        self.assertEqual(len(tasks)*len(configs),24700)
-        for bad in ([],[1,1],[0],[101]):
-            with self.assertRaises(ValueError):configurations(bad)
 
-    def test_live_and_final_aggregate_all_24700_measurements(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);output=root/'out';manifest=root/'manifest.jsonl'
-            entries=[dict(id=f'{task}-{i}',prepared='unused.json',subtask=task) for task in TASKS for i in range(100)]
-            manifest.write_text(''.join(json.dumps(row)+'\n' for row in entries))
-            live=collect(output,manifest,PERCENTAGES)
-            self.assertEqual(live['completed'],0);self.assertEqual(live['expected'],24700)
-            self.assertFalse((output/'final_summary.json').exists())
-            expected=[dict(prompt_id=r['id'],subtask=r['subtask']) for r in entries]
-            records=[dict(prompt_id=r['prompt_id'],subtask=r['subtask'],accuracy=.75,
-                thinking_tokens=100,answer_tokens=4,control_tokens=2,output_tokens=106,
-                output_cap_reached=False,unfinished_thinking=False,timings={'ttft_seconds':2.}) for r in expected]
-            for config in configurations(PERCENTAGES):
-                report=aggregate(records,expected,dict(method=config['method'],ratio=config['ratio'],sweep_fingerprint='test'),'completed')
-                atomic_json(output/config['name']/'final_aggregation.json',report)
-            with self.assertRaises(FileNotFoundError):collect(output,manifest,PERCENTAGES,True)
-            for shard in (0,1):
-                atomic_json(output/f'group-{shard}'/'complete.json',dict(engine_shutdown=True,cache_deleted=True,measurements=12350))
-            final=collect(output,manifest,PERCENTAGES,True)
-            self.assertEqual(final['completed'],24700)
-            self.assertEqual(final['methods']['selective-80']['subtasks']['cwe']['accuracy_percent'],75.)
-            with (output/'final_summary.csv').open() as stream:
-                self.assertEqual(len(list(csv.reader(stream))),1+19*14)
-            atomic_json(output/'group-1/complete.json',dict(engine_shutdown=True,cache_deleted=False,measurements=12350))
-            with self.assertRaisesRegex(RuntimeError,'cache deletion'):
-                collect(output,manifest,PERCENTAGES,True)
 
 if __name__=='__main__':unittest.main()

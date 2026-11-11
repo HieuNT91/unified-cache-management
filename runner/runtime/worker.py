@@ -77,14 +77,14 @@ def retire(worker):
     return finish(worker)
 
 
-def configure(worker, method, ratio, layers=None):
+def configure(worker, method, ratio, layers=None, adatree_chunk_size=None):
     from runner.cache.temporary import configure_sparse
     from ucm.sparse.state import get_ucm_sparse
     from vllm.distributed import get_tensor_model_parallel_rank
     if worker.model_runner.requests or worker.model_runner.input_batch.req_id_to_index:
         raise RuntimeError('Worker request bookkeeping remains before policy change')
     return dict(rank=get_tensor_model_parallel_rank(),
-                **configure_sparse(get_ucm_sparse(), method, ratio, layers))
+                **configure_sparse(get_ucm_sparse(), method, ratio, layers, adatree_chunk_size))
 
 
 def router_mode(worker, request_id, action, capture=False):

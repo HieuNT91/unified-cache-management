@@ -19,6 +19,9 @@ class ProphetKV(Blend):
         self.model_config_hf=config.model_config.hf_config
         self.tree_f3_config=config.kv_transfer_config.kv_connector_extra_config.get('tree_f3')
         self.adatree_v1=config.kv_transfer_config.kv_connector_extra_config.get('adatree_v1', False)
+        self.adatree_chunk_size=config.kv_transfer_config.kv_connector_extra_config.get('adatree_chunk_size', 4096)
+        from .adatree import feature_names
+        feature_names(self.adatree_chunk_size)
         if self.adatree_v1 and (self.method != 'tree-prophetkv' or self.tree_f3_config is None):
             raise ValueError('AdaTreeV1 requires the native TreeKV construction and probe')
         self.f3rec=None

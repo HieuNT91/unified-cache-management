@@ -1,29 +1,21 @@
-#!/usr/bin/env python3
-"""A800/L20 TP2 and L40 thinking TP2/TP4 controls, then attention collection."""
-import argparse
+"""Owned process orchestration for AdaTree runs; no search or training CLI."""
 import csv
 import re
 import fcntl
 import json
 import os
 from pathlib import Path
-import signal
 import subprocess
 import sys
 import time
 import uuid
-
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
 from runner.cache.setups import atomic_json, file_hash
 from runner.router.process import identity, alive, group_alive
 from runner.corpus.records import accepted, publish, record_dir
-from scripts.router.router_control import code_hashes, environment, terminate_owned, cleanup_caches
-from scripts.router.corpus_control import idle, check_hardware
-from scripts.collection.longbench_a800_data import read, freeze, load, stage, SCHEDULE, ACTIONS, publish_protocols, scheduled, ruler_samples
-
-from scripts.collection.collection_v3 import enabled, seeds, declaration, ordered_rows, PHASES
-
+from runner.operations import code_hashes, environment, terminate_owned, cleanup_caches, idle, check_hardware
+from scripts.collection.longbench_a800_data import read
+from scripts.collection.collection_v3 import seeds, ordered_rows
+ROOT = Path(__file__).resolve().parents[2]
 
 def resolve_groups(devices, expected, tp=2, query_inventory=True):
     tokens = [v.strip() for v in devices.split(',')]
@@ -44,96 +36,19 @@ def resolve_groups(devices, expected, tp=2, query_inventory=True):
         raise ValueError('Unknown or duplicate GPU identity')
     return [values[i:i+tp] for i in range(0, len(values), tp)]
 
-
-def configure(args):
-    v3 = getattr(args, 'collection_version', 'legacy') == 'v3'
-    if v3 and (getattr(args, 'extend_from', None) or args.role == 'extra' or args.tp != 2):
-        raise ValueError('Collection v3 requires a fresh TP2 primary/RULER run')
-    thinking = getattr(args,'thinking',False)
-    requested_hardware = getattr(args, 'hardware_profile', None)
-    l40 = requested_hardware in ('l40-tp2', 'l40-tp4')
-    required_tp = 4 if requested_hardware == 'l40-tp4' else 2
-    if args.tp != required_tp or args.seed != 42:
-        raise ValueError(f'This collection requires TP{required_tp} and seed42')
-    if l40 and (args.role != 'ruler' or not thinking):
-        raise ValueError('L40 requires the thinking RULER profile')
-    if thinking and args.role != 'ruler':
-        raise ValueError('Thinking RULER requires the ruler role')
-    extend_from = getattr(args, 'extend_from', None)
-    if extend_from and not (args.role == 'ruler' and (
-            (l40 and thinking and args.samples_per_task == 200) or
-            (not l40 and not thinking and args.samples_per_task == 500))):
-        raise ValueError('--extend-from requires L40 thinking target200 or L20 non-thinking target500')
-    dataset = 'ruler' if args.role == 'ruler' else 'longbench-v2'
-    count = ruler_samples(dict(samples_per_task=args.samples_per_task, execution_profile='ruler-thinking' if thinking else 'ruler',
-        **({'collection_protocol': 'tp2-data-v3'} if v3 else {}))) if dataset == 'ruler' else 100
-    selected = (resolve_groups(args.devices, 8, tp=required_tp, query_inventory=False) if l40
-                else resolve_groups(args.devices, 10 if dataset == 'ruler' else 4))
-    hardware_profile = requested_hardware if l40 else 'l20-tp2' if dataset == 'ruler' else 'server'
-    settings = dict(schema='tp2-data-config-v2', dataset=dataset, tp=args.tp, model=str(args.model), data=str(args.data),
-                    prepared=str(args.prepared), cache_root=str(args.cache_root),
-                    samples_per_task=count if dataset == 'ruler' else 100, seed=42, hardware_profile=hardware_profile, code=code_hashes(), watchdog_seconds=7200, automatic_training=False)
-    if l40:
-        settings['hardware_preflight'] = 'user-managed'
-    if thinking:
-        from runner.runtime.thinking_budget import PROTOCOL, THINKING_CAP, WINDOW, SAMPLING
-        from scripts.data.ruler import CAPS
-        settings.update(execution_profile='ruler-thinking', evaluation_protocol=PROTOCOL,
-                        thinking_cap=THINKING_CAP, answer_caps=CAPS, engine_window=WINDOW, sampling=SAMPLING)
-    if v3:
-        answers = getattr(args, 'answers_per_question', None)
-        settings.update(declaration(dataset, answers if answers is not None else (4 if dataset == 'longbench-v2' else 1), thinking),
-                        schema='tp2-data-config-v3', groups=selected)
-        if thinking:
-            from runner.runtime.output_budget import RULER_PROTOCOL, THINKING_CAP, OUTPUT_CAP
-            settings.update(evaluation_protocol=RULER_PROTOCOL, thinking_cap=THINKING_CAP, output_cap=OUTPUT_CAP)
-            del settings['answer_caps']
-    if extend_from:
-        from scripts.collection.ruler_extension import configure_extension
-        settings['extension'] = configure_extension(args, settings, selected)
-        settings['samples_per_task'] = settings['extension']['target_samples_per_task']-settings['extension']['start']
-    if v3 and not (args.root/'settings.json').exists():
-        paths = [args.root.resolve(), args.prepared.resolve(), args.cache_root.resolve()]
-        if any(a == b or a in b.parents or b in a.parents for i, a in enumerate(paths) for b in paths[i+1:]):
-            raise ValueError('Collection v3 requires separate fresh result/prepared/cache paths')
-        for path in (args.prepared, args.cache_root):
-            if path.exists() and any(path.iterdir()):
-                raise ValueError('Collection v3 requires empty new prepared/cache paths')
-    args.root.mkdir(parents=True, exist_ok=True)
-    with (args.root/'configure.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if args.role == 'extra' and not (args.root/'settings.json').exists():
-            raise ValueError('Configure primary first')
-        if not (args.root/'settings.json').exists() and any(p.name != 'configure.lock' for p in args.root.iterdir()):
-            raise ValueError('Use a new empty experiment directory')
-        if (args.root/'settings.json').exists():
-            # Keep the original provenance and all downstream receipt hashes.
-            settings['code'] = read(args.root/'settings.json')['code']
-        freeze(args.root/'settings.json', settings)
-        for other in args.root.glob('*/devices.json'):
-            if other.parent.name != args.role and set(sum(read(other)['groups'], [])) & set(sum(selected, [])):
-                raise ValueError('Primary/extra GPU assignments overlap')
-        freeze(args.root/args.role/'devices.json', dict(tp=args.tp, groups=selected))
-        if (args.root/'plan.json').exists():
-            publish_protocols(args.root)
-    print(f'Configured {args.role}: {len(selected)} TP{args.tp} groups; training remains a separate command.')
-
-
 def progress(base, role, message, group=0):
     atomic_json(Path(base)/role/f'progress-group{group}.json', dict(at=time.time(), message=message))
     print(message, flush=True)
-
 
 def pending(protocol, rows, root, cases):
     return [r for r in rows if any(accepted(root, c, r, protocol, **({'seed': seed} if seed is not None else {})) is None
                                   for c in cases for seed in seeds(protocol, c))]
 
-
 def worker(base, role, phase, attempt, group=0, *, stage_loader=None):
     from runner.corpus.runtime import Engine
     from runner.cache.setups import check_environment
     target = 'features' if phase == 'features' else role
-    protocol, rows = (stage_loader or stage)(base, target)
+    protocol, rows = stage_loader(base, target)
     root = Path(base)/target
     cases = (['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline'
              else [c for c in protocol['scheduled_actions'] if c != 'nocache'])
@@ -146,7 +61,7 @@ def worker(base, role, phase, attempt, group=0, *, stage_loader=None):
     with (root/f'group{group}.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         engine = Engine(root, protocol, group, 'baseline' if phase == 'baseline' else 'cached', attempt, remaining)
-        definitions = {a['id']: a for a in protocol.get('actions', ACTIONS)}
+        definitions = {a['id']: a for a in protocol['actions']}
         failure = None
         case = None
         try:
@@ -187,8 +102,11 @@ def worker(base, role, phase, attempt, group=0, *, stage_loader=None):
                     raise
                 print(f'Engine shutdown also failed: {shutdown_error}', file=sys.stderr, flush=True)
 
-
 def hardware(protocol):
+    if protocol.get('run_profile', protocol.get('reproduction')) == 'adatree-v1.1':
+        # Explicit profile validates each assigned UUID and free memory. Busy
+        # devices abort the launch; the controller never cancels external jobs.
+        return check_hardware(protocol)
     if protocol.get('hardware_profile') == 'rtx4500ada-tree-validation':
         if (protocol.get('schema') != 'tree-prophetkv-thinking-collection-v1'
                 or not protocol.get('local_validation') or protocol.get('tp') != 4
@@ -214,7 +132,6 @@ def hardware(protocol):
         raise ValueError(f'This deployment requires {name} GPUs; no local GPU fallback')
     return receipt
 
-
 def engines_idle(root):
     for path in [*(root/'processes').glob('*.json'), *(root/'sessions').glob('*/ownership.json')]:
         saved = read(path)
@@ -223,7 +140,6 @@ def engines_idle(root):
     for path in root.glob('group*.lock'):
         with path.open('a') as handle:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-
 
 def worker_failure(receipt, code, reason=None):
     """Surface the worker's evidence instead of replacing it with an exit code.
@@ -248,11 +164,10 @@ def worker_failure(receipt, code, reason=None):
                         f'Worker log: {path}\n{detail}\n'
                         'Inspect the worker error before resuming; the exit code alone does not identify the cause.')
 
-
 def execute_phase(base, role, phase, state, *, run_loader=None, stage_loader=None, entrypoint=None):
-    settings, _, _ = (run_loader or load)(base)
+    settings, _, _ = run_loader(base)
     target = 'features' if phase == 'features' else role
-    protocol, rows = (stage_loader or stage)(base, target)
+    protocol, rows = stage_loader(base, target)
     cases = ['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline' else [c for c in protocol['scheduled_actions'] if c != 'nocache']
     if not pending(protocol, rows, base/target, cases):
         engines_idle(base/target)
@@ -310,84 +225,8 @@ def execute_phase(base, role, phase, state, *, run_loader=None, stage_loader=Non
     if pending(protocol, rows, base/target, cases):
         raise RuntimeError('Workers exited without all scheduled records')
 
-
-def wait_extra(base):
-    """Primary owns no GPU engine while waiting; failed/stopped dependencies halt."""
-    while True:
-        path = base/'extra/supervisor.json'
-        state = read(path) if path.exists() else None
-        if (base/'extra/complete.json').exists():
-            if state and alive(state):
-                time.sleep(2); continue
-            idle(base/'extra')
-            return
-        if state and (state.get('state') == 'failed' or not alive(state)):
-            raise RuntimeError('Extra group failed/stopped; resume it, then resume primary')
-        time.sleep(5)
-
-
-def supervise(base, role, cached_only=False):
-    signal.signal(signal.SIGHUP, signal.SIG_IGN)
-    state_root = base/role
-    with (state_root/'run.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        state = dict(pid=os.getpid(), identity=identity(os.getpid()), state='running', role=role, started_at=time.time())
-        if cached_only:
-            state.update(cached_only=True, selected_phases=['cached'])
-        atomic_json(state_root/'supervisor.json', state)
-        try:
-            settings, _, _ = load(base)
-            # Do not ask idle() to lock our own run.lock during execute_phase.
-            phases = ('cached',) if cached_only else (PHASES if enabled(settings) else ('cached',) if role == 'extra' else ('baseline', 'cached'))
-            for phase in phases:
-                execute_phase(base, role, phase, state)
-                if enabled(settings) and phase == 'features':
-                    _, _, feature_rows = load(base)
-                    freeze(base/'features/complete.json', dict(probes=len(feature_rows), owned_engines_exited=True,
-                           protocol_sha256=file_hash(base/'features/protocol.json')))
-            protocol, rows = stage(base, role)
-            if cached_only:
-                cases = [c for c in protocol['scheduled_actions'] if c != 'nocache']
-                freeze(state_root/'cached-complete.json', dict(
-                    answers=len(rows)*len(cases)*len(seeds(protocol)), scheduled_actions=cases,
-                    protocol_sha256=file_hash(state_root/'protocol.json'), owned_engines_exited=True))
-                from scripts.reporting.longbench_a800_report import report
-                report(base, final=False, emit=False)
-                # A partial phase run must remain resumable for missing probes
-                # or baselines. Do not publish full completion/export receipts.
-                state.update(state='cached-complete', phase='cached', finished_at=time.time())
-                print('Cached answers complete; baseline and feature phases were skipped.', flush=True)
-                return
-            freeze(state_root/'controls-complete.json', dict(answers=len(rows)*len(protocol['scheduled_actions'])*len(seeds(protocol)),
-                   protocol_sha256=file_hash(state_root/'protocol.json'), owned_engines_exited=True))
-            if enabled(settings):
-                from scripts.reporting.longbench_a800_report import report
-                report(base, final=True, emit=False)
-                from scripts.export.router_dataset import export_collection
-                export_collection(base, base/('ruler-data.json' if role == 'ruler' else 'longbench-data.json'))
-            elif role != 'extra':
-                state.update(state='waiting-for-extra', phase='waiting'); atomic_json(state_root/'supervisor.json', state)
-                if role == 'primary':
-                    wait_extra(base)
-                from scripts.reporting.longbench_a800_report import report
-                report(base, final=True, emit=False)
-                state.update(state='collecting-features'); atomic_json(state_root/'supervisor.json', state)
-                execute_phase(base, role, 'features', state)
-                freeze(base/'features/complete.json', dict(probes=len(rows), owned_engines_exited=True,
-                       protocol_sha256=file_hash(base/'features/protocol.json')))
-                from scripts.export.router_dataset import export_collection
-                export_collection(base, base/('ruler-data.json' if role == 'ruler' else 'longbench-data.json'))
-            freeze(state_root/'complete.json', dict(complete=True, owned_engines_exited=True,
-                   plan_sha256=file_hash(base/'plan.json'), feature_collection=role != 'extra'))
-            state.update(state='complete', finished_at=time.time())
-        except BaseException as error:
-            state.update(state='failed', error=str(error), finished_at=time.time()); raise
-        finally:
-            atomic_json(state_root/'supervisor.json', state)
-
-
 def detach(base, role, resume=False, cached_only=False, *, stage_loader=None, entrypoint=None):
-    (stage_loader or stage)(base, role)
+    stage_loader(base, role)
     target = base/role
     with (target/'launch.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -430,75 +269,3 @@ print(p.pid,flush=True)
         atomic_json(target/'detachment.json', dict(pid=pid, identity=identity(pid), parent_pid=1, session_id=pid,
             sighup_ignored=True, stdin='/dev/null', cpu_only=True, resume=resume))
         print(f'Detached {role} CPU supervisor PID={pid}; log: {target}/supervisor.log', flush=True)
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('configure', 'prepare', 'detach', 'resume', 'stop', 'status', 'status_same_count', 'report', 'merge', 'compute-feature', 'supervise', 'worker'))
-    parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--collection-version', choices=('legacy', 'v3'), default='legacy')
-    parser.add_argument('--answers-per-question', type=int)
-    parser.add_argument('--cached-only', action='store_true',
-                        help='Run only missing cached answers; skip baseline/features without changing the saved plan')
-    parser.add_argument('--thinking', action='store_true', help='Separate thinking RULER protocol')
-    parser.add_argument('--extend-from', type=Path, help='Parent RULER run: L40 thinking 30->200 or L20 non-thinking 200->500; collect only new ordinals')
-    parser.add_argument('--hardware-profile', choices=('l40-tp2', 'l40-tp4'),
-                        help='Eight explicit L40 UUIDs, thinking TP2/TP4; user checks GPU availability')
-    parser.add_argument('--role', choices=('primary', 'extra', 'ruler'), required=True)
-    for name in ('model', 'data', 'prepared', 'cache-root'):
-        parser.add_argument('--'+name, type=Path)
-    parser.add_argument('--devices', default='')
-    parser.add_argument('--tp', type=int, default=2)
-    parser.add_argument('--samples-per-task', type=int)
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--group', type=int, default=0)
-    parser.add_argument('--phase', choices=('baseline', 'cached', 'features'))
-    parser.add_argument('--attempt')
-    args = parser.parse_args()
-    if args.cached_only and args.command not in ('detach', 'resume', 'supervise'):
-        parser.error('--cached-only is supported only for detach/resume/supervise')
-    for name, value in vars(args).items():
-        if isinstance(value, Path):
-            setattr(args, name, value.resolve())
-    if args.command != 'worker' and os.environ.get('CUDA_VISIBLE_DEVICES', ''):
-        raise ValueError('Coordinator must be CPU-only')
-    if args.command in ('prepare', 'detach', 'resume'):
-        saved = read(args.root/'settings.json')
-        if enabled(saved) and (
-                (args.answers_per_question is not None and args.answers_per_question != saved['answers_per_question'])
-                or args.seed != saved['seed']
-                or (args.role == 'ruler' and args.samples_per_task is not None and args.samples_per_task != saved['samples_per_task'])):
-            raise ValueError('Collection arguments differ from frozen metadata; use a new run')
-    if args.command == 'configure':
-        if args.samples_per_task is None:
-            args.samples_per_task = 500 if args.collection_version == 'v3' else 100
-        if any(getattr(args, k) is None for k in ('model', 'data', 'prepared', 'cache_root')):
-            parser.error('configure requires model/data/prepared/cache-root paths')
-        configure(args)
-    elif args.command == 'prepare':
-        from scripts.collection.longbench_a800_data import prepare
-        with (args.root/'prepare.lock').open('a') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            prepare(args.root)
-    elif args.command in ('detach', 'resume'):
-        detach(args.root, args.role, args.command == 'resume', cached_only=args.cached_only)
-    elif args.command == 'compute-feature':
-        from scripts.export.export_features import export
-        export(args.root)
-    elif args.command == 'merge':
-        from scripts.collection.ruler_extension import merge_extension
-        merge_extension(args.root)
-    elif args.command == 'stop':
-        from scripts.launcher.launcher_stop import stop
-        stop(args.root, Path(__file__).name, args.root/args.role)
-    elif args.command == 'supervise':
-        supervise(args.root, args.role, cached_only=args.cached_only)
-    elif args.command == 'worker':
-        worker(args.root, args.role, args.phase, args.attempt, args.group)
-    else:
-        from scripts.reporting.longbench_a800_report import report
-        report(args.root, args.command == 'status_same_count')
-
-
-if __name__ == '__main__':
-    main()

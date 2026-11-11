@@ -82,10 +82,14 @@ class TreeTemporaryStore(TemporaryStore):
         return result
 
 
-def configure_sparse(sparse, method, ratio, layers=None):
+def configure_sparse(sparse, method, ratio, layers=None, adatree_chunk_size=None):
     selected = resolve_layers(method, layers)
     adaptive = method == 'adatree-v1'
     if adaptive:
+        from ucm.sparse.prophetkv.adatree import feature_names
+        adatree_chunk_size = (getattr(sparse, 'adatree_chunk_size', 4096)
+                             if adatree_chunk_size is None else adatree_chunk_size)
+        feature_names(adatree_chunk_size)
         if ratio not in (None, .05):
             raise ValueError('AdaTreeV1 chooses its own repair ratio')
         ratio = .05
@@ -100,4 +104,6 @@ def configure_sparse(sparse, method, ratio, layers=None):
         raise ValueError('tree-prophetkv needs a tree-enabled construction engine')
     sparse.method, sparse.ratio, sparse.scoring_layers = 'tree-prophetkv' if adaptive else method, ratio, selected
     sparse.adatree_v1 = adaptive
+    if adaptive:
+        sparse.adatree_chunk_size = adatree_chunk_size
     return dict(method=method, ratio=ratio, scoring_layers=list(selected))

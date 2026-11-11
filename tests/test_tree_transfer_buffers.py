@@ -8,17 +8,24 @@ import unittest
 from unittest.mock import patch
 
 from runner.cache.setups import bytes_per_shard
-from runner.tree.collection import SCHEMA, actions, configure_engine
+from runner.tree.collection import SCHEMA, collection_actions, configure_engine
+from runner.router.adatree import SCHEMA as ADATREE_SCHEMA, answer_generation
+from scripts.collection.collection_v3 import declaration
 from runner.tree.prophetkv import PROTOCOL
 from runner.router.profiles import config
 
 
 def configured(hardware='l20-tp2', dataset='ruler-thinking', tp=2):
-    definitions = actions([5, 20, 40, 60])
-    protocol = dict(schema=SCHEMA, tree_protocol=PROTOCOL, percentages=[5,20,40,60],
-                    actions=definitions, scheduled_actions=[a['id'] for a in definitions],
-                    phase_order=['cached'], answer_validation='native-answer-diagnostics-v1',
-                    hardware_profile=hardware, tp=tp)
+    protocol = dict(schema=SCHEMA, tree_protocol=PROTOCOL, percentages=[5,20,40],
+                    answer_validation='native-answer-diagnostics-v1',
+                    hardware_profile=hardware, tp=tp, run_profile='adatree-v1.1',
+                    adaptive_routing=ADATREE_SCHEMA, answer_generation=answer_generation(),
+                    followup_nocache=True, kv_chunk_size=4096,
+                    dataset='ruler' if dataset=='ruler-thinking' else 'longbench-v2',
+                    **declaration('ruler' if dataset=='ruler-thinking' else 'longbench-v2', 1, thinking=True))
+    protocol['phase_order'] = ['cached','baseline']
+    definitions = collection_actions(protocol)
+    protocol.update(actions=definitions, scheduled_actions=[a['id'] for a in definitions])
     cfg = config('/model', dataset, True, '/cache', hardware=hardware, tp=tp)
     before = copy.deepcopy(protocol)
     configure_engine(cfg, Path('/cache'), protocol)

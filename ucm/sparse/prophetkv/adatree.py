@@ -1,18 +1,47 @@
-"""Fixed AdaTreeV1 descriptors from the existing native post-S4 TreeKV probe.
+"""Fixed chunk-specific AdaTree descriptors from the native post-S4 TreeKV probe.
 
-Both token masks are hypothetical feature masks. They never repair KV, invoke
-attention, or change the native score vector. The feature order is G5, S60.
+Token masks are hypothetical feature masks. They never repair KV, invoke
+attention, or change the native score vector. Chunk4096 preserves AdaTreeV1;
+chunk2048 uses residual spread and relative tail retention.
 """
 import math
 from numbers import Integral
 
 
 FEATURE_NAMES = ('G5_mean', 'S60_p90')
+FEATURE_NAMES_2048 = ('D60_p90', 'T5_1_mean', 'D20_mean')
 PROTOCOL = 'adatree-v1-native-tailspread-v1'
+PROTOCOL_2048 = 'adatree-v1.1-native-chunk2048-v1'
 
 
-def route_features(G5_mean, S60_p90):
+def feature_names(chunk_size=4096):
+    if type(chunk_size) is not int or chunk_size not in (2048, 4096):
+        raise ValueError('AdaTree requires an explicit chunk size of 2048 or 4096')
+    return FEATURE_NAMES if chunk_size == 4096 else FEATURE_NAMES_2048
+
+
+def protocol_for(chunk_size=4096):
+    feature_names(chunk_size)
+    return PROTOCOL if chunk_size == 4096 else PROTOCOL_2048
+
+
+def route_features(*values, chunk_size=4096, **features):
     """CPU receipt validation, with the same inclusive thresholds as the GPU."""
+    names = feature_names(chunk_size)
+    if values:
+        if features or len(values) != len(names):
+            raise ValueError('Invalid AdaTree feature vector')
+        features = dict(zip(names, values))
+    if set(features) != set(names):
+        raise ValueError('Invalid AdaTree feature names')
+    if chunk_size == 2048:
+        d60, retention, d20 = (features[name] for name in names)
+        if any(not math.isfinite(value) or not 0 <= value <= 1 + 1e-12
+               for value in (d60, retention, d20)):
+            raise ValueError('Invalid AdaTree2048 features')
+        percent = (5 if retention <= .737 else 20) if d60 <= .734 else (20 if d20 <= .693 else 60)
+        return f'tree-prophetkv-{percent}'
+    G5_mean, S60_p90 = (features[name] for name in names)
     if (not math.isfinite(G5_mean) or not math.isfinite(S60_p90)
             or not 0 <= G5_mean <= 1 or not 0 <= S60_p90 <= 1 + 1e-12):
         raise ValueError('Invalid AdaTreeV1 features')
@@ -23,8 +52,8 @@ def route_features(G5_mean, S60_p90):
     return 'tree-prophetkv-40'
 
 
-def compute_features(raw, scores, boundaries):
-    """Return device FP64 [G5_mean, S60_p90] from eligible attention only.
+def compute_features(raw, scores, boundaries, chunk_size=4096):
+    """Return the chunk-specific device FP64 feature vector from eligible attention.
 
     ``raw`` is the global TP mean of native per-layer attention, shaped [L, N].
     ``scores`` is the unchanged native FP32 global score vector, shaped [N].
@@ -34,6 +63,7 @@ def compute_features(raw, scores, boundaries):
     """
     import torch
 
+    feature_names(chunk_size)
     b = tuple(boundaries)
     if (len(b) < 4 or any(not isinstance(x, Integral) or isinstance(x, bool) for x in b)
             or b[0] != 0 or any(z <= a for a, z in zip(b, b[1:]))):
@@ -55,6 +85,8 @@ def compute_features(raw, scores, boundaries):
     # Cumulative sums followed by boundary differences avoid atomics and a
     # separate sort for each layer. The masks have no effect on source tensors.
     ends = torch.tensor([x - b[1] - 1 for x in b[2:-1]], device=raw.device)
+    if chunk_size == 2048:
+        return _features_2048(p, order, ends)
     tail = torch.ones(n, dtype=torch.bool, device=raw.device)
     chunk_masses = []
     for rate in (.05, .60):
@@ -72,13 +104,48 @@ def compute_features(raw, scores, boundaries):
     return torch.stack((g5, s60))
 
 
-def decide(features):
-    """Return device int64 percent 5/20/40 without rounding the FP64 features."""
+def _features_2048(p, order, ends):
+    """Exact native residual geometry and layerwise 5% / 1% tail retention."""
     import torch
 
-    if (not isinstance(features, torch.Tensor) or features.shape != (2,)
+    n = p.shape[-1]
+    # This is the offline retention definition: one minus ranked cumulative
+    # coverage, then a ratio per layer before taking the layer mean.
+    ranked = p.index_select(-1, order).cumsum(-1)
+    residual = {}
+    for rate in (.01, .05):
+        count = math.floor(rate * n)
+        residual[rate] = 1 - ranked[:, count - 1] if count else torch.ones_like(p[:, 0])
+    retention = (residual[.05] / residual[.01].clamp_min(1e-15)).mean()
+    spread = {}
+    tail = torch.ones(n, dtype=torch.bool, device=p.device)
+    for rate in (.20, .60):
+        tail[order[:math.floor(rate * n)]] = False
+        cumulative = (p * tail).cumsum(-1).index_select(-1, ends)
+        q = torch.cat((cumulative[:, :1], cumulative[:, 1:] - cumulative[:, :-1]), dim=-1)
+        squared = q.square().sum(-1)
+        if not bool((squared > 0).all()):
+            raise ValueError('Zero residual attention: chunk spread is undefined')
+        spread[rate] = q.sum(-1).square() / (q.shape[-1] * squared)
+    return torch.stack((torch.quantile(spread[.60], .90, interpolation='linear'),
+                        retention, spread[.20].mean()))
+
+
+def decide(features, chunk_size=4096):
+    """Return the chunk-specific repair percentage without feature rounding."""
+    import torch
+
+    names = feature_names(chunk_size)
+    if (not isinstance(features, torch.Tensor) or features.shape != (len(names),)
             or not features.is_floating_point()):
-        raise ValueError('Expected AdaTreeV1 feature vector [G5_mean, S60_p90]')
+        raise ValueError('Expected AdaTree feature vector ' + str(names))
+    if chunk_size == 2048:
+        if not bool(torch.isfinite(features).all() & (features >= 0).all()
+                    & (features <= 1 + 1e-12).all()):
+            raise ValueError('Invalid AdaTree2048 features')
+        d60, retention, d20 = features.double().unbind()
+        return torch.where(d60 <= .734, torch.where(retention <= .737, 5, 20),
+                           torch.where(d20 <= .693, 20, 60))
     if not bool(torch.isfinite(features).all() & (features >= 0).all()
                 & (features[0] <= 1) & (features[1] <= 1 + 1e-12)):
         raise ValueError('Invalid AdaTreeV1 features')

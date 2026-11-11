@@ -1,1 +1,1 @@
-"""Launcher tools for reproducible experiments."""
+"""Launcher tools for AdaTree runs."""

@@ -9,11 +9,14 @@ VERSIONS = {'vllm': '0.9.2', 'torch': '2.7.0', 'transformers': '4.53.2', 'uc-man
 
 
 def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
-                  memory=.9, cache_dir=None, end_token=None, persistent=None, router_policy=None, router_id="router1", router_profile=False):
+                  memory=.9, cache_dir=None, end_token=None, persistent=None, router_policy=None, router_id="router1", router_profile=False,
+                  adatree_chunk_size=4096):
     if method not in METHODS:
         raise ValueError('Unknown method')
     adaptive = method == 'adatree-v1'
     if adaptive:
+        from ucm.sparse.prophetkv.adatree import feature_names
+        feature_names(adatree_chunk_size)
         if ratio is not None or layers is not None or count is not None or router_policy is not None or router_profile:
             raise ValueError('AdaTreeV1 rejects manual ratio, layer and policy overrides')
         if persistent is not None:
@@ -79,6 +82,7 @@ def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
             readonly=bool(persistent and persistent['readonly']))
         if adaptive:
             cfg['kv_transfer_config']['kv_connector_extra_config']['adatree_v1'] = True
+            cfg['kv_transfer_config']['kv_connector_extra_config']['adatree_chunk_size'] = adatree_chunk_size
     if persistent is not None and method != 'baseline':
         cfg['kv_transfer_config']['kv_connector_extra_config']['persistent_setup'] = persistent
     return cfg

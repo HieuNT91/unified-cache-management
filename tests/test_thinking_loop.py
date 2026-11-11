@@ -232,8 +232,7 @@ class ThinkingLoopTests(unittest.TestCase):
             self.assertTrue(values['thinking_broken'])
             validate_thinking_outcome(values, p)
 
-    def test_portable_and_report_keep_successful_broken_answers(self):
-        from scripts.export.router_dataset import example
+    def test_report_keeps_successful_broken_answers(self):
         from scripts.collection.collection_v3 import answer_metrics
         from runner.reporting.aggregate import metrics
         p = output_budget.make_policy(Tokenizer())
@@ -242,12 +241,6 @@ class ThinkingLoopTests(unittest.TestCase):
         record = self.outcome(state, tokens)
         record.update(accuracy=1., finish_reason='stop', gpu_uuids=['a', 'b'],
                       timings=dict(ttft_seconds=.1, first_answer_content_seconds=.2))
-        row = dict(id='q', subtask='q', sha256='abc', length='short', source_id='q', **{KEY: p})
-        probe = dict(features={}, timings=dict(routing_overhead_seconds=.1))
-        portable = example(row, probe, {'nocache': record}, {}, 'longbench-v2')['outcomes']['nocache']
-        validate_thinking_outcome(portable, p)
-        self.assertTrue(portable['thinking_broken'])
-        self.assertEqual(portable['finish_reason'], 'stop')
         summary = metrics([answer_metrics(record)], 1)
         self.assertEqual(summary['completed'], 1)
         self.assertEqual(summary['thinking_broken'], 1)

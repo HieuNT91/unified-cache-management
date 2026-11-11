@@ -182,45 +182,6 @@ class BoundedLoadTests(unittest.TestCase):
             self.assertIs(store.store, backend)
 
 
-class L40LauncherTimeoutTests(unittest.TestCase):
-    def test_timeout_defaults_and_env_precedence_reach_child_process(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / 'checkout with spaces'
-            launchers = root / 'scripts/launcher'
-            launchers.mkdir(parents=True)
-            for name in ('l40_ruler_thinking_data.sh', 'server_env.sh'):
-                shutil.copyfile(ROOT / 'scripts/launcher' / name, launchers / name)
-            fake = Path(tmp) / 'fake python'
-            # The launcher starts this CPU-only stand-in, which also checks
-            # inheritance into its worker subprocess, without loading vLLM.
-            fake.write_text(f'#!{sys.executable}\n'
-                'import json, os, subprocess, sys\n'
-                'key = "VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"\n'
-                'child = subprocess.check_output([sys.executable, "-c", '
-                '\'import os; print(os.environ.get("VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS", "unset"))\'], text=True).strip()\n'
-                'print(json.dumps([sys.argv[1:], os.environ.get(key, "unset"), child, os.environ.get("CUDA_VISIBLE_DEVICES")]))\n')
-            fake.chmod(0o755)
-            for command in ('resume', 'detach', 'compute-feature'):
-                for tp, file_timeout, inherited, expected in (
-                    (2, None, None, '2400'), (2, '2100', None, '2100'),
-                    (2, '2100', '2500', '2500'), (4, None, None, 'unset'),
-                    (4, '2100', None, '2100')):
-                    with self.subTest(command=command, tp=tp, file=file_timeout, inherited=inherited):
-                        content = f'PYTHON_BIN="{fake}"\nGPU_DEVICES=GPU-fixture\nTP={tp}\n'
-                        if file_timeout is not None:
-                            content += f'VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS={file_timeout}\n'
-                        (root / 'config').mkdir(exist_ok=True)
-                        (root / 'config/.env.l40.thinking').write_text(content)
-                        env = {'PATH': os.environ['PATH']}
-                        if inherited is not None:
-                            env['VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS'] = inherited
-                        result = subprocess.run(['bash', str(launchers / 'l40_ruler_thinking_data.sh'), command],
-                            cwd='/tmp', env=env, text=True, capture_output=True)
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        argv, timeout, child_timeout, cuda = json.loads(result.stdout)
-                        self.assertEqual(argv[1], command)
-                        self.assertEqual((timeout, child_timeout), (expected, expected))
-                        self.assertEqual(cuda, '')
 
 
 if __name__ == '__main__':

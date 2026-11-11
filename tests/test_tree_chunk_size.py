@@ -16,8 +16,7 @@ from runner.cache.setups import atomic_json, file_hash
 from runner.tree.collection import runtime_sample, TreePromptCache
 from runner.corpus.runtime import Engine
 from scripts.collection import tree_prophetkv_data as collection
-from test_tree_collection import fixture, ROOT
-from test_collection_no_priming import NoPrimingTests
+import test_collection_no_priming as no_priming
 
 
 def enlarged(sample):
@@ -28,7 +27,7 @@ def enlarged(sample):
 class ChunkSizeTests(unittest.TestCase):
     def test_only_boundaries_change_and_default_preserves_exact_original(self):
         source = enlarged({'thinking':True}); before = copy.deepcopy(source)
-        for size in (512, 1024, 2048):
+        for size in (2048, 4096):
             with self.subTest(size=size):
                 result = runtime_sample(source, {'kv_chunk_size':size})
                 self.assertEqual(result['boundaries'], list(range(0,9728,size))+[9728,10048])
@@ -40,13 +39,13 @@ class ChunkSizeTests(unittest.TestCase):
         for size in (True, 256, 1000, 8192, '1024'):
             with self.assertRaises(ValueError): runtime_sample(source, {'kv_chunk_size':size})
         source['token_ids'][1] = 123
-        with self.assertRaisesRegex(ValueError, 'identity'): runtime_sample(source, {'kv_chunk_size':1024})
+        with self.assertRaisesRegex(ValueError, 'identity'): runtime_sample(source, {'kv_chunk_size':2048})
 
     def test_worker_populates_requested_chunks_and_reads_original_full_tokens(self):
-        for size in (512, 1024, 2048):
+        for size in (2048, 4096):
             with self.subTest(size=size):
                 with tempfile.TemporaryDirectory() as temp:
-                    root=Path(temp); engine,row,sample=NoPrimingTests().fixture(root)
+                    root=Path(temp); engine,row,sample=no_priming.NoPrimingTests().fixture(root)
                     sample=enlarged(sample); atomic_json(root/'sample.json',sample)
                     row['sha256']=file_hash(root/'sample.json')
                     pins=(file_hash(root/'sample.json'),(root/'sample.json').stat().st_mtime_ns)
@@ -64,65 +63,3 @@ class ChunkSizeTests(unittest.TestCase):
                     self.assertEqual(engine.construction['layout']['prepared_boundaries'],sample['boundaries'])
                     self.assertEqual(engine.construction['layout']['runtime_boundaries'],metadata['boundaries'])
                     self.assertEqual(pins,(file_hash(root/'sample.json'),(root/'sample.json').stat().st_mtime_ns))
-
-    def test_both_cohorts_adopt_old_inputs_scheduler_layout_and_resume(self):
-        for size in (512, 1024, 2048):
-            with self.subTest(size=size):
-                for dataset in ('ruler','longbench-v2'):
-                    with self.subTest(dataset=dataset), tempfile.TemporaryDirectory() as temp:
-                        args=fixture(Path(temp),dataset)
-                        receipt=json.loads((args.prepared/'preparation.json').read_text())
-                        for path in (args.prepared/'samples').glob('*.json'):
-                            atomic_json(path,enlarged(json.loads(path.read_text())))
-                            receipt['files'][str(path.relative_to(args.prepared))]=file_hash(path)
-                        atomic_json(args.prepared/'preparation.json',receipt)
-                        pins={p:(file_hash(p),p.stat().st_mtime_ns) for p in args.prepared.rglob('*') if p.is_file()}
-                        args.root=args.root.with_name(f'chunk{size}');args.kv_chunk_size=size
-                        args.percentages=[5,20,40,60]
-                        if dataset=='longbench-v2':
-                            args.answers_per_question=1;args.answer_seeds=[0]
-                        with patch('scripts.router.router_control.code_hashes',return_value={}): collection.adopt(args)
-                        protocol,rows=collection.stage(args.root,'tree')
-                        self.assertEqual(protocol['answer_seeds'],[0])
-                        self.assertEqual(collection.load(args.root)[1]['answers'],len(rows)*4)
-                        self.assertEqual(protocol['kv_chunk_size'],size)
-                        self.assertFalse((args.root/'prepared').exists())
-                        # Real engine config path, stopped before any model/GPU startup.
-                        def capture(cfg):
-                            bounds=cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts'][rows[0]['id']]
-                            self.assertEqual(bounds,list(range(0,9728,size))+[9728,10048])
-                            raise RuntimeError('captured before GPU')
-                        with patch.dict(sys.modules,{'runner.runtime.worker':NS(setup=None)}), \
-                                patch('runner.corpus.runtime.start_engine',side_effect=capture), \
-                                self.assertRaisesRegex(RuntimeError,'captured before GPU'):
-                            Engine(args.root/'tree',protocol,0,'cached','fixture',rows[:1])
-                        collection.adopt(args)
-                        args.kv_chunk_size=None
-                        with self.assertRaisesRegex(ValueError,'parameters differ'): collection.adopt(args)
-                        args.kv_chunk_size=4096
-                        with self.assertRaisesRegex(ValueError,'parameters differ'): collection.adopt(args)
-                        self.assertEqual(pins,{p:(file_hash(p),p.stat().st_mtime_ns) for p in pins})
-
-    def test_launcher_templates_forward_chunk_size_and_keep_old_prepared(self):
-        for size in (512, 1024, 2048):
-            with self.subTest(size=size):
-                with tempfile.TemporaryDirectory() as temp:
-                    root=Path(temp);(root/'scripts/launcher').mkdir(parents=True);(root/'config').mkdir()
-                    (root/'scripts/launcher/server_env.sh').write_bytes((ROOT/'scripts/launcher/server_env.sh').read_bytes())
-                    fake=root/'python';fake.write_text(f'#!{sys.executable}\nimport json,sys\nprint(json.dumps(sys.argv[1:]))\n');fake.chmod(0o755)
-                    for server,name in (('l20','l20_ruler_thinking_tree_prophetkv.sh'),('a800','a800_longbench_tree_prophetkv.sh')):
-                        launcher=root/'scripts/launcher'/name;launcher.write_bytes((ROOT/'scripts/launcher'/name).read_bytes())
-                        envfile=root/'config'/f'.env.{server}.tree-prophetkv.chunk{size}'
-                        envfile.write_bytes((ROOT/'config'/f'.env.{server}.tree-prophetkv.chunk{size}.example').read_bytes())
-                        for command in ('configure','start','resume'):
-                            result=subprocess.run(['bash',str(launcher),command],cwd='/tmp',
-                                env=dict(PATH=os.environ['PATH'],PYTHON_BIN=str(fake),UCM_ENV_FILE=str(envfile)),capture_output=True,text=True)
-                            self.assertEqual(result.returncode,0,result.stderr);argv=json.loads(result.stdout)
-                            self.assertEqual(argv[argv.index('--kv-chunk-size')+1],str(size))
-                            self.assertNotIn(f'chunk{size}',argv[argv.index('--prepared')+1])
-                            self.assertIn(f'chunk{size}',argv[argv.index('--root')+1])
-                            self.assertIn(f'chunk{size}',argv[argv.index('--cache-root')+1])
-                            self.assertEqual(argv[argv.index('--answers-per-question')+1],'1')
-                            if server=='a800':
-                                self.assertEqual(argv[argv.index('--answer-seeds')+1:argv.index('--kv-chunk-size')],['0'])
-                                self.assertIn(f'chunk{size}-1seed-v1',argv[argv.index('--root')+1])

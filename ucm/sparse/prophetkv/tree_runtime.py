@@ -71,30 +71,31 @@ def probe_sinks(sparse, layer, hidden, residual, positions, ck, cv):
 def route_adatree(sparse, layers, eligible, bounds, group):
     """Reduce the already-computed post-S4 probe, then choose one repair budget.
 
-    The hypothetical 5/60% masks touch only feature tensors. All cache alignment,
+    The hypothetical masks touch only feature tensors. All cache alignment,
     S4 probing and the chosen source-tree repair retain their native behavior.
     """
     from vllm.distributed import tensor_model_parallel_all_reduce
-    from .adatree import compute_features, decide
+    from .adatree import compute_features, decide, feature_names, protocol_for
     if len(layers) != len(sparse.model.layers) or tuple(sparse.scoring_layers) != tuple(range(len(layers))):
         raise RuntimeError('AdaTreeV1 requires native attention from every decoder layer')
     # Each rank owns an equal number of query heads. FP64 averaging matches
     # offline feature extraction without changing the native FP32 score vector.
     raw = torch.stack(layers)[:, bounds[1]:].double()
     raw = tensor_model_parallel_all_reduce(raw) / group.world_size
-    features = compute_features(raw, eligible, bounds)
-    percent = decide(features)
+    chunk_size = getattr(sparse, 'adatree_chunk_size', 4096)
+    features = compute_features(raw, eligible, bounds, chunk_size)
+    percent = decide(features, chunk_size)
     packet = torch.cat((features, percent.reshape(1).double()))
     authoritative = group.broadcast(packet.clone(), src=0) if group.world_size > 1 else packet
     if not torch.equal(packet, authoritative):
         raise RuntimeError('Tensor-parallel AdaTreeV1 features or decision disagree')
-    g5, s60, percent_value = authoritative.tolist()
+    *feature_values, percent_value = authoritative.tolist()
     percent_value = int(percent_value)
     sparse.ratio = percent_value / 100
     sparse.selection_diagnostics.append(dict(
-        kind='adatree_v1', schema='adatree-v1-native-tailspread-v1',
+        kind='adatree_v1', schema=protocol_for(chunk_size), chunk_size=chunk_size,
         request_id=sparse.request.request_id,
-        features=dict(G5_mean=g5, S60_p90=s60),
+        features=dict(zip(feature_names(chunk_size), feature_values)),
         action=f'tree-prophetkv-{percent_value}', ratio=sparse.ratio,
         independent_probes=0, feature_mask_only=True))
 

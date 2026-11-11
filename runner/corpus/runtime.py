@@ -9,10 +9,10 @@ from types import SimpleNamespace
 from runner.cache.setups import atomic_json,file_hash,fingerprint,retirement,start_engine
 from runner.router.measure import verify_retired
 from runner.corpus.dataset import load_attention,match_answer,selection
-from runner.router.tree_policy import actions,decide
+from runner.router.tree_policy import actions
 from runner.router.policy import features_from_arrays
 from runner.router.profiles import config,validate,validate_initialization
-from runner.corpus.records import record_dir,accepted,publish,answer_validation,NATIVE_ANSWER_VALIDATION,PROBE_ANSWER_VALIDATION
+from runner.corpus.records import answer_validation,NATIVE_ANSWER_VALIDATION,PROBE_ANSWER_VALIDATION
 
 PROBE=dict(id='independent-probe',method='prophetkv',ratio=.01)
 
@@ -89,7 +89,7 @@ class Engine:
                 r['id']: context_layout(r) for r in rows}
         start=time.perf_counter();self.llm=start_engine(cfg)
         try:
-            from scripts.router.router_control import code_hashes
+            from runner.operations import code_hashes
             init=dict(model_load_seconds=time.perf_counter()-start,engine_config=cfg,execution_code=code_hashes())
             init['setup']=self.llm.collective_rpc(setup);validate_initialization(init['setup'],self.profile,protocol.get('hardware_profile','server'),tp=self.tp)
             self.analyzer=OutputAnalyzer(self.llm.get_tokenizer())
@@ -235,9 +235,8 @@ class Engine:
             return answer(self, seed)
         from runner.runtime.generation import generate, verify_diagnostics
         from runner.runtime.worker import drain,router_dense_receipt
-        integrated=self.protocol.get('integrated_gpu_router',False) and self.cached
-        if integrated:
-            from runner.gpu_router import drain
+        if self.protocol.get('integrated_gpu_router') or policy is not None:
+            raise ValueError('Learned GPU-router studies are not part of AdaTree runs')
         from runner.reporting.aggregate import evaluation_metadata,score_answer
         mode=answer_validation(self.protocol)
         if mode==NATIVE_ANSWER_VALIDATION and (attention is not None or case=='router'):
@@ -248,14 +247,7 @@ class Engine:
         start=time.perf_counter()
         if self.cached:
             clean_capture(self.llm,self.tp)
-            if integrated:
-                from runner.gpu_router import arm as gpu_arm
-                from runner.runtime.worker import arm
-                sync=self.llm.collective_rpc(gpu_arm,kwargs=dict(request_id=rid,definition=definition,policy=policy,tp=self.tp))
-                if sorted(r['rank'] for r in sync)!=list(range(self.tp)):raise ValueError('Missing GPU router rank')
-                self.llm.collective_rpc(arm,kwargs=dict(request_id=rid,boundaries=self.sample['boundaries'],question_positions=self.sample['question_positions']))
-            else:
-                sync=arm_tree(self.llm,self.sample,rid,definition,tp=self.tp)
+            sync=arm_tree(self.llm,self.sample,rid,definition,tp=self.tp)
         else:sync=[]
         sync_seconds=time.perf_counter()-start
         routing_time=time.perf_counter()-route_started if route_started is not None else overhead+sync_seconds
@@ -266,12 +258,7 @@ class Engine:
             progress_kwargs['progress'] = save_progress
         output,ttft,elapsed=generate(self.llm.llm_engine,self.sample['token_ids'],self.sample['max_output_tokens'],rid,self.sample['thinking'],sample=self.sample, **({'seed': seed} if seed is not None else {}), **progress_kwargs)
         ds=self.llm.collective_rpc(drain)
-        routed_decision=None
-        if policy is not None:
-            from runner.gpu_router import decision
-            routed_decision=decision(ds,policy)
-            definition=actions(self.protocol['actions'])[routed_decision['action']]
-        verify_diagnostics(ds,self.sample,definition['method'],definition['ratio'],self.tp,range(64),gpu_scores=integrated)
+        verify_diagnostics(ds,self.sample,definition['method'],definition['ratio'],self.tp,range(64))
         if dense and output.num_cached_tokens!=0:raise ValueError('Dense request reused KV')
         audits=self.llm.collective_rpc(router_dense_receipt) if dense and self.cached else []
         if not dense and mode==PROBE_ANSWER_VALIDATION:
@@ -290,9 +277,6 @@ class Engine:
             answer_validation=mode,
             output_cap_reached=len(tokens)>=self.sample['max_output_tokens'],max_output_tokens=self.sample['max_output_tokens'],
             dense_receipts=audits,decision_sync=sync,**metrics,**evaluation,accuracy=score_answer(scoring_text(output.outputs[0].text,metrics,evaluation),evaluation))
-        if routed_decision is not None:
-            record.update(decision=routed_decision,independent_probes=0,
-                probe_count_per_rank=[sum(e['kind']=='prophetkv_selection' for e in w['diagnostics']) for w in ds])
         if 'scored_text' in metrics:
             record['timings']['first_answer_content_seconds']=(routing_time+output.first_answer_content_seconds
                 if output.first_answer_content_seconds is not None else None)
@@ -333,30 +317,3 @@ class Engine:
     def close(self):
         self.llm.llm_engine.engine_core.shutdown()
         atomic_json(self.session/'complete.json',dict(complete=True,engine_shutdown=True))
-
-
-def paired(routed,diagnostics,control,control_diagnostics):
-    from runner.router.sweep import selection_signature
-    if any(routed[k]!=control[k] for k in ('prompt_id','group','gpu_uuids','input_sha256','output_token_ids')):
-        raise ValueError('Routed output differs from same-group fixed control')
-    if routed.get('executed_action')!=control.get('executed_action'):raise ValueError('Routed/control actions differ')
-    if selection_signature(diagnostics)!=selection_signature(control_diagnostics):raise ValueError('Routed scores/selections differ from fixed control')
-    return dict(output_tokens_equal=True,scores_masks_equal=True,group=routed['group'])
-
-
-def infer_prompt(engine,tree,folder,baseline,baseline_diagnostics):
-    """Fresh probe -> retirement/features -> decision -> routed answer -> control."""
-    from runner.inputs.layout import validate_policy_protocol
-    validate_policy_protocol(tree,engine.sample)
-    started=time.perf_counter()
-    probe,probe_ds,attention=engine.probe(Path(folder)/'probe')
-    decision=decide(tree,probe['features']);definition=actions(tree['actions'])[decision['action']]
-    overhead=time.perf_counter()-started
-    routed,diagnostics=engine.answer(definition,'router',attention,overhead,route_started=started)
-    if decision['action']=='nocache':control,control_ds=baseline,baseline_diagnostics
-    else:control,control_ds=engine.answer(definition,'control',attention)
-    routed.update(decision=decision,tree_sha256=tree['payload_sha256'],probe=probe,
-                  paired_validation=paired(routed,diagnostics,control,control_ds))
-    atomic_json(Path(folder)/'probe-diagnostics.json',probe_ds)
-    atomic_json(Path(folder)/'control.json',control);atomic_json(Path(folder)/'control-diagnostics.json',control_ds)
-    return routed,diagnostics

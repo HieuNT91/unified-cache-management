@@ -1,1 +1,1 @@
-"""Data tools for reproducible experiments."""
+"""Data tools for AdaTree runs."""

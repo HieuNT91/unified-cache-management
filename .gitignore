@@ -14,7 +14,6 @@ outputs/
 .env
 .env.*
 !/config/.env.example
-!/config/.env.*.example
 
 # Local workspace data, archived files and agent configuration.
 /.analysis/
@@ -22,3 +21,6 @@ outputs/
 /.worktrees/
 /.codex/
 /.aws/
+
+/results/
+/data/

@@ -1,108 +1,52 @@
-# rpkv
+# AdaTreeV1.1
 
-Qwen3-32B inference with original-token RULER 64K inputs and metadata-only
-ProphetKV chunk boundaries. This branch inherits `prophetkv-clean` at `c07faff`
-and its then-uncommitted changes; other worktrees and experiment packages remain
-separate.
+Run **no-cache + AdaTree**, Qwen3-32B BF16, LongBench v2 (503 inputs, seeds 0/1)
+and RULER64K thinking (13×500 inputs, seed 42; answer seed 0). Chunk 4096 uses the
+AdaTreeV1 router; chunk 2048 uses the supplied D60/T5_1/D20 tree. Both methods keep
+8192 thinking / 10000 total output tokens and loop breaker 32..128 repeated 4 times.
 
-Baseline, ProphetKV, selective ProphetKV and router answers use the same prepared
-`token_ids`. Chunking adds no text or special tokens. RULER uses the pinned
-upstream generator/scorer with a native Qwen3 non-thinking adapter; LongBench v2
-keeps its own thinking, output budget and scoring protocol.
-
-For the new twelve-action **TP2 A800/L20 data collection and CPU router training**,
-follow [the deployment guide](docs/deployment/A800_LONGBENCH_DATA.md). A800 primary
-can start independently; configure extra later. The workflow automatically reads
-`config/.env.a800` / `config/.env.l20` and exports portable checksummed datasets. GPU execution
-and real-data training have not been performed for this implementation.
-
-## Code and documentation
-
-| Path | Purpose |
-|---|---|
-| [AGENTS.md](AGENTS.md) | Short mandatory rules for work in this branch |
-| [run.py](run.py), [run.sh](run.sh) | CLI dispatch and environment setup |
-| [TREE_RMASK.md](docs/TREE_RMASK.md) | `tree-prophetkv`: F3 tree selection, S4 probing and masked recomputation |
-| [ADATREE_V1.md](docs/deployment/ADATREE_V1.md) | Fixed S60/G5 routing inside native TreeKV probing and prepared-input debug |
-| [runner/inputs/preparation.py](runner/inputs/preparation.py), [runner/runtime/generation.py](runner/runtime/generation.py), [runner/runtime/single.py](runner/runtime/single.py) | Prompt preparation, shared inference/validation and single-input execution |
-| [runner/](runner/README.md) | Package map, dependency audit, layouts, cache lifecycle, reporting and routers |
-| [ucm/](ucm/) | Connector, storage, sparse attention and runtime integration |
-| [scripts/](scripts/README.md) | Functional directory map, dataset adapters, launchers, controls and router workflows |
-| [scripts/launcher/](scripts/launcher/) | Shell launchers for A800/L20 and router/corpus workflows, plus their shared environment loader |
-| [tests/](tests/) | CPU regressions and opt-in GPU validation |
-| [docs/agents/](docs/agents/architecture.md) | Architecture, invariants, testing and experiment rules |
-| [docs/protocols/](docs/protocols/ruler.md) | RULER and LongBench v2 input/decoding/scoring contracts |
-| [docs/deployment/](docs/deployment/README.md) | A800/L20, `config/.env`, reporting and resume guides |
-| [docs/studies/](docs/studies/README.md) | Historical designs, results and archived agent notes |
-
-Local `inputs/`, `outputs/`, `.cache/` and `.exports/` hold generated material and
-are not source to commit. Existing frozen runtimes and result packages must be
-preserved; see [experiment rules](docs/agents/experiment-rules.md).
-
-The maintained experiment scope is no-cache baseline, ProphetKV and router.
-Attention-feature, GPU-feature, deeper-router and linked action-extension study
-implementations have been removed from `runner/` and `scripts/`. Historical
-designs remain in `docs/studies/`; original frozen experiment code stays with its
-artifacts. Router collection, training, policy export and validation remain, along
-with shared input preparation, scoring, setup/sweep and resume infrastructure.
-
-## Prepare and check on CPU
-
-Run commands from this worktree root. Use the compatible Python environment;
-see [testing](docs/agents/testing.md) for dependencies and the validation matrix.
+Use Python 3.10, a compatible CUDA build of `uc-manager==0.3.0`, and
+`pip install -r requirements.txt`. Model/tokenizer files must be the original
+Qwen3-32B snapshot (`9216db5781bf21249d130ec9da846c4624c16137`). Copy
+`config/.env.example` to `config/.env` and edit paths and GPU UUIDs. Edit `TP`, `NUMBER_GPUS`, `MODEL_NAME`, `CHUNK_SIZE` and hardware profile
+at the top of `run.sh` (TP2/TP4; UUID count must equal NUMBER_GPUS).
 
 ```bash
-export PYTHON_BIN=/path/to/environment/bin/python
-export MODEL_PATH=/path/to/Qwen3-32B
-export RULER_SOURCE="$PWD/.cache/RULER-rpkv"
-export CUDA_VISIBLE_DEVICES=''
-
-"$PYTHON_BIN" scripts/data/ruler.py download --ruler "$RULER_SOURCE"
-"$PYTHON_BIN" scripts/data/ruler.py prepare --ruler "$RULER_SOURCE" \
-  --model "$MODEL_PATH" --output inputs/rpkv-ruler64k
-
-OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 "$PYTHON_BIN" \
-  -m unittest discover -s tests -v
+cp config/.env.example config/.env
+# Edit config/.env and run.sh first.
+bash run.sh download ruler
+bash run.sh download longbench-v2
+bash run.sh prepare ruler
+bash run.sh prepare longbench-v2
+bash run.sh start ruler
+# Wait for completion before reusing the same GPUs:
+bash run.sh start longbench-v2
 ```
 
-Default RULER preparation is 13 tasks × 500 samples, seed 42, generated as one
-batch per task before sharding. `max_seq_length=65536` includes the complete
-prompt and task output reserve; it does not require exactly 64,000 input tokens.
-For prefix placement, task caps, decoding and scoring, read the
-[RULER protocol](docs/protocols/ruler.md). Use the
-[LongBench v2 protocol](docs/protocols/longbench-v2.md) for that dataset.
+For existing data, point `RULER_PREPARED`/`LONGBENCH_PREPARED` to the original
+prepared folders and skip download/prepare. Inputs stay read-only; both chunk
+sizes preserve identical token IDs. Source folders do not need Git metadata;
+fresh preparation checks asset hashes and package versions. RULER64K follows
+the original 65536 generation bound, not a forced exact 64000-token prompt.
 
-## Inference and deployment
+Set `CHUNK_SIZE=2048` and repeat `start` for the second configuration. Each run
+is isolated in `results/adatree-v1.1/DATASET/chunkSIZE/`. `resume` runs missing
+answers; `stop` stops only that run's verified owned processes. Reusing an
+existing run requires the same configuration; set a new RUN_NAME for a new run.
 
-The public modes include `baseline`, `prophetkv`, `selective_prophetkv`, `router`,
-[`tree-prophetkv`](docs/TREE_RMASK.md) and
-[`adatree-v1`](docs/deployment/ADATREE_V1.md). AdaTreeV1 selects TreeKV 5/20/40%
-from native post-S4 attention in the same answer probe. Routing receipts record
-the features and decision, without feature timers or overhead warnings.
-Baseline disables the connector and prefix reuse. Sparse methods share the
-metadata layout and keep the complete question in the fresh suffix. Persistent
-setup builds reusable KV for a collection; temporary sweeps build one prompt's
-KV and reuse it across configurations. See [architecture](docs/agents/architecture.md)
-and [invariants](docs/agents/invariants.md).
+```bash
+python status.py                                      # all runs, full results
+python status.py results/adatree-v1.1/ruler/chunk4096
+python status.py results/adatree-v1.1/ruler/chunk4096 --mode same-input
+# Optional TP4 RTX 4500 Ada smoke, exact existing prompt IDs:
+bash run.sh smoke longbench-v2 longbench-v2-461
+bash run.sh smoke ruler niah_single_1-000
+bash run.sh smoke-status ruler
+bash run.sh smoke-stop ruler
+```
 
-Use the [deployment index](docs/deployment/README.md) for server settings and
-resume. Inherited guides are marked where their original protocol differs from
-`rpkv`; do not use padded historical inputs or automatically reuse old policies.
-GPU execution, process intervention and publishing require applicable user scope.
-
-New fixed-control runs use `answer_validation: native-answer-diagnostics-v1`
-and `expected_probes: 0`. They retain native answer scoring/mask validation,
-construction and priming. Router decision probes remain supported. Existing
-frozen experiments retain their original independent-probe protocol.
-
-There is no separate `verify` launcher command. Launchers read manifests/receipts,
-and each input is checked when used. Runtime metadata, cache readiness, native
-answer diagnostics and retirement checks remain. Resume defaults to `fast`;
-reports summarize committed results without reloading models or replaying saved
-diagnostics/scoring. New fixed-control final reports write `completion.json`
-with `report_validation: committed-results-only-v1`, not an independent audit.
-
-The [GPU control study record](docs/studies/rpkv-controls.md) records completed
-5-sample controls and the separately launched 40-per-task/20-LongBench scope.
-Their evidence does not validate every GPU edge case or the later no-probe source;
-see [testing and evidence limits](docs/agents/testing.md).
+Reports show accuracy, TTFT (seconds), thinking/answer tokens and per-task counts.
+`full` uses all committed answers per method; `same-input` uses the intersection
+of prompt/seed/token identities. TTFT includes online routing and excludes
+independent KV construction; the local smoke profile offloads 4 GiB/rank, so its
+latency is not a server benchmark. Full-dataset results require the full runs.

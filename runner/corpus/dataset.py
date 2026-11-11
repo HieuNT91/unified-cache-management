@@ -1,6 +1,5 @@
 """CPU interfaces for lossless attention archives and measured outcome lookup."""
 import itertools
-import json
 import math
 from pathlib import Path
 import numpy as np
@@ -94,71 +93,3 @@ def match_answer(diagnostics,sample,action,attention,inventory=None,tp=4):
         if (not np.array_equal(np.asarray(event['scores'],dtype=np.float32),attention['scores']) or
                 not np.array_equal(event['selected_positions'],attention['selections'][action])):
             raise ValueError('Sparse answer differs from independent probe replay')
-
-
-class Corpus:
-    """Lazy CPU loader; explicit prepared override supports relocation."""
-    def __init__(self,root,prepared=None):
-        self.root=Path(root)
-        self.protocol=json.loads((self.root/'protocol.json').read_text())
-        self.prepared=Path(prepared or self.protocol['prepared'])
-        self.actions=action_inventory(self.protocol['actions'])
-        from scripts.data.corpus_inputs import prepared_rows
-        if file_hash(self.prepared/'plan.json')!=self.protocol['plan_sha256']:
-            raise ValueError('Prepared corpus plan differs from collection protocol')
-        self.rows={r['id']:r for r in prepared_rows(self.prepared)}
-
-    def inputs(self,prompt_id):
-        row=self.rows[prompt_id];path=relative(self.prepared,row['prepared'])
-        if file_hash(path)!=row['sha256']:raise ValueError('Corrupt prepared input')
-        return json.loads(path.read_text())
-
-    def outcome(self,prompt_id,action):
-        from runner.corpus.records import accepted
-        if action not in self.actions:raise ValueError('Unknown corpus action')
-        return accepted(self.root,action,self.rows[prompt_id],self.protocol,prepared=self.prepared)
-
-    def probe(self,prompt_id):
-        from runner.corpus.records import accepted
-        return accepted(self.root,'probe',self.rows[prompt_id],self.protocol,prepared=self.prepared)
-
-    def attention(self,prompt_id):
-        from runner.corpus.records import record_dir
-        receipt=self.probe(prompt_id)
-        if receipt is None:raise ValueError('Probe is not accepted')
-        return load_attention(record_dir(self.root,'probe',prompt_id),receipt,self.inputs(prompt_id),self.protocol['actions'])
-
-    def features(self,prompt_id):
-        from runner.router.policy import features_from_arrays
-        sample=self.inputs(prompt_id);attention=self.attention(prompt_id)
-        return features_from_arrays(attention['layers'].astype(np.float64).mean(0),attention['scores'],
-                                    sample['boundaries'][1],sample['boundaries'][-2])
-
-    def snapshot(self):
-        # Freeze visible receipt names first. Publication is immutable and atomic.
-        from runner.corpus.records import record_dir
-        from runner.corpus.records import protocol_identity
-        cases=['probe',*self.actions]
-        visible={(pid,c):record_dir(self.root,c,pid)/'validated.json' for pid in self.rows for c in cases}
-        import fcntl
-        with (self.root/'publication.lock').open('a') as lock:
-            fcntl.flock(lock,fcntl.LOCK_SH)
-            visible={key:file_hash(p) for key,p in visible.items() if p.exists()}
-        complete=[];counts={c:0 for c in cases};pins={}
-        for pid,row in self.rows.items():
-            for path_key,hash_key in (('prepared','sha256'),('raw','raw_sha256')):
-                path=relative(self.prepared,row[path_key])
-                if not path.is_file() or file_hash(path)!=row[hash_key]:raise ValueError('Corrupt accepted preparation')
-            good=True
-            for case in cases:
-                if (pid,case) not in visible:good=False;continue
-                record=self.probe(pid) if case=='probe' else self.outcome(pid,case)
-                if record is None:raise ValueError('Accepted receipt disappeared')
-                path=record_dir(self.root,case,pid)/'validated.json'
-                if file_hash(path)!=visible[pid,case]:raise ValueError('Accepted receipt changed during snapshot')
-                counts[case]+=1;pins[str(path.relative_to(self.root))]=visible[pid,case]
-            if good:complete.append(dict(id=pid,task=row['subtask'],ordinal=row['ordinal'],input_sha256=row['sha256']))
-        return dict(schema='ruler-corpus-snapshot-v1',protocol_sha256=protocol_identity(self.protocol),
-            plan_sha256=self.protocol['plan_sha256'],actions=self.protocol['actions'],samples=complete,
-            acceptance_hashes=pins,counts=dict(planned=2600,prepared=len(self.rows),complete=len(complete),
-            incomplete=len(self.rows)-len(complete),unprepared=2600-len(self.rows),accepted=counts))

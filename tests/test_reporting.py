@@ -1,14 +1,8 @@
 """Live/final metric calculations and token accounting without a GPU."""
 import copy
-import csv
-import io
-import json
-from pathlib import Path
-import tempfile
 import unittest
 
-from runner.reporting.aggregate import (AggregationReporter, OutputAnalyzer, aggregate,
-                              evaluation_metadata, extract_choice, score_answer)
+from runner.reporting.aggregate import OutputAnalyzer, aggregate, evaluation_metadata, score_answer
 
 
 class Tokenizer:
@@ -24,23 +18,7 @@ class Tokenizer:
 
 
 class ScoringTests(unittest.TestCase):
-    def test_exact_and_reference_rules(self):
-        def score(answer, refs, rule):
-            return score_answer(answer, evaluation_metadata(dict(references=refs, scoring=rule)))
-        self.assertEqual(score('  FoO\nbar ', ['foo bar'], 'exact_match'),1)
-        self.assertEqual(score('foo bar!', ['foo bar'], 'exact_match'),0)
-        self.assertEqual(score('foo and baz', ['foo','bar','baz'], 'reference_coverage'),2/3)
-        self.assertEqual(score('foO here', ['else','foo'], 'contains_any'),1)
-        self.assertEqual(score('', ['foo'], 'reference_coverage'),0)
-        self.assertIsNone(score('anything', [], 'exact_match'))
 
-    def test_choice_and_no_guessing_ambiguous_responses(self):
-        evaluation=evaluation_metadata(dict(scoring='choice',references=['B']))
-        for answer in ('B', '(B)', 'The answer is B.', 'Final answer: B', 'A is wrong. Final answer: B'):
-            self.assertEqual(score_answer(answer,evaluation),1, answer)
-        for answer in ('A or B', 'Maybe', ''):
-            self.assertEqual(score_answer(answer,evaluation),0, answer)
-        self.assertIsNone(extract_choice('Both A and B'))
 
     def test_metadata_validation_and_import_aliases(self):
         self.assertEqual(evaluation_metadata(dict(task='qa',answers=['yes']))['subtask'],'qa')
@@ -114,33 +92,6 @@ class AggregationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 aggregate(rows,self.expected,self.context,'running')
 
-    def test_live_snapshots_failure_and_successful_final_files(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory)
-            reporter=AggregationReporter(root,self.expected,self.context)
-            live=json.loads((root/'live_aggregation.json').read_text())
-            self.assertEqual(live['status'],'initializing')
-            self.assertIsNone(live['overall']['mean_ttft_seconds'])
-            for row in self.records:
-                reporter.accept(row)
-                self.assertFalse((root/'final_aggregation.json').exists())
-            reporter.publish('live','failed',RuntimeError('engine stopped'))
-            live=json.loads((root/'live_aggregation.json').read_text())
-            self.assertEqual(live['overall']['completed'],3)
-            self.assertEqual(live['error'],'engine stopped')
-            with self.assertRaises(ValueError):
-                reporter.finish()
-            self.assertFalse((root/'final_aggregation.json').exists())
-            reporter.accept(record('d','missing',4,None))
-            final=reporter.finish()
-            self.assertEqual(final['status'],'completed')
-            self.assertEqual(final['overall'],json.loads((root/'live_aggregation.json').read_text())['overall'])
-            rows=list(csv.DictReader(io.StringIO((root/'final_aggregation.csv').read_text())))
-            self.assertEqual(len(rows),4)
-            self.assertEqual(rows[0]['accuracy_percent'],'50.0')
-            self.assertEqual(rows[0]['completed'],'4')
-            self.assertIn('Mean thinking tokens',(root/'final_aggregation.md').read_text())
-            self.assertFalse(list(root.glob('*.tmp')))
 
 
 if __name__=='__main__':

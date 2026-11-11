@@ -28,10 +28,11 @@ def answer_details(result, sample, tokenizer, ttft_seconds):
     return dict(metrics=metrics, output_cap_reached=capped, timings=timing)
 
 
-def validate_routing(workers, sample, request_id, tp):
+def validate_routing(workers, sample, request_id, tp, chunk_size=4096):
     """Check all ranks and replay the selected native TreeKV action."""
     from runner.runtime.generation import verify_diagnostics
-    from ucm.sparse.prophetkv.adatree import route_features
+    from ucm.sparse.prophetkv.adatree import route_features, feature_names, protocol_for
+    names, schema = feature_names(chunk_size), protocol_for(chunk_size)
     if sorted(worker.get('rank', -1) for worker in workers) != list(range(tp)):
         raise RuntimeError('Missing AdaTreeV1 tensor-parallel rank')
     common = None
@@ -42,14 +43,15 @@ def validate_routing(workers, sample, request_id, tp):
             raise RuntimeError('AdaTreeV1 requires exactly one integrated routing event and native probe')
         event = events[0]
         features = event.get('features')
-        if not isinstance(features, dict) or set(features) != {'G5_mean', 'S60_p90'}:
+        if not isinstance(features, dict) or set(features) != set(names):
             raise RuntimeError('Invalid AdaTreeV1 feature receipt')
         try:
-            action = route_features(**features)
+            action = route_features(**features, chunk_size=chunk_size)
         except (TypeError, ValueError) as error:
             raise RuntimeError('Invalid AdaTreeV1 feature values') from error
         ratio = int(action.rsplit('-', 1)[1]) / 100
-        if (event.get('schema') != SCHEMA or event.get('request_id') != request_id
+        if (event.get('schema') != schema or event.get('request_id') != request_id
+                or event.get('chunk_size', 4096) != chunk_size
                 or event.get('action') != action or event.get('ratio') != ratio
                 or event.get('independent_probes') != 0 or event.get('feature_mask_only') is not True
                 or selections[0].get('request_id') != request_id):
@@ -61,7 +63,8 @@ def validate_routing(workers, sample, request_id, tp):
     if common is None:
         raise RuntimeError('Missing AdaTreeV1 routing event')
     verify_diagnostics(workers, sample, 'tree-prophetkv', common['ratio'], tp, range(64))
-    return dict(schema=SCHEMA, **common, request_id=request_id, independent_probes=0,
+    return dict(schema=schema, **common, **({'chunk_size': chunk_size} if chunk_size != 4096 else {}),
+                request_id=request_id, independent_probes=0,
                 feature_mask_only=True, included_in_native_probe=True)
 
 
@@ -79,6 +82,7 @@ def answer(engine, seed, *, baseline=False):
     from runner.runtime.output_budget import BUDGETS as TOTAL_BUDGETS
 
     sample = generation_sample(engine.sample, engine.protocol)
+    chunk_size = engine.protocol.get('kv_chunk_size') or 4096
     generation_args = {}
     if engine.protocol.get('answer_generation'):
         generation_args['loop_breaker'] = engine.protocol['answer_generation']['loop_breaker']
@@ -88,7 +92,8 @@ def answer(engine, seed, *, baseline=False):
     if not baseline:
         clean_capture(engine.llm, engine.tp)
         started = time.perf_counter()
-        sync = engine.llm.collective_rpc(configure, kwargs=dict(method=METHOD, ratio=None))
+        sync = engine.llm.collective_rpc(configure, kwargs=dict(method=METHOD, ratio=None,
+                                                              adatree_chunk_size=chunk_size))
         if sorted(value.get('rank', -1) for value in sync) != list(range(engine.tp)):
             raise RuntimeError('Missing AdaTreeV1 configuration rank')
         engine.llm.collective_rpc(arm, kwargs=dict(request_id=rid,
@@ -109,7 +114,7 @@ def answer(engine, seed, *, baseline=False):
             raise ValueError('No-cache answer reused KV')
         routing = None
     else:
-        routing = validate_routing(diagnostics, sample, rid, engine.tp)
+        routing = validate_routing(diagnostics, sample, rid, engine.tp, chunk_size=chunk_size)
     retired = verify_retired(engine.llm, engine.tp, rid, None if baseline else engine.scheduler)
     if not baseline:
         engine.pc.unchanged()
@@ -151,15 +156,18 @@ def answer(engine, seed, *, baseline=False):
 def validate_record(protocol, result):
     """Cheap resume validation; native diagnostics are checked at execution."""
     from runner.tree.collection import inventory
-    from ucm.sparse.prophetkv.adatree import route_features
-    if METHOD not in inventory(protocol) or protocol.get('adaptive_routing') != SCHEMA:
+    from ucm.sparse.prophetkv.adatree import route_features, feature_names, protocol_for
+    chunk_size = protocol.get('kv_chunk_size') or 4096
+    schema = protocol_for(chunk_size)
+    if METHOD not in inventory(protocol) or protocol.get('adaptive_routing') != schema:
         raise ValueError('AdaTreeV1 record requires its declared collection protocol')
     routing = result.get('routing', {})
     features = routing.get('features', {})
-    if set(features) != {'G5_mean', 'S60_p90'}:
+    if set(features) != set(feature_names(chunk_size)):
         raise ValueError('Missing AdaTreeV1 features')
-    action = route_features(**features)
-    if (routing.get('schema') != SCHEMA or routing.get('action') != action
+    action = route_features(**features, chunk_size=chunk_size)
+    if (routing.get('schema') != schema or routing.get('action') != action
+            or routing.get('chunk_size', 4096) != chunk_size
             or result.get('executed_action') != action
             or routing.get('ratio') != int(action.rsplit('-', 1)[1])/100
             or routing.get('independent_probes') != 0 or result.get('independent_probes') != 0
@@ -167,40 +175,6 @@ def validate_record(protocol, result):
             or routing.get('included_in_native_probe') is not True
             or not routing.get('request_id')):
         raise ValueError('Accepted AdaTreeV1 routing decision changed')
-
-
-def baseline_receipt(base, settings, rows):
-    """Adopt existing accepted no-cache answers once, without copying any artifact."""
-    import json
-    from pathlib import Path
-    from runner.cache.setups import file_hash
-    from scripts.reporting.experiment_task_breakdown import copied_baseline
-    pins = {}
-    source = Path(settings['baseline_source'])
-    values = copied_baseline(base, settings, rows, settings, {}, pins, source=source)['nocache']
-    expected = {json.dumps([r['id'], seed]): r['token_sha256'] for r in rows for seed in (0, 1)}
-    if len(values) != len(expected) or {v['prompt_id'] for v in values} != set(expected):
-        raise ValueError('Existing no-cache must contain all prepared inputs at seeds 0/1')
-    if any(v['token_sha256'] != expected[v['prompt_id']] for v in values):
-        raise ValueError('No-cache token IDs differ from exact prepared inputs')
-    if any(file_hash(path) != digest for path, digest in pins.items()):
-        raise ValueError('Baseline changed during adoption')
-    # Normal resume checks metadata only, accepted answers remain under their own receipts.
-    metadata = {str(path.relative_to(source)): digest for path, digest in pins.items()
-                if path.name != 'validated.json'}
-    return dict(source=str(source), answers=len(values), answer_seeds=[0, 1], metadata=metadata)
-
-
-def check_baseline_metadata(settings):
-    from pathlib import Path
-    from runner.cache.setups import file_hash
-    from runner.corpus.dataset import relative
-    receipt = settings['baseline_receipt']
-    source = Path(settings['baseline_source'])
-    if receipt['source'] != str(source) or receipt['answer_seeds'] != [0, 1] or receipt['answers'] != 1006:
-        raise ValueError('Baseline reuse receipt changed')
-    if any(file_hash(relative(source, name)) != digest for name, digest in receipt['metadata'].items()):
-        raise ValueError('Original baseline metadata changed')
 
 
 def answer_generation():
@@ -213,10 +187,12 @@ def answer_generation():
 
 def generation_policy(prepared_policy, protocol):
     from runner.runtime.output_budget import PROTOCOL as PREPARED, validate_policy
+    from ucm.sparse.prophetkv.adatree import protocol_for
     override = protocol.get('answer_generation')
     if override is None:
         return prepared_policy
-    if (protocol.get('adaptive_routing') != SCHEMA or override != answer_generation()
+    if (protocol.get('adaptive_routing') != protocol_for(protocol.get('kv_chunk_size') or 4096)
+            or override != answer_generation()
             or prepared_policy.get('protocol') != PREPARED):
         raise ValueError('Invalid AdaTreeV1 generation override')
     validate_policy(prepared_policy)

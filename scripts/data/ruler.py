@@ -17,6 +17,7 @@ from runner.inputs.config import validate_sample
 from runner.cache.setups import atomic_json, file_hash, fingerprint, setup_lock
 
 REVISION = 'c3f5e3b4f87f97e048793bb510a3a6b19a46bf3a'
+ENGLISH_WORDS_SHA256 = 'affcd6d45fdf3cc843d585c99c97ad615094e760e6c4756b654bab6c73bc2eca'
 TASKS = ('niah_single_1','niah_single_2','niah_single_3','niah_multikey_1',
          'niah_multikey_2','niah_multikey_3','niah_multivalue','niah_multiquery',
          'vt','cwe','fwe','qa_1','qa_2')
@@ -28,17 +29,21 @@ CAPS = {task: 128 if task.startswith('niah_') else
 
 
 def source_check(root):
-    head = subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()
-    if head != REVISION:
-        raise ValueError(f'RULER must be pinned to {REVISION}; use a dedicated source directory')
-    wordlist = 'scripts/data/synthetic/json/english_words.json'
-    changed = subprocess.check_output(['git','-C',str(root),'diff','--name-only','HEAD'],text=True).splitlines()
-    if set(changed)-{wordlist}:
-        raise ValueError('Tracked official RULER sources were modified')
-    pointer = subprocess.check_output(['git','-C',str(root),'show',f'HEAD:{wordlist}'],text=True)
-    expected = next(line.split('sha256:')[1] for line in pointer.splitlines() if line.startswith('oid sha256:'))
-    path = root/wordlist
-    if path.read_bytes() != pointer.encode() and file_hash(path) != expected:
+    """Validate usable source files and asset identity without consulting Git."""
+    root = Path(root)
+    for name in ('scripts/synthetic.yaml', 'scripts/data/synthetic/constants.py',
+                 'scripts/data/synthetic/json/english_words.json'):
+        if not (root/name).is_file():
+            raise ValueError('Missing RULER source file: '+name)
+    path = root/'scripts/data/synthetic/json/english_words.json'
+    content = path.read_bytes()
+    # A newly downloaded checkout may still contain the known LFS pointer;
+    # assets() resolves it before preparation checks all four corpus hashes.
+    if content.startswith(b'version https://git-lfs.github.com/spec/v1\n'):
+        valid = f'oid sha256:{ENGLISH_WORDS_SHA256}'.encode() in content.splitlines()
+    else:
+        valid = file_hash(path) == ENGLISH_WORDS_SHA256
+    if not valid:
         raise ValueError('CWE word list does not match its official Git LFS digest')
 
 

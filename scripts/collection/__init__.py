@@ -1,1 +1,1 @@
-"""Collection tools for reproducible experiments."""
+"""Collection tools for AdaTree runs."""

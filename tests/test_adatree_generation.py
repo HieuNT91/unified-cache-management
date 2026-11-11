@@ -93,16 +93,9 @@ class AdaTreeGenerationTests(unittest.TestCase):
             output_budget.validate_policy(dict(effective[KEY],output_reserve=8192))
 
     def adopt(self, root):
-        args=fixture(root,'longbench-v2')
-        args.adatree_v1=True;args.adatree_thinking_8192=True;args.followup_nocache=True
-        args.percentages=[5,20,40];args.answer_seeds=[0,1]
-        args.baseline_source=None
-        receipt=collection.read(args.prepared/'preparation.json')
-        for path in (args.prepared/'samples').glob('lb-*.json'):
-            atomic_json(path,enlarged(collection.read(path)))
-            receipt['files'][str(path.relative_to(args.prepared))]=file_hash(path)
-        atomic_json(args.prepared/'preparation.json',receipt)
-        with patch('scripts.router.router_control.code_hashes',return_value={}): collection.adopt(args)
+        args = fixture(root, 'longbench-v2')
+        with patch('runner.operations.code_hashes', return_value={}):
+            collection.adopt(args)
         return args
 
     def test_plan_is_router_then_baseline_and_never_mixes_old_run(self):
@@ -111,13 +104,13 @@ class AdaTreeGenerationTests(unittest.TestCase):
             settings,plan,rows=collection.load(args.root)
             protocol,_=collection.stage(args.root,'tree')
             self.assertEqual(settings['phase_order'],['cached','baseline'])
-            self.assertEqual((plan['answers'],plan['baseline_answers'],plan['probes']),(2012,1006,0))
+            self.assertEqual((plan['answers'],plan['baseline_answers'],plan['probes']),(4,2,0))
             self.assertEqual(protocol['scheduled_actions'],['adatree-v1','nocache'])
             self.assertEqual(protocol['answer_generation'],answer_generation())
             self.assertNotIn('baseline_receipt',settings)
             self.assertEqual(rows[0][KEY]['thinking_cap'],15000)
             self.assertEqual(generation_sample(collection.read(args.prepared/rows[0]['prepared']),protocol)[KEY]['thinking_cap'],8192)
-            args.adatree_thinking_8192=False;args.followup_nocache=False;args.baseline_source=Path(temp)/'old-baseline'
+            args.kv_chunk_size = 2048; args.percentages = [5,20,60]
             with self.assertRaisesRegex(ValueError,'parameters differ'): collection.adopt(args)
             for fail in (False,True):
                 with patch.object(collection.control,'execute_phase',side_effect=RuntimeError('cached failed') if fail else None) as execute, \
@@ -186,56 +179,6 @@ class AdaTreeGenerationTests(unittest.TestCase):
                     routing.assert_called_once();verify.assert_not_called()
         self.assertEqual(sample,before)
 
-    def test_new_baseline_policy_is_validated_and_reported_separately(self):
-        from test_baseline_breakdown import fixture as report_fixture, commit
-        from scripts.reporting import experiment_task_breakdown as report
-        from runner.tree.collection import collection_actions
-        from runner.tree.prophetkv import PROTOCOL as TREE_PROTOCOL
-        from runner.cache.setups import fingerprint
-        from runner.runtime.thinking_loop import CONFIG as OLD_LOOP
-        with tempfile.TemporaryDirectory() as temp:
-            base=Path(temp);target,old=report_fixture(base,'longbench-v2')
-            commit(old,'nocache',ttft=999.)
-            settings=report.read(base/'settings.json')
-            settings.update(self.protocol(),followup_nocache=True,phase_order=['cached','baseline'],
-                            percentages=[5,20,40],tree_protocol=TREE_PROTOCOL)
-            atomic_json(base/'settings.json',settings)
-            plan=report.read(base/'plan.json');plan['settings_sha256']=file_hash(base/'settings.json')
-            atomic_json(base/'plan.json',plan)
-            protocol=dict(target[1],**settings)
-            protocol.update(actions=collection_actions(settings),scheduled_actions=['adatree-v1','nocache'],plan_sha256=fingerprint(plan))
-            atomic_json(base/'tree/protocol.json',protocol)
-            for method in ('adatree-v1','nocache'):
-                commit((target[0],protocol,target[2]),method,ttft=2. if method=='adatree-v1' else 4.)
-                folder=target[0]/'records'/method/target[2][0]['id']/'seed-0'
-                record=report.read(folder/'result.json');original=record[KEY]
-                effective=generation_policy(original,protocol)
-                state=BudgetState(effective,ADATREE_CONFIG).consume(record['output_token_ids'])
-                record.update(state.metrics(Tokenizer()),prepared_generation_policy=original,
-                              max_output_tokens=10000,**{KEY:effective})
-                if method=='adatree-v1':
-                    record.update(executed_action='tree-prophetkv-5',independent_probes=0,
-                        routing=dict(schema=SCHEMA,features={'S60_p90':.7,'G5_mean':.3},action='tree-prophetkv-5',
-                            ratio=.05,independent_probes=0,feature_mask_only=True,included_in_native_probe=True,request_id='request'))
-                atomic_json(folder/'result.json',record)
-                receipt=report.read(folder/'validated.json');receipt['files']['result.json']=file_hash(folder/'result.json')
-                atomic_json(folder/'validated.json',receipt)
-                if method=='adatree-v1':
-                    _,tables,matching=report.report(base)
-                    self.assertEqual(matching['matched_samples'],1)
-                    self.assertEqual(tables['overall']['nocache']['mean_ttft_seconds'],999.)
-                    self.assertEqual(tables['followup/overall']['nocache-followup']['completed'],0)
-            text,tables,matching=report.report(base)
-            self.assertEqual(matching['matched_samples'],1)
-            self.assertEqual(tables['overall']['nocache']['mean_ttft_seconds'],999.)
-            self.assertEqual(tables['followup/overall']['nocache-followup']['mean_ttft_seconds'],4.)
-            self.assertIn('same new generation policy',text)
-            self.assertIn('Baseline keeps its original',text)
-            self.assertIn('budgets differ',text)
-            record['thinking_loop_breaker']=OLD_LOOP
-            atomic_json(folder/'result.json',record)
-            receipt['files']['result.json']=file_hash(folder/'result.json');atomic_json(folder/'validated.json',receipt)
-            with self.assertRaisesRegex(ValueError,'loop breaker differs'): report.report(base)
 
     def test_vllm_wire_scheduler_keeps_answer_after_8192_and_stops_at_10000(self):
         from vllm import SamplingParams

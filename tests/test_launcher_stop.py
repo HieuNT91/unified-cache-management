@@ -25,7 +25,7 @@ class LauncherStopTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(value))
 
-    def launch(self, controller='corpus_control.py', role='supervise', code=None, root=None):
+    def launch(self, controller='tree_prophetkv_data.py', role='supervise', code=None, root=None):
         command = [sys.executable, '-c', code or 'import time; time.sleep(120)',
                    controller, role, '--root', str(root or self.root)]
         child = subprocess.Popen(command, start_new_session=True, stdin=subprocess.DEVNULL,
@@ -49,14 +49,14 @@ class LauncherStopTests(unittest.TestCase):
 
     def test_stop_supervisor_worker_and_preserve_data_and_unrelated_process(self):
         supervisor, saved = self.launch()
-        worker, worker_saved = self.launch('runner.corpus.collect', 'worker')
+        worker, worker_saved = self.launch('tree_prophetkv_data.py', 'worker')
         unrelated, _ = self.launch(root=self.root/'other')
         self.write(self.root/'supervisor.json', dict(saved, state='running'))
         self.write(self.root/'processes/attempt.json', worker_saved)
         for name in ('records/answer.json', 'cache/shard', 'protocol.json'):
             self.write(self.root/name, {'preserve': name})
         original = {p: p.read_bytes() for p in self.root.rglob('*') if p.is_file()}
-        result = control.stop(self.root, 'corpus_control.py')
+        result = control.stop(self.root, 'tree_prophetkv_data.py')
         supervisor.wait(timeout=5)
         worker.wait(timeout=5)
         self.assertIsNone(unrelated.poll())
@@ -64,35 +64,35 @@ class LauncherStopTests(unittest.TestCase):
         for path, contents in original.items():
             self.assertEqual(path.read_bytes(), contents)
         # A second stop is harmless, including stale receipts for exited PIDs.
-        control.stop(self.root, 'corpus_control.py')
+        control.stop(self.root, 'tree_prophetkv_data.py')
 
-    def test_extension_stop_leaves_base_controller_and_receipts_untouched(self):
+    def test_stage_stop_leaves_sibling_controller_and_receipts_untouched(self):
         base, base_saved = self.launch()
         self.write(self.root/'supervisor.json', base_saved)
-        child, saved = self.launch('corpus_add_ratios.py')
-        state = self.root/'extensions/add5-10'
+        child, saved = self.launch('tree_prophetkv_data.py')
+        state = self.root/'tree'
         self.write(state/'supervisor.json', saved)
-        control.stop(self.root, 'corpus_add_ratios.py', state)
+        control.stop(self.root, 'tree_prophetkv_data.py', state)
         child.wait(timeout=5)
         self.assertIsNone(base.poll())
         self.assertEqual(json.loads((self.root/'supervisor.json').read_text()), base_saved)
         self.assertTrue((state/'stop-receipt.json').exists())
         self.assertFalse((self.root/'stop-receipt.json').exists())
 
-    def test_router_orphan_engine_is_stopped_from_ownership_receipt(self):
+    def test_orphan_engine_is_stopped_from_ownership_receipt(self):
         ready = self.root/'ready'
         code = ('import subprocess,sys,time\nfrom pathlib import Path\n'
                 'p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(120)"])\n'
                 f'Path({str(ready)!r}).write_text(str(p.pid))\n'
                 'time.sleep(120)\n')
-        leader, saved = self.launch('runner.router.sweep', 'worker', code)
+        leader, saved = self.launch('tree_prophetkv_data.py', 'worker', code)
         self.ready(ready)
         orphan = int(ready.read_text())
         self.write(self.root/'sessions/attempt/ownership.json', saved)
         leader.terminate()
         leader.wait(timeout=5)
         self.assertIn(orphan, control.process_table())
-        control.stop(self.root, 'router_control.py')
+        control.stop(self.root, 'tree_prophetkv_data.py')
         self.assertNotIn(orphan, control.process_table())
 
     def test_unpublished_worker_child_is_discovered_before_supervisor_exit(self):
@@ -111,7 +111,7 @@ class LauncherStopTests(unittest.TestCase):
             except ProcessLookupError:
                 pass
         self.addCleanup(cleanup)
-        control.stop(self.root, 'corpus_control.py')
+        control.stop(self.root, 'tree_prophetkv_data.py')
         child.wait(timeout=5)
         self.assertNotIn(worker, control.process_table())
 
@@ -120,12 +120,12 @@ class LauncherStopTests(unittest.TestCase):
         code = ('import signal,time\nfrom pathlib import Path\n'
                 'signal.signal(signal.SIGTERM,signal.SIG_IGN)\n'
                 f'Path({str(ready)!r}).touch()\ntime.sleep(120)')
-        child, saved = self.launch('runner.corpus.collect', 'worker', code)
+        child, saved = self.launch('tree_prophetkv_data.py', 'worker', code)
         self.write(self.root/'processes/attempt.json', saved)
         self.ready(ready)
         wait = control.wait_exit
         with patch.object(control, 'wait_exit', side_effect=lambda rows, seconds: wait(rows, min(seconds, .3))):
-            control.stop(self.root, 'corpus_control.py')
+            control.stop(self.root, 'tree_prophetkv_data.py')
         self.assertEqual(child.wait(timeout=5), -signal.SIGKILL)
 
     def test_changed_pid_identity_is_rejected_without_signalling(self):
@@ -134,7 +134,7 @@ class LauncherStopTests(unittest.TestCase):
         self.write(self.root/'supervisor.json', saved)
         with patch.object(control.os, 'killpg') as kill:
             with self.assertRaisesRegex(RuntimeError, 'identity changed'):
-                control.stop(self.root, 'corpus_control.py')
+                control.stop(self.root, 'tree_prophetkv_data.py')
             kill.assert_not_called()
         self.assertIsNone(child.poll())
 
@@ -143,7 +143,7 @@ class LauncherStopTests(unittest.TestCase):
         self.write(self.root/'supervisor.json', saved)
         with patch.object(control.os, 'killpg') as kill:
             with self.assertRaisesRegex(ValueError, 'another experiment'):
-                control.stop(self.root, 'corpus_control.py')
+                control.stop(self.root, 'tree_prophetkv_data.py')
             kill.assert_not_called()
         self.assertIsNone(child.poll())
 
@@ -151,14 +151,14 @@ class LauncherStopTests(unittest.TestCase):
         with (self.root/'launch.lock').open('a') as handle:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             with self.assertRaises(BlockingIOError):
-                control.stop(self.root, 'corpus_control.py')
+                control.stop(self.root, 'tree_prophetkv_data.py')
         self.assertFalse((self.root/'stop-receipt.json').exists())
 
     def test_configured_idle_stop_and_missing_root(self):
-        control.stop(self.root, 'router_control.py')
+        control.stop(self.root, 'tree_prophetkv_data.py')
         missing = self.root/'missing'
         with self.assertRaises(ValueError):
-            control.stop(missing, 'router_control.py')
+            control.stop(missing, 'tree_prophetkv_data.py')
         self.assertFalse(missing.exists())
 
 

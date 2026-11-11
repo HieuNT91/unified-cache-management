@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run only tree-prophetkv on manually copied, immutable thinking inputs."""
+"""Run fixed AdaTree routing and matching no-cache on immutable inputs."""
 import argparse
 import fcntl
 import json
@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 from runner.corpus.dataset import relative
 from runner.corpus.records import accepted, NATIVE_ANSWER_VALIDATION
 from runner.cache.setups import atomic_json, file_hash, fingerprint
-from runner.tree.collection import SCHEMA, RATIOS, actions, inventory, collection_actions
+from runner.tree.collection import SCHEMA, actions, inventory, collection_actions
 from runner.tree.prophetkv import PROTOCOL, budget
 from runner.router.profiles import validate
 from runner.runtime.thinking_budget import KEY
@@ -29,9 +29,6 @@ ROLE = 'tree'
 
 
 def validate_rows(settings, rows):
-    if settings.get('local_subset'):
-        from scripts.tree_prophetkv_local import validate_rows as validate_local
-        return validate_local(settings, rows)
     ruler = settings['dataset'] == 'ruler'
     local = settings.get('local_validation', False)
     selected = settings.get('validation_prompt_ids', [])
@@ -87,26 +84,36 @@ def protocol_for(settings, plan):
 
 
 def adopt(args):
-    from scripts.router.router_control import code_hashes
+    from runner.operations import code_hashes
     ruler = args.dataset == 'ruler'
     local = getattr(args, 'local_validation', False)
     selected = getattr(args, 'validation_prompt_ids', None)
     if local != bool(selected) or (selected and len(set(selected)) != len(selected)):
         raise ValueError('Local validation requires explicit distinct --validation-prompt-ids')
-    tp = 4 if local else 2
-    if args.dataset not in ('ruler', 'longbench-v2') or args.tp != tp or args.seed != 42:
-        raise ValueError('Expected RULER/LongBench v2, TP2 and preparation seed42')
-    if type(args.samples_per_task) is not int or args.samples_per_task < 1:
-        raise ValueError('Expected a positive RULER sample count')
-    definitions = actions(args.percentages)
-    groups = control.resolve_groups(args.devices, 4 if local else 10 if ruler else 4, tp=tp, query_inventory=False)
+    tp = args.tp
+    if args.dataset not in ('ruler', 'longbench-v2') or tp not in (2, 4) or args.seed != 42:
+        raise ValueError('Expected RULER/LongBench v2, TP2 or TP4 and preparation seed42')
+    if args.samples_per_task != 500:
+        raise ValueError('This run requires the original 500/task RULER preparation')
+    percentages = args.percentages or ([5, 20, 60] if args.kv_chunk_size == 2048 else [5, 20, 40])
+    definitions = actions(percentages)
+    number_gpus = getattr(args, 'number_gpus', None)
+    if type(number_gpus) is not int or number_gpus < tp or number_gpus % tp:
+        raise ValueError('Number of GPUs must be a positive multiple of TP')
+    groups = control.resolve_groups(args.devices, number_gpus, tp=tp, query_inventory=False)
+    profile = getattr(args, 'hardware_profile', None)
+    profile = profile or ('rtx4500ada-tree-validation' if local else 'l20-tp2' if ruler else 'server')
+    if local and (tp != 4 or len(groups) != 1 or profile != 'rtx4500ada-tree-validation'):
+        raise ValueError('Local smoke validation requires one TP4 RTX 4500 Ada group')
+    from runner.router.profiles import hardware_profile
+    hardware_profile(profile, 'ruler-thinking' if ruler else 'longbench-v2', tp)
     settings = dict(schema=SCHEMA, dataset=args.dataset, tree_protocol=PROTOCOL,
         execution_profile='ruler-thinking' if ruler else 'longbench-v2',
         evaluation_protocol=RULER_PROTOCOL if ruler else LONGBENCH_PROTOCOL,
         model=str(args.model), prepared=str(args.prepared), cache_root=str(args.cache_root),
-        tp=tp, hardware_profile='rtx4500ada-tree-validation' if local else 'l20-tp2' if ruler else 'server', groups=groups,
+        tp=tp, hardware_profile=profile, groups=groups,
         samples_per_task=args.samples_per_task if ruler else None, seed=42,
-        percentages=args.percentages, watchdog_seconds=7200,
+        percentages=percentages, watchdog_seconds=7200,
         **declaration(args.dataset, args.answers_per_question, thinking=True))
     selected_seeds = getattr(args, 'answer_seeds', None)
     if selected_seeds is not None:
@@ -121,35 +128,18 @@ def adopt(args):
     settings['phase_order'] = ['cached']
     if local:
         settings.update(local_validation=True, validation_prompt_ids=selected)
-    adaptive = getattr(args, 'adatree_v1', False)
-    baseline_source = getattr(args, 'baseline_source', None)
-    if adaptive:
-        from runner.router.adatree import SCHEMA as ADATREE_SCHEMA
-        if local and (not ruler or baseline_source is not None or getattr(args, 'followup_nocache', False)):
-            raise ValueError('Local AdaTreeV1 runs only prepared RULER at seed0, without baseline collection')
-        if not local and baseline_source is None and not getattr(args, 'followup_nocache', False):
-            raise ValueError('A800 AdaTreeV1 requires server TP2 and an existing baseline or follow-up no-cache')
-        settings.update(adaptive_routing=ADATREE_SCHEMA)
-        if baseline_source is not None:
-            settings['baseline_source'] = str(baseline_source)
-        if getattr(args, 'adatree_thinking_8192', False):
-            from runner.router.adatree import answer_generation
-            settings['answer_generation'] = answer_generation()
-        if getattr(args, 'followup_nocache', False):
-            settings.update(followup_nocache=True, phase_order=['cached', 'baseline'])
-        collection_actions(settings)
-        for target in (args.root, args.cache_root):
-            if baseline_source is not None and (target == baseline_source or target in baseline_source.parents or baseline_source in target.parents):
-                raise ValueError('AdaTreeV1 result/cache paths must be separate from baseline source')
-    elif baseline_source is not None:
-        raise ValueError('--baseline-source is only supported with --adatree-v1')
-    elif getattr(args, 'adatree_thinking_8192', False):
-        raise ValueError('--adatree-thinking-8192 requires --adatree-v1')
-    elif getattr(args, 'followup_nocache', False):
-        raise ValueError('--followup-nocache requires --adatree-v1')
+    from ucm.sparse.prophetkv.adatree import protocol_for as routing_protocol
+    from runner.router.adatree import answer_generation
+    settings.update(run_profile='adatree-v1.1', adaptive_routing=routing_protocol(settings.get('kv_chunk_size')),
+                    answer_generation=answer_generation(), followup_nocache=True,
+                    phase_order=['cached', 'baseline'])
+    collection_actions(settings)
     if (args.root/'settings.json').exists():
         old, _, _ = load(args.root)
-        if (any(old.get(k) != v for k, v in settings.items())
+        # Old committed runs keep their original metadata and hashes. Normalize
+        # only the comparison view when resuming the same declared parameters.
+        comparable = dict(old, run_profile=old.get('run_profile', old.get('reproduction')))
+        if (any(comparable.get(k) != v for k, v in settings.items())
                 or old.get('kv_chunk_size') != settings.get('kv_chunk_size')
                 or old.get('answer_generation') != settings.get('answer_generation')
                 or old.get('followup_nocache') != settings.get('followup_nocache')
@@ -208,10 +198,9 @@ def adopt(args):
                       or sample.get('task') != row['subtask']):
             raise ValueError('RULER generation/task provenance differs')
         effective = runtime_sample(sample, settings)
-        if adaptive:
-            from runner.inputs.layout import boundaries_for
-            if sample['boundaries'] != boundaries_for(len(sample['token_ids']), min(sample['question_positions']), 4096):
-                raise ValueError('AdaTreeV1 requires the unchanged prepared chunk4096 layout')
+        from runner.inputs.layout import boundaries_for
+        if sample['boundaries'] != boundaries_for(len(sample['token_ids']), min(sample['question_positions']), 4096):
+            raise ValueError('AdaTreeV1 requires the unchanged prepared chunk4096 layout')
         for definition in definitions:
             try:
                 budget(effective['boundaries'], definition['ratio'])
@@ -220,8 +209,7 @@ def adopt(args):
         value = dict(row, ordinal=sample['source_row'], sha256=digest, dataset=args.dataset,
                      input_tokens=len(sample['token_ids']), evaluation_protocol=sample['evaluation_protocol'],
                      **{KEY: sample[KEY]})
-        if adaptive:
-            value['token_sha256'] = sample['token_sha256']
+        value['token_sha256'] = sample['token_sha256']
         if not ruler:
             metadata = sample['source_metadata']
             if (metadata['length'] not in ('short', 'medium', 'long')
@@ -231,9 +219,6 @@ def adopt(args):
         rows.append(value)
     validate_rows(settings, rows)
     rows.sort(key=lambda r: (r['ordinal'], r['subtask']))
-    if adaptive and not local and not settings.get('followup_nocache'):
-        from runner.router.adatree import baseline_receipt
-        settings['baseline_receipt'] = baseline_receipt(args.root, settings, rows)
     if file_hash(receipt_path) != receipt_hash or file_hash(args.prepared/'manifest.jsonl') != manifest_hash:
         raise ValueError('Prepared receipts changed during adoption')
     definitions = collection_actions(settings)
@@ -257,8 +242,9 @@ def adopt(args):
 
 def load(base):
     base = Path(base); settings = read(base/'settings.json'); plan = read(base/'plan.json')
-    if settings.get('schema') != SCHEMA or plan.get('schema') != SCHEMA:
-        raise ValueError('Not a tree-prophetkv collection')
+    if (settings.get('schema') != SCHEMA or plan.get('schema') != SCHEMA
+            or settings.get('run_profile', settings.get('reproduction')) != 'adatree-v1.1'):
+        raise ValueError('Not an AdaTreeV1.1 run')
     if (file_hash(base/'settings.json') != plan['settings_sha256']
             or file_hash(base/'rows.json') != plan['rows_sha256']
             or file_hash(Path(settings['prepared'])/'preparation.json') != plan['preparation_sha256']
@@ -266,9 +252,6 @@ def load(base):
         raise ValueError('Run metadata or prepared receipts changed')
     rows = read(base/'rows.json'); validate_rows(settings, rows)
     expected = collection_actions(settings)
-    if settings.get('adaptive_routing') and not settings.get('local_validation') and not settings.get('followup_nocache'):
-        from runner.router.adatree import check_baseline_metadata
-        check_baseline_metadata(settings)
     if (plan['actions'] != expected or plan['answers'] != len(rows)*len(expected)*len(seeds(settings))
             or plan['probes'] != 0 or plan['baseline_answers'] != (len(rows)*len(seeds(settings)) if settings.get('followup_nocache') else 0)
             or plan['samples'] != len(rows)
@@ -321,7 +304,7 @@ def report(base, final=False):
     text = '\n'.join(lines)+'\n'; (base/('final.md' if final else 'status.md')).write_text(text)
     print(text, flush=True)
     if settings.get('adaptive_routing'):
-        from scripts.reporting.experiment_task_breakdown import report as paired_report
+        from runner.reporting.run import report as paired_report
         paired_text, _, _ = paired_report(base)
         (base/('comparison-final.md' if final else 'comparison.md')).write_text(paired_text)
         print(paired_text, flush=True)
@@ -357,6 +340,8 @@ def main():
     p.add_argument('--dataset', choices=('ruler', 'longbench-v2'))
     p.add_argument('--devices', default='')
     p.add_argument('--tp', type=int, default=2)
+    p.add_argument('--number-gpus', type=int)
+    p.add_argument('--hardware-profile', choices=('server', 'l20-tp2', 'l40-tp2', 'l40-tp4', 'rtx4500ada-tree-validation'))
     p.add_argument('--local-validation', action='store_true', help='Explicit TP4 RTX 4500 Ada test only; never a server default')
     p.add_argument('--validation-prompt-ids', nargs='+')
     p.add_argument('--seed', type=int, default=42)
@@ -364,14 +349,13 @@ def main():
     p.add_argument('--answers-per-question', type=int, default=1)
     p.add_argument('--answer-seeds', type=int, nargs='+',
                    help='LongBench tree only: distinct ascending seeds from prepared provenance; count must match answers-per-question')
-    p.add_argument('--kv-chunk-size', type=int, choices=(512, 1024, 2048, 4096),
+    p.add_argument('--kv-chunk-size', type=int, choices=(2048, 4096), default=4096,
                    help='Derive runtime chunk boundaries from unchanged prepared tokens; requires a new experiment')
-    p.add_argument('--percentages', type=int, nargs='+', default=list(RATIOS))
+    p.add_argument('--percentages', type=int, nargs='+', help='Fixed leaf inventory, determined by chunk size')
     p.add_argument('--adatree-v1', action='store_true', help='Only the fixed native-probe router, seeds 0/1')
     p.add_argument('--adatree-thinking-8192', action='store_true',
                    help='8192 thinking / 10000 total; repetition patterns 32..128 repeated 4 times')
     p.add_argument('--followup-nocache', action='store_true', help='After all router engines exit, run no-cache with the same new policy')
-    p.add_argument('--baseline-source', type=Path, help='Read-only existing no-cache experiment metadata/results')
     p.add_argument('--role', choices=(ROLE,), default=ROLE)
     p.add_argument('--phase', choices=('cached', 'baseline'))
     p.add_argument('--attempt'); p.add_argument('--group', type=int, default=0)
@@ -396,7 +380,6 @@ def main():
         supervise(args.root)
     elif args.command == 'stop':
         from scripts.launcher.launcher_stop import stop
-        stage(args.root, ROLE)
         stop(args.root, Path(__file__).name, args.root/ROLE)
     else:
         report(args.root)
