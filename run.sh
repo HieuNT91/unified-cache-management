@@ -19,18 +19,16 @@ CODE_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "$CODE_ROOT/scripts/launcher/server_env.sh"
 UCM_ENV_FILE="${UCM_ENV_FILE:-$CODE_ROOT/config/.env}"
 ucm_load_server_env "$CODE_ROOT"
-command="${1:?Usage: run.sh download|prepare|configure|start|resume|stop|status|smoke|smoke-stop|smoke-status DATASET [PROMPT_ID ...]}"
+command="${1:?Usage: run.sh configure|start|resume|stop|status|smoke|smoke-stop|smoke-status DATASET [PROMPT_ID ...]}"
 dataset="${2:?Dataset must be ruler or longbench-v2}"
 shift 2
 [[ "$MODEL_NAME" == Qwen3-32B ]] || { echo 'This run supports Qwen3-32B only.' >&2; exit 2; }
 [[ "$CHUNK_SIZE" == 4096 || "$CHUNK_SIZE" == 2048 ]] || { echo 'CHUNK_SIZE must be 4096 or 2048.' >&2; exit 2; }
 case "$dataset" in
   ruler)
-    source_path="${RULER_PATH:-}"
     prepared="${RULER_PREPARED:-}"
     seeds=() ;;
   longbench-v2)
-    source_path="${LONGBENCH_DATA:-}"
     prepared="${LONGBENCH_PREPARED:-}"
     seeds=(--answer-seeds "${LONGBENCH_ANSWER_SEEDS[@]}") ;;
   *) echo 'Dataset must be ruler or longbench-v2.' >&2; exit 2 ;;
@@ -38,17 +36,6 @@ esac
 python_command=("${PYTHON_BIN:?Set PYTHON_BIN in config/.env}")
 [[ -z "${PYTHON_WRAPPER:-}" ]] || python_command=("$PYTHON_WRAPPER" "${python_command[@]}")
 export PYTHONPATH="$CODE_ROOT" PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES='' OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
-if [[ "$command" == download || "$command" == prepare ]]; then
-  [[ $# == 0 ]] || { echo 'Data commands accept no prompt IDs.' >&2; exit 2; }
-  [[ -n "$source_path" ]] || { echo 'Set RULER_PATH or LONGBENCH_DATA in config/.env.' >&2; exit 2; }
-  data_args=()
-  if [[ "$command" == prepare ]]; then
-    data_args=(--model "${MODEL_PATH:?Set MODEL_PATH in config/.env}" \
-      --output "${prepared:?Set RULER_PREPARED or LONGBENCH_PREPARED in config/.env}")
-  fi
-  exec "${python_command[@]}" "$CODE_ROOT/scripts/run.py" "$command" "$dataset" \
-    --source "$source_path" --samples-per-task "$RULER_SAMPLES_PER_TASK" --seed "$PREPARATION_SEED" "${data_args[@]}"
-fi
 local_args=()
 smoke_run=false
 run_label="$RUN_NAME/$dataset/chunk$CHUNK_SIZE"

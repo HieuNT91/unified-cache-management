@@ -14,22 +14,27 @@ Qwen3-32B snapshot (`9216db5781bf21249d130ec9da846c4624c16137`). Copy
 
 ```bash
 cp config/.env.example config/.env
-# Edit config/.env and run.sh first.
-bash run.sh download ruler
-bash run.sh download longbench-v2
-bash run.sh prepare ruler
-bash run.sh prepare longbench-v2
+# Edit config/.env, prepare_data.sh and run.sh first.
+bash scripts/download_data.sh ruler
+bash scripts/download_data.sh longbench-v2
+bash prepare_data.sh ruler
+bash prepare_data.sh longbench-v2
 bash run.sh start ruler
 # Wait for completion before reusing the same GPUs:
 bash run.sh start longbench-v2
 ```
+
+Download URLs and destinations are listed separately in `scripts/download_data.sh`.
+For manual/offline setup, place the original assets at those destinations, then
+run `bash prepare_data.sh DATASET`. Downloads require `curl` and Git.
 
 For existing data, point `RULER_PREPARED`/`LONGBENCH_PREPARED` to the original
 prepared folders and skip download/prepare. Inputs stay read-only; both chunk
 sizes preserve identical token IDs. Source folders do not need Git metadata;
 fresh preparation checks asset hashes and package versions. RULER64K follows
 the original 65536 generation bound, not a forced exact 64000-token prompt.
-`RULER_SAMPLES_PER_TASK` and `PREPARATION_SEED` are configurable; they must match
+`RULER_SAMPLES_PER_TASK` and `PREPARATION_SEED` are configurable at the top of
+`prepare_data.sh` and `run.sh`; keep them aligned. They must match
 existing RULER preparation metadata. Runs use the supplied manifest, without a
 fixed cohort size. LongBench runtime reserves 114688 input + 10000 output tokens
 (minimum 1949 KV blocks); prepared files retain their original output metadata.

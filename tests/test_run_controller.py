@@ -140,7 +140,8 @@ class RunControllerTests(unittest.TestCase):
                 RULER_PREPARED=temp/'ruler',LONGBENCH_PREPARED=temp/'longbench',CACHE_ROOT=temp/'cache',
                 RESULTS_DIR=temp/'results',GPU_UUIDS=','.join(GPUS)).items())+'\n')
             for command,dataset,extra in [('prepare','ruler',[]),('configure','longbench-v2',[]),('smoke','ruler',['input-0'])]:
-                proc=subprocess.run(['bash',str(ROOT/'run.sh'),command,dataset,*extra],cwd='/tmp',
+                launcher = ['prepare_data.sh'] if command == 'prepare' else ['run.sh', command]
+                proc=subprocess.run(['bash',str(ROOT/launcher[0]),*launcher[1:],dataset,*extra],cwd='/tmp',
                     env=dict(PATH=os.environ['PATH'],UCM_ENV_FILE=str(env_file)),text=True,capture_output=True)
                 self.assertEqual(proc.returncode,0,proc.stderr)
                 argv,cuda=json.loads(proc.stdout);self.assertEqual(cuda,'')
