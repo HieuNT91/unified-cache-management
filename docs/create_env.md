@@ -1,8 +1,8 @@
-# Tạo môi trường `ucm`
+# Create the `ucm` environment
 
-Linux x86_64, glibc ≥2.28, Conda, Git, Make và driver NVIDIA hoạt động
-(khuyến nghị ≥560.35.05 cho [CUDA 12.6.3](https://docs.nvidia.com/cuda/archive/12.6.3/cuda-toolkit-release-notes/)).
-Chạy tại thư mục gốc repo; cần Internet để tải package và source native.
+Requires Linux x86_64, glibc ≥2.28, Conda, Git, Make, and a working NVIDIA driver
+(≥560.35.05 recommended for [CUDA 12.6.3](https://docs.nvidia.com/cuda/archive/12.6.3/cuda-toolkit-release-notes/)).
+Run from the repository root. Internet access is required to download packages and native sources.
 
 ```bash
 conda create -n ucm -c conda-forge python=3.10.22 pip -y
@@ -15,18 +15,19 @@ python scripts/install_native.py
 python -m pip check
 ```
 
-Lock giữ các phiên bản Python đã kiểm tra, gồm PyTorch 2.7.0/cu126 và vLLM 0.9.2.
-Script build mới `uc-manager==0.3.0` từ source, dùng CUDA 12.6 trong Conda;
-không dùng CUDA hệ thống hay `.so` từ env cũ. Native có targets 80/89/90 cho
-A100/L20/H20. Không cần cài riêng FlashAttention.
+The lock file pins tested Python packages, including PyTorch 2.7.0/cu126 and vLLM 0.9.2.
+The installer builds `uc-manager==0.3.0` from source using Conda's CUDA 12.6,
+without relying on system CUDA or `.so` files from another environment.
+The native build targets architectures 80/89/90 for A100/L20/H20.
+A separate FlashAttention installation is not required.
 
-Kiểm tra CPU:
+Run the CPU checks:
 
 ```bash
 CUDA_VISIBLE_DEVICES='' PYTHONPATH=.:tests python -m unittest discover -s tests
 ```
 
-Kiểm tra nhẹ trên **một GPU rảnh được cấp**, thay `GPU-...` bằng UUID từ `nvidia-smi -L`:
+Run a smoke test on **one available GPU assigned to you**. Replace `GPU-...` with its UUID from `nvidia-smi -L`:
 
 ```bash
 CUDA_VISIBLE_DEVICES=GPU-... python - <<'PY'
@@ -45,11 +46,11 @@ print(torch.cuda.get_device_name(0), 'OK')
 PY
 ```
 
-Trong `config/.env`, đặt `PYTHON_BIN` bằng kết quả `which python`, cùng `GPU_UUIDS`.
-Trong `run.sh`, chỉnh `TP` (1/2/4), `NUMBER_GPUS`, `GPU_MEMORY_UTILIZATION` theo máy.
-Không giới hạn tên GPU, không CPU offload; vLLM kiểm tra dung lượng KV thực tế.
+In `config/.env`, set `PYTHON_BIN` to the output of `which python` and set `GPU_UUIDS`.
+Adjust `TP` (1/2/4), `NUMBER_GPUS`, and `GPU_MEMORY_UTILIZATION` in `run.sh` for your machine.
+GPU models are unrestricted. CPU offload is disabled; vLLM checks actual KV capacity.
 
-Riêng máy hiện tại có driver kernel/userspace lệch phiên bản: giữ
-`PYTHON_WRAPPER=/home/thnguyen/.local/bin/nvidia-driver-run` trong `.env`, và thêm
-wrapper này trước `python` khi kiểm tra. Máy có driver đồng bộ để wrapper trống.
-Môi trường đã được smoke-test trên RTX 4500 Ada; chưa chạy Qwen3-32B TP1 trên H20.
+On the current host, the kernel and userspace NVIDIA driver versions differ. Keep
+`PYTHON_WRAPPER=/home/thnguyen/.local/bin/nvidia-driver-run` in `.env` and prepend
+this wrapper to `python` when running checks. Leave it empty on hosts with matching drivers.
+The environment has been smoke-tested on RTX 4500 Ada; Qwen3-32B TP1 on H20 has not been tested.
