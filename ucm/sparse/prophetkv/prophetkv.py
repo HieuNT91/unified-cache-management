@@ -46,7 +46,7 @@ class ProphetKV(Blend):
             raise RuntimeError('One request per worker is supported')
         rid,count=next(iter(scheduler_output.num_scheduled_tokens.items()))
         worker_request=requests[rid]
-        from runner.router.guard import is_dense_request
+        from ucm.sparse.prophetkv.guard import is_dense_request
         if is_dense_request(rid):
             if (self.request_state.pending is not None or self.prefill_state is not None
                     or getattr(self.connector, 'router_dense_id', None) != rid):

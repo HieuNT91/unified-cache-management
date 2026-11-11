@@ -10,7 +10,8 @@ from unittest.mock import Mock, patch
 
 from runner.router.adatree import SCHEMA, answer_generation, generation_policy, generation_sample
 from runner.runtime import output_budget
-from runner.runtime.thinking_budget import KEY, BudgetState, validate_thinking_outcome
+from runner.inputs.prepared_policy import make_policy
+from runner.runtime.output_budget import KEY, BudgetState, validate_outcome as validate_thinking_outcome
 from runner.runtime.thinking_loop import ADATREE_CONFIG, ThinkingLoop
 from runner.reporting.aggregate import OutputAnalyzer
 from runner.cache.setups import atomic_json, file_hash
@@ -25,7 +26,7 @@ class AdaTreeGenerationTests(unittest.TestCase):
         return dict(adaptive_routing=SCHEMA, answer_generation=answer_generation())
 
     def policy(self):
-        return generation_policy(output_budget.make_policy(Tokenizer()), self.protocol())
+        return generation_policy(make_policy(Tokenizer()), self.protocol())
 
     def validate(self, state, tokens):
         result=OutputAnalyzer(Tokenizer()).analyze(tokens,[],True)
@@ -41,7 +42,7 @@ class AdaTreeGenerationTests(unittest.TestCase):
             with self.subTest(opening=opening):
                 policy=dict(p,opening_in_prompt=opening)
                 tokens=([] if opening else [policy['open_id']])+list(range(100,8292))
-                state=BudgetState(policy,ADATREE_CONFIG).consume(tokens)
+                state=BudgetState(policy).consume(tokens)
                 self.assertEqual(state.thinking,8192)
                 self.assertEqual(state.phase,'thinking')
                 self.assertEqual(state.forced_next(),policy['close_id'])
@@ -63,7 +64,7 @@ class AdaTreeGenerationTests(unittest.TestCase):
         p=self.policy()
         for size in (32,128):
             block=list(range(100,100+size)); tokens=block*3+block[:-1]
-            state=BudgetState(p,ADATREE_CONFIG).consume(tokens)
+            state=BudgetState(p).consume(tokens)
             self.assertFalse(state.loop.broken)
             tokens += [block[-1]];state.consume(tokens)
             self.assertEqual(state.loop.pattern_size,size)
@@ -73,13 +74,13 @@ class AdaTreeGenerationTests(unittest.TestCase):
             self.assertEqual(state.phase,'done')
             self.assertEqual(state.answer,600)
             self.validate(state,tokens)
-        loop=ThinkingLoop(ADATREE_CONFIG)
+        loop=ThinkingLoop()
         for i in range(1000): loop.observe(100+i,i+1)
         self.assertEqual(len(loop.tail),512)
 
     def test_generation_view_never_changes_prepared_tokens_layout_or_policy(self):
         original=dict(token_ids=[100,101],boundaries=[0,1,2],question_positions=[1],
-                      max_output_tokens=16384, **{KEY:output_budget.make_policy(Tokenizer())})
+                      max_output_tokens=16384, **{KEY:make_policy(Tokenizer())})
         before=copy.deepcopy(original)
         effective=generation_sample(original,self.protocol())
         self.assertEqual(original,before)
@@ -138,10 +139,10 @@ class AdaTreeGenerationTests(unittest.TestCase):
         sample=stamp_sample(dict(token_ids=list(range(576)),boundaries=[0,64,320,576],
             question_positions=[320],thinking=True,max_output_tokens=16384,
             evaluation_protocol=output_budget.LONGBENCH_PROTOCOL,
-            **{KEY:output_budget.make_policy(Tokenizer())}))
+            **{KEY:make_policy(Tokenizer())}))
         before=copy.deepcopy(sample)
         p=self.policy();tokens=list(range(100,132))*4+[p['close_id']]+p['transition_ids']+[65,3]
-        state=BudgetState(p,ADATREE_CONFIG).consume(tokens)
+        state=BudgetState(p).consume(tokens)
         output=NS(outputs=[NS(token_ids=tokens,text='A',finish_reason='stop')],
                   ruler_thinking_state=state,first_answer_content_seconds=.2,num_cached_tokens=0)
         for baseline in (False,True):
@@ -159,11 +160,10 @@ class AdaTreeGenerationTests(unittest.TestCase):
                         patch('runner.runtime.generation.generate',return_value=(output,.1,1.)) as generate, \
                         patch('runner.runtime.generation.verify_diagnostics') as verify, \
                         patch('runner.router.adatree.validate_routing',return_value={'action':'tree-prophetkv-20'}) as routing, \
-                        patch('runner.router.measure.verify_retired',return_value=[]):
+                        patch('runner.cache.setups.verify_retired',return_value=[]):
                     record,_=answer(engine,1,baseline=baseline)
                 self.assertIs(generate.call_args.args[1],sample['token_ids'])
-                self.assertEqual(generate.call_args.args[2],10000)
-                self.assertEqual(generate.call_args.kwargs['loop_breaker'],ADATREE_CONFIG)
+                self.assertEqual(generate.call_args.kwargs['sample'][KEY], p)
                 self.assertEqual(record[KEY],p)
                 self.assertEqual(record['prepared_generation_policy'],sample[KEY])
                 self.assertEqual(record['thinking_loop_breaker'],ADATREE_CONFIG)

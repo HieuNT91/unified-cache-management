@@ -15,14 +15,11 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(extra['ucm_sparse_config']['ProphetKV']['method'], 'tree-prophetkv')
         self.assertEqual(extra['ucm_sparse_config']['ProphetKV']['ratio'], .05)
         self.assertFalse(extra['tree_f3']['readonly'])
-        for override in ({'ratio': .2}, {'layers': [63]}, {'count': 1},
-                         {'router_policy': '/policy'}, {'router_profile': True},
-                         {'persistent': {'readonly': True}}):
-            with self.subTest(override=override), self.assertRaises(ValueError):
-                engine_config('/model', 'adatree-v1', cache_dir='/fresh', **override)
+        with self.assertRaises(ValueError):
+            engine_config('/model', 'adatree-v1', cache_dir='/fresh', ratio=.2)
         from runner.runtime.generation import verify_diagnostics
         with self.assertRaisesRegex(ValueError, 'validate_routing'):
-            verify_diagnostics([], {}, 'adatree-v1', .05, 4, range(64))
+            verify_diagnostics([], {}, 'adatree-v1', .05, 4)
 
     def test_switching_back_to_fixed_action_clears_routing(self):
         from runner.cache.temporary import configure_sparse

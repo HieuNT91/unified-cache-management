@@ -1,40 +1,27 @@
 """Original prepared-input validation and hardware-independent runtime budgets."""
 from runner.inputs.config import engine_config,validate_sample
-PROFILES={
-    'ruler-thinking':dict(input_tokens=65536,output_tokens=None,thinking=True),
-    'ruler':dict(input_tokens=65536,output_tokens=None,thinking=False,kv_tokens=65920,kv_blocks=1031),
-    'longbench-v2':dict(input_tokens=114688,output_tokens=16384,thinking=True),
-}
+INPUT_LIMITS = {'ruler-thinking': 65536, 'longbench-v2': 114688}
 
 
 def validate(sample,dataset):
-    if dataset not in PROFILES:raise ValueError('Unsupported dataset')
-    p=PROFILES[dataset];validate_sample(sample,4096,p['input_tokens'])
-    if sample['thinking']!=p['thinking'] or (p['output_tokens'] is not None and sample['max_output_tokens']!=p['output_tokens']):
+    if dataset not in INPUT_LIMITS:raise ValueError('Unsupported dataset')
+    validate_sample(sample,4096,INPUT_LIMITS[dataset])
+    if sample['thinking'] is not True:
         raise ValueError('Dataset execution profile mismatch')
-    if dataset=='ruler-thinking':
-        from runner.runtime.thinking_budget import validate_sample_policy
-        validate_sample_policy(sample)
-    if dataset=='ruler':
-        from scripts.data.ruler import EVALUATION_PROTOCOL
-        if sample.get('evaluation_protocol')!=EVALUATION_PROTOCOL:
-            raise ValueError('RULER requires original task-batch protocol; rebuild from source')
     # References remain reporting metadata; generate submits only tokens/layout.
     return sample
 
 
 def allocation(dataset):
     """Runtime capacity; prepared samples keep their original generation metadata."""
-    from runner.router.adatree import answer_generation
-    p = dict(PROFILES[dataset])
-    if p['thinking']:
-        p['output_tokens'] = answer_generation()['output_reserve']
-        p['kv_tokens'] = p['input_tokens'] + p['output_tokens']
-        p['kv_blocks'] = (p['kv_tokens'] + 63) // 64
+    from runner.runtime.output_budget import OUTPUT_CAP
+    p = dict(input_tokens=INPUT_LIMITS[dataset], output_tokens=OUTPUT_CAP, thinking=True)
+    p['kv_tokens'] = p['input_tokens'] + p['output_tokens']
+    p['kv_blocks'] = (p['kv_tokens'] + 63) // 64
     return p
 
 
-def config(model,dataset,cached,cache,delimiter=None,*,tp=4,memory=.95):
+def config(model,dataset,cached,cache,*,tp=4,memory=.95):
     from runner.runtime.tensor_parallel import validate_tp
     validate_tp(tp)
     if not 0 < memory < 1:

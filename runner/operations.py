@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from runner.cache.setups import atomic_json, file_hash, fingerprint
-from runner.router.process import identity, alive, group_alive
+from runner.runtime.process import identity, alive, group_alive
 ROOT = Path(__file__).resolve().parents[1]
 
 def code_hashes():
@@ -92,7 +92,7 @@ def model_artifact(root,name):
     return Path(root)/name
 
 def check_hardware(settings):
-    from runner.router.profiles import allocation
+    from runner.runtime.capacity import allocation
     from runner.runtime.tensor_parallel import protocol_tp
     tp=protocol_tp(settings)
     memory=settings.get('gpu_memory_utilization',.95)

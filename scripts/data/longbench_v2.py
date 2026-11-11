@@ -107,9 +107,9 @@ def prepare(args):
                 template_sha256=file_hash(template_path), adapter_sha256=file_hash(Path(__file__)),
                 chunker_sha256=file_hash(ROOT/'runner/cache/lifecycle.py'), input_limit=INPUT, output_limit=16384)
     if getattr(args, 'collection_v3', False):
-        from runner.runtime.output_budget import PROTOCOL
+        from runner.inputs.prepared_policy import PROTOCOL
         spec.update(collection_protocol='tp2-data-v3', generation_protocol=PROTOCOL,
-                    budget_adapter_sha256=file_hash(ROOT/'runner/runtime/output_budget.py'))
+                    budget_adapter_sha256=file_hash(ROOT/'runner/inputs/prepared_policy.py'))
     args.output = args.output.resolve()
     with setup_lock(args.output, build=True):
         receipt_path = args.output/'preparation.json'
@@ -134,8 +134,8 @@ def prepare(args):
                           source_id=row['_id'], source_row_sha256=fingerprint(row),
                           source_metadata={k:row[k] for k in ('domain','sub_domain','difficulty','length')})
             if getattr(args, 'collection_v3', False):
-                from runner.runtime.output_budget import make_policy, LONGBENCH_PROTOCOL
-                from runner.runtime.thinking_budget import KEY
+                from runner.inputs.prepared_policy import make_policy, LONGBENCH_PROTOCOL
+                from runner.inputs.prepared_policy import KEY
                 sample[KEY] = make_policy(tokenizer, opening_in_prompt=sample['formatted_text'].endswith('<think>\n'))
                 sample['evaluation_protocol'] = LONGBENCH_PROTOCOL
             validate_sample(sample)

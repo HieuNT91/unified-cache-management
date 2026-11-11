@@ -96,7 +96,7 @@ def retire_warmup(cache, tokens):
     path.unlink()
 
 
-from runner.runtime.sweep import PromptCache
+from runner.runtime.prompt_cache import PromptCache
 
 
 class TreePromptCache(PromptCache):

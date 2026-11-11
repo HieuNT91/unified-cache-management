@@ -1,5 +1,4 @@
 """Shared collection and cross-dataset inference lifecycle; GPU imports are lazy."""
-from runner.reporting.aggregate import scoring_text
 import json
 import os
 import time
@@ -7,28 +6,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from runner.cache.setups import atomic_json,file_hash,fingerprint,retirement,start_engine
-from runner.router.measure import verify_retired
-from runner.corpus.dataset import load_attention,match_answer,selection
-from runner.router.tree_policy import actions
-from runner.router.policy import features_from_arrays
-from runner.router.profiles import config,validate,validate_initialization
-from runner.corpus.records import answer_validation,NATIVE_ANSWER_VALIDATION,PROBE_ANSWER_VALIDATION
-
-PROBE=dict(id='independent-probe',method='prophetkv',ratio=.01)
-
-
-def arm_tree(llm,sample,rid,definition,capture=False,head_layers=(),tp=4):
-    from runner.corpus.worker import tree_mode
-    from runner.runtime.worker import arm
-    kwargs=dict(request_id=rid,definition=definition,capture=capture)
-    if head_layers:kwargs['head_layers']=list(head_layers)
-    replies=llm.collective_rpc(tree_mode,kwargs=kwargs)
-    if sorted(r['rank'] for r in replies)!=list(range(tp)) or any(
-            r!=dict(rank=r['rank'],**kwargs) for r in replies):
-        raise ValueError('TP action synchronization failed')
-    if definition['method']!='baseline':
-        llm.collective_rpc(arm,kwargs=dict(request_id=rid,boundaries=sample['boundaries'],question_positions=sample['question_positions']))
-    return replies
+from runner.runtime.capacity import allocation,config,validate,validate_initialization
 
 
 def clean_capture(llm,tp=4):
@@ -43,10 +21,15 @@ class Engine:
         from runner.runtime.worker import setup
         from runner.runtime.generation import generate
         from runner.reporting.aggregate import OutputAnalyzer
-        from runner.router.process import identity
+        from runner.runtime.process import identity
         from runner.cache.lifecycle import wait_for_cache
         from ucm.sparse.prophetkv.lifecycle import seed_value,delete_retired_files
         from runner.runtime.tensor_parallel import protocol_tp
+        from runner.tree.collection import inventory, configure_engine, runtime_sample
+        from runner.router.adatree import generation_sample
+        if phase not in ('cached', 'baseline'):
+            raise ValueError('Expected cached or baseline phase')
+        inventory(protocol)
         self.tp=protocol_tp(protocol)
         self.profile=protocol.get('execution_profile',protocol['dataset'])
         self.root=Path(root);self.protocol=protocol;self.group=group;self.cached=phase=='cached';self.pc=None
@@ -57,36 +40,21 @@ class Engine:
         atomic_json(self.session/'ownership.json',dict(cache=str(self.cache),group=group,pid=os.getpid(),identity=identity(os.getpid())))
         self.scheduler=self.session/'scheduler.json'
         os.environ['PROPHETKV_SCHEDULER_RECEIPT']=str(self.scheduler)
-        first=json.loads((Path(protocol['prepared'])/rows[0]['prepared']).read_text());validate(first,self.profile)
         for row in rows:
             sample=json.loads((Path(protocol['prepared'])/row['prepared']).read_text())
-            from runner.router.profiles import allocation
-            if self.profile=='ruler-thinking':
-                from runner.runtime.thinking_budget import validate_sample_policy
-                validate_sample_policy(sample)
-            from runner.router.adatree import generation_sample
+            validate(sample, self.profile)
             effective = generation_sample(sample, protocol)
             if len(effective['token_ids'])+effective['max_output_tokens']>allocation(self.profile)['kv_tokens']:
                 raise ValueError('Complete input plus output reserve exceeds assigned hardware KV capacity')
-        cfg=config(protocol['model'],self.profile,self.cached,self.cache,None,
+        cfg=config(protocol['model'],self.profile,self.cached,self.cache,
                    tp=self.tp,memory=protocol.get('gpu_memory_utilization',.95))
-        self.tree_cached = protocol.get('schema') == 'tree-prophetkv-thinking-collection-v1'
-        if self.tree_cached and not self.cached and protocol.get('followup_nocache'):
-            from runner.tree.collection import inventory
-            inventory(protocol)
-            self.tree_cached = False
-        if self.tree_cached:
-            if not self.cached:
-                raise ValueError('Tree collection runs only cached answers')
-            from runner.tree.collection import configure_engine
-            configure_engine(cfg, self.cache, protocol)
         if self.cached:
+            configure_engine(cfg, self.cache, protocol)
             if 'position_attention_kernel' in protocol:
                 cfg['kv_transfer_config']['kv_connector_extra_config']['position_attention_kernel']=protocol['position_attention_kernel']
             def context_layout(row):
                 sample = json.loads((Path(protocol['prepared'])/row['prepared']).read_text())
-                from runner.tree.collection import runtime_sample
-                return (runtime_sample(sample, protocol) if self.tree_cached else sample)['boundaries']
+                return runtime_sample(sample, protocol)['boundaries']
             cfg['kv_transfer_config']['kv_connector_extra_config']['temporary_layouts'] = {
                 r['id']: context_layout(r) for r in rows}
         start=time.perf_counter();self.llm=start_engine(cfg)
@@ -97,7 +65,7 @@ class Engine:
             self.analyzer=OutputAnalyzer(self.llm.get_tokenizer())
             warmup_started=time.perf_counter()
             warm_namespace=uuid.uuid4().hex;warm=[100,200,300,400]*32
-            generate(self.llm.llm_engine,warm,1,f"{warm_namespace}:{rows[0]['id']}:populate:warmup",phase='populate')
+            generate(self.llm.llm_engine,warm,f"{warm_namespace}:{rows[0]['id']}:populate:warmup",phase='populate')
             if self.cached:
                 args=SimpleNamespace(model_path=Path(protocol['model']),tensor_parallel_size=self.tp,cache_dir=self.cache,
                     cache_ready_timeout_seconds=600,hash_seed=seed_value(warm_namespace))
@@ -105,7 +73,7 @@ class Engine:
                 if init['warmup_readiness']['verified_shards']!=2*self.tp:raise ValueError('Expected two committed warmup shards per TP rank')
             retirement(self.llm,self.tp)
             if self.cached:delete_retired_files(self.cache,{str(p.relative_to(self.cache)) for p in (self.cache/'kv').rglob('*') if p.is_file()})
-            if self.tree_cached:
+            if self.cached:
                 from runner.tree.collection import retire_warmup
                 retire_warmup(self.cache, warm)
             init['warmup_seconds']=time.perf_counter()-warmup_started
@@ -115,7 +83,7 @@ class Engine:
 
     def begin(self,row):
         """Construct and commit context KV; the next read is the requested work."""
-        from runner.runtime.sweep import PromptCache
+        from runner.tree.collection import TreePromptCache as PromptCache, runtime_sample
         from runner.runtime.generation import generate
         self.row=row;self.sample=json.loads((Path(self.protocol['prepared'])/row['prepared']).read_text())
         validate(self.sample,self.protocol.get('execution_profile',self.protocol['dataset']));self.namespace=uuid.uuid4().hex;self.construction={}
@@ -124,21 +92,18 @@ class Engine:
             raise ValueError('Prepared model mismatch')
         start=time.perf_counter()
         if self.cached:
-            if getattr(self, 'tree_cached', False):
-                from runner.tree.collection import TreePromptCache as PromptCache
-                from runner.tree.collection import runtime_sample
-                from runner.tree.prophetkv import budget
-                original_bounds = list(self.sample['boundaries'])
-                self.sample = runtime_sample(self.sample, self.protocol)
-                if self.protocol.get('kv_chunk_size') is not None:
-                    self.construction['layout'] = dict(kv_chunk_size=self.protocol['kv_chunk_size'],
-                        prepared_boundaries=original_bounds, runtime_boundaries=list(self.sample['boundaries']),
-                        token_sha256=self.sample['token_sha256'])
-                for percentage in self.protocol['percentages']:
-                    budget(self.sample['boundaries'], percentage/100)
+            from runner.tree.prophetkv import budget
+            original_bounds = list(self.sample['boundaries'])
+            self.sample = runtime_sample(self.sample, self.protocol)
+            if self.protocol.get('kv_chunk_size') is not None:
+                self.construction['layout'] = dict(kv_chunk_size=self.protocol['kv_chunk_size'],
+                    prepared_boundaries=original_bounds, runtime_boundaries=list(self.sample['boundaries']),
+                    token_sha256=self.sample['token_sha256'])
+            for percentage in self.protocol['percentages']:
+                budget(self.sample['boundaries'], percentage/100)
             self.pc=PromptCache(self.cache,Path(self.protocol['model']),self.tp,self.namespace,self.sample)
             for i,chunk in enumerate(self.pc.chunks):
-                generate(self.llm.llm_engine,list(chunk),1,self.rid(f'populate:{i}'),phase='populate')
+                generate(self.llm.llm_engine,list(chunk),self.rid(f'populate:{i}'),phase='populate')
                 retirement(self.llm,self.tp)
             self.construction['construction_seconds']=time.perf_counter()-start;start=time.perf_counter()
             self.construction['readiness']=self.pc.ready()
@@ -161,139 +126,13 @@ class Engine:
             retirement=retired,initialization=str(path.relative_to(self.root)),initialization_sha256=file_hash(path),
             timings=timings,construction=self.construction,alignment_audit=alignment)
 
-    def probe(self,folder,feature_extractor=None,capture_heads=True):
-        if answer_validation(self.protocol)==NATIVE_ANSWER_VALIDATION:
-            raise ValueError('Independent probes are disabled for native answer controls')
-        import numpy as np
-        from runner.runtime.generation import generate, verify_diagnostics
-        from runner.runtime.worker import drain
-        from runner.corpus.worker import export as export_attention
-        folder=Path(folder);folder.mkdir(parents=True,exist_ok=True)
-        started=time.perf_counter();rid=self.rid('read:probe-'+uuid.uuid4().hex)
-        head_layers=()
-        if self.protocol.get('feature_profile') and capture_heads:
-            from runner.router.longbench_features import DEFINITIONS,HEAD_LAYERS
-            if self.protocol['feature_profile']!=DEFINITIONS:raise ValueError('Unknown feature profile')
-            head_layers=HEAD_LAYERS
-        arm_tree(self.llm,self.sample,rid,PROBE,True,head_layers,tp=self.tp)
-        sync_seconds=time.perf_counter()-started
-        generation_start=time.perf_counter()
-        internal,ttft,_=generate(self.llm.llm_engine,self.sample['token_ids'],1,rid,False,sample=self.sample)
-        generation_seconds=time.perf_counter()-generation_start
-        if len(internal.outputs[0].token_ids)!=1:raise ValueError('Probe must produce one discarded token')
-        del internal
-        export_start=time.perf_counter()
-        artifacts=self.llm.collective_rpc(export_attention,kwargs=dict(output=str(folder),sample=self.sample,inventory=self.protocol['actions']))
-        export_seconds=time.perf_counter()-export_start
-        validation_start=time.perf_counter()
-        ds=self.llm.collective_rpc(drain);verify_diagnostics(ds,self.sample,'prophetkv',.01,self.tp,range(64))
-        diagnostics_seconds=time.perf_counter()-validation_start
-        retirement_start=time.perf_counter()
-        retired=verify_retired(self.llm,self.tp,rid,self.scheduler);self.pc.unchanged();clean_capture(self.llm,self.tp)
-        retirement_seconds=time.perf_counter()-retirement_start
-        replay_start=time.perf_counter()
-        attention=load_attention(folder,dict(artifacts=artifacts),self.sample,self.protocol['actions'],head_layers or None,tp=self.tp)
-        # Probe selection may be absent from the answer inventory.
-        for worker in ds:
-            event=next(e for e in worker['diagnostics'] if e['kind']=='prophetkv_selection')
-            if (not np.array_equal(np.asarray(event['scores'],np.float32),attention['scores']) or
-                    not np.array_equal(event['selected_positions'],selection(attention['scores'],self.sample['boundaries'][1],.01))):
-                raise ValueError('Probe diagnostics differ from archived native scores')
-        replay_seconds=time.perf_counter()-replay_start
-        features_start=time.perf_counter()
-        if feature_extractor is not None:
-            features=feature_extractor(attention,self.sample['boundaries'][1],self.sample['boundaries'][-2])
-        elif head_layers:
-            from runner.router.longbench_features import features as longbench_features
-            features=longbench_features(attention,self.sample['boundaries'][1],self.sample['boundaries'][-2])
-        else:
-            features=features_from_arrays(attention['layers'].astype(np.float64).mean(0),attention['scores'],
-                self.sample['boundaries'][1],self.sample['boundaries'][-2])
-        features_seconds=time.perf_counter()-features_start
-        overhead=time.perf_counter()-started
-        result=self.common('probe',dict(probe_ttft_seconds=ttft,routing_overhead_seconds=overhead,
-            archive_writing_seconds=max(a['serialization_seconds'] for a in artifacts),
-            tp_sync_seconds=sync_seconds,probe_generation_seconds=generation_seconds,
-            export_rpc_seconds=export_seconds,diagnostics_seconds=diagnostics_seconds,
-            retirement_and_cache_check_seconds=retirement_seconds,attention_replay_seconds=replay_seconds,
-            feature_extraction_seconds=features_seconds),retired)
-        result.update(artifacts=artifacts,features=features,internal_tokens=1)
-        return result,ds,attention
-
-    def answer(self,definition,case,attention=None,overhead=0.,route_started=None, *, seed=None, policy=None):
-        if case == 'nocache' and self.protocol.get('followup_nocache'):
-            from runner.tree.collection import inventory
-            from runner.router.adatree import answer
-            if (self.cached or inventory(self.protocol).get(case) != definition
-                    or attention is not None or overhead or route_started is not None or policy is not None):
-                raise ValueError('Follow-up baseline must use a connector-free engine')
-            return answer(self, seed, baseline=True)
-        if definition['method'] == 'adatree-v1':
-            from runner.tree.collection import inventory
-            from runner.router.adatree import answer
-            if (inventory(self.protocol).get(case) != definition or not self.cached
-                    or attention is not None or overhead or route_started is not None or policy is not None):
-                raise ValueError('AdaTreeV1 uses only its integrated native probe')
-            return answer(self, seed)
-        from runner.runtime.generation import generate, verify_diagnostics
-        from runner.runtime.worker import drain,router_dense_receipt
-        if self.protocol.get('integrated_gpu_router') or policy is not None:
-            raise ValueError('Learned GPU-router studies are not part of AdaTree runs')
-        from runner.reporting.aggregate import evaluation_metadata,score_answer
-        mode=answer_validation(self.protocol)
-        if mode==NATIVE_ANSWER_VALIDATION and (attention is not None or case=='router'):
-            raise ValueError('Native answer controls cannot consume independent probe data')
-        rid=self.rid('read:'+case+('-'+uuid.uuid4().hex))
-        dense=definition['method']=='baseline'
-        if self.cached and dense:rid+='|router-dense'
-        start=time.perf_counter()
-        if self.cached:
-            clean_capture(self.llm,self.tp)
-            sync=arm_tree(self.llm,self.sample,rid,definition,tp=self.tp)
-        else:sync=[]
-        sync_seconds=time.perf_counter()-start
-        routing_time=time.perf_counter()-route_started if route_started is not None else overhead+sync_seconds
-        progress_kwargs = {}
-        if self.protocol.get('local_validation'):
-            def save_progress(value):
-                atomic_json(self.session/'answer-progress.json', dict(value, method=case, seed=seed, at=time.time()))
-            progress_kwargs['progress'] = save_progress
-        output,ttft,elapsed=generate(self.llm.llm_engine,self.sample['token_ids'],self.sample['max_output_tokens'],rid,self.sample['thinking'],sample=self.sample, **({'seed': seed} if seed is not None else {}), **progress_kwargs)
-        ds=self.llm.collective_rpc(drain)
-        verify_diagnostics(ds,self.sample,definition['method'],definition['ratio'],self.tp,range(64))
-        if dense and output.num_cached_tokens!=0:raise ValueError('Dense request reused KV')
-        audits=self.llm.collective_rpc(router_dense_receipt) if dense and self.cached else []
-        if not dense and mode==PROBE_ANSWER_VALIDATION:
-            if attention is None:raise ValueError('Sparse answer requires independent probe replay')
-            match_answer(ds,self.sample,definition['id'],attention,self.protocol['actions'],tp=self.tp)
-        retired=verify_retired(self.llm,self.tp,rid,self.scheduler if self.cached else None)
-        if self.pc:self.pc.unchanged();clean_capture(self.llm,self.tp)
-        tokens=list(output.outputs[0].token_ids);metrics=self.analyzer.analyze(tokens,[] if hasattr(output,'ruler_thinking_state') else self.sample['token_ids'],self.sample['thinking'])
-        if hasattr(output,'ruler_thinking_state'):
-            metrics.update(output.ruler_thinking_state.metrics(self.analyzer.tokenizer))
-        evaluation=evaluation_metadata({},self.row)
-        record=self.common(case,dict(answer_engine_ttft_seconds=ttft,ttft_seconds=routing_time+ttft,
-            generation_seconds=elapsed,routing_overhead_seconds=routing_time,tp_sync_seconds=sync_seconds),retired)
-        record.update(executed_action=definition['id'],output_token_ids=tokens,prediction=output.outputs[0].text,num_cached_tokens=output.num_cached_tokens,
-            finish_reason=getattr(output.outputs[0], 'finish_reason', None),
-            answer_validation=mode,
-            output_cap_reached=len(tokens)>=self.sample['max_output_tokens'],max_output_tokens=self.sample['max_output_tokens'],
-            dense_receipts=audits,decision_sync=sync,**metrics,**evaluation,accuracy=score_answer(scoring_text(output.outputs[0].text,metrics,evaluation),evaluation))
-        if 'scored_text' in metrics:
-            record['timings']['first_answer_content_seconds']=(routing_time+output.first_answer_content_seconds
-                if output.first_answer_content_seconds is not None else None)
-            from runner.runtime.output_budget import PROTOCOL as TOTAL
-            record['output_cap_reached']=(metrics['answer_cap_reached'] if self.sample['ruler_thinking_budget']['protocol'] == TOTAL
-                else metrics['thinking_cap_reached'] or metrics['answer_cap_reached'])
-            from runner.runtime.thinking_budget import KEY, validate_thinking_outcome
-            validate_thinking_outcome(dict(record,ttft_seconds=record['timings']['ttft_seconds'],
-                first_answer_content_seconds=record['timings']['first_answer_content_seconds']),self.sample[KEY])
-        if seed is not None:
-            record.update(seed=seed, sequence_id=self.row['id'])
-            record.setdefault('thinking_cap_reached', False)
-            record.setdefault('answer_cap_reached', record['output_cap_reached'])
-            record.setdefault('forced_tokens', 0)
-        return record,ds
+    def answer(self, definition, case, *, seed):
+        from runner.tree.collection import inventory
+        from runner.router.adatree import answer
+        if (inventory(self.protocol).get(case) != definition
+                or self.cached != (case == 'adatree-v1')):
+            raise ValueError('AdaTree requires cached KV; no-cache requires a connector-free engine')
+        return answer(self, seed, baseline=case == 'nocache')
 
     def end(self):
         if self.pc:

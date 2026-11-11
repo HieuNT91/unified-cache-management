@@ -1,5 +1,5 @@
 """Nine-action collection identity, deterministic traversal and answer seeds."""
-from runner.runtime.output_budget import PROTOCOL as GENERATION_PROTOCOL
+from runner.inputs.prepared_policy import PROTOCOL as GENERATION_PROTOCOL
 
 VERSION = 'tp2-data-v3'
 RATIOS = (1, 5, 10, 20, 30, 40, 60, 80)

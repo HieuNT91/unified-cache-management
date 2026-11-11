@@ -10,7 +10,7 @@ import sys
 import time
 import uuid
 from runner.cache.setups import atomic_json, file_hash
-from runner.router.process import identity, alive, group_alive
+from runner.runtime.process import identity, alive, group_alive
 from runner.corpus.records import accepted, publish, record_dir
 from runner.operations import code_hashes, environment, terminate_owned, cleanup_caches, idle, check_hardware
 from scripts.collection.run_metadata import read
@@ -47,11 +47,12 @@ def pending(protocol, rows, root, cases):
 def worker(base, role, phase, attempt, group=0, *, stage_loader=None):
     from runner.corpus.runtime import Engine
     from runner.cache.setups import check_environment
-    target = 'features' if phase == 'features' else role
+    if phase not in ('cached', 'baseline'):
+        raise ValueError('Expected cached or baseline phase')
+    target = role
     protocol, rows = stage_loader(base, target)
     root = Path(base)/target
-    cases = (['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline'
-             else [c for c in protocol['scheduled_actions'] if c != 'nocache'])
+    cases = ['nocache'] if phase == 'baseline' else ['adatree-v1']
     rows = ordered_rows(rows, protocol, group)
     remaining = pending(protocol, rows, root, cases)
     if not remaining:
@@ -78,10 +79,7 @@ def worker(base, role, phase, attempt, group=0, *, stage_loader=None):
                         if folder.exists():
                             history = root/'incomplete'/f'{case}-{row["id"]}-{seed}-{uuid.uuid4().hex}'
                             history.parent.mkdir(exist_ok=True); folder.rename(history)
-                        if case == 'probe':
-                            result, diagnostics, _ = engine.probe(folder)
-                        else:
-                            result, diagnostics = engine.answer(definitions[case], case, **kwargs)
+                        result, diagnostics = engine.answer(definitions[case], case, **kwargs)
                         publish(root, case, row, protocol, result, diagnostics, **kwargs)
                         progress(base, role, f"{case}: accepted {row['id']} seed={seed}", group)
                 deletion = engine.end()
@@ -139,9 +137,11 @@ def worker_failure(receipt, code, reason=None):
 
 def execute_phase(base, role, phase, state, *, run_loader=None, stage_loader=None, entrypoint=None):
     settings, _, _ = run_loader(base)
-    target = 'features' if phase == 'features' else role
+    if phase not in ('cached', 'baseline'):
+        raise ValueError('Expected cached or baseline phase')
+    target = role
     protocol, rows = stage_loader(base, target)
-    cases = ['probe'] if phase == 'features' else ['nocache'] if phase == 'baseline' else [c for c in protocol['scheduled_actions'] if c != 'nocache']
+    cases = ['nocache'] if phase == 'baseline' else ['adatree-v1']
     if not pending(protocol, rows, base/target, cases):
         engines_idle(base/target)
         return
@@ -204,8 +204,6 @@ def detach(base, role, resume=False, cached_only=False, *, stage_loader=None, en
     with (target/'launch.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         idle(target)
-        if role != 'extra':
-            idle(base/'features')
         if (target/'complete.json').exists():
             raise ValueError('Completed launcher scope cannot be restarted')
         if (target/'supervisor.json').exists() and not resume:

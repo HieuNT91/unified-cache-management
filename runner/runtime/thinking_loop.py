@@ -6,14 +6,11 @@ Inspected 2026-11-05. Only the thinking phase is observed; never stop an answer.
 """
 
 KEY = 'thinking_loop_breaker'
-CONFIG = dict(protocol='qwen3-thinking-loop-break-v1', min_pattern_size=8,
-              max_pattern_size=128, min_count=3)
-
 ADATREE_CONFIG = dict(protocol='qwen3-thinking-loop-break-32-128-4-v1',
                       min_pattern_size=32, max_pattern_size=128, min_count=4)
 
 
-def repetition_pattern_size(token_ids, min_pattern_size=8, max_pattern_size=128, min_count=3):
+def repetition_pattern_size(token_ids, min_pattern_size=32, max_pattern_size=128, min_count=4):
     """Return the first matching tail period, or None (vLLM detection semantics)."""
     minimum = max(1, min_pattern_size)
     if max_pattern_size <= 0 or min_count < 2 or minimum > max_pattern_size:
@@ -27,10 +24,8 @@ def repetition_pattern_size(token_ids, min_pattern_size=8, max_pattern_size=128,
 
 
 class ThinkingLoop:
-    def __init__(self, config=None):
-        if config is not None and config not in (CONFIG, ADATREE_CONFIG):
-            raise ValueError('Invalid thinking loop breaker configuration')
-        self.config = dict(config) if config is not None else None
+    def __init__(self):
+        self.config = dict(ADATREE_CONFIG)
         self.tail = []
         self.pattern_size = self.token_index = None
 
@@ -39,7 +34,7 @@ class ThinkingLoop:
         return self.pattern_size is not None
 
     def observe(self, token, thinking_count):
-        if self.config is None or self.broken:
+        if self.broken:
             return
         self.tail.append(token)
         # Keep only the largest candidate period repeated the requested count.
@@ -51,8 +46,6 @@ class ThinkingLoop:
             self.token_index = thinking_count
 
     def metrics(self):
-        if self.config is None:
-            return {}
         return {KEY: dict(self.config), 'thinking_broken': self.broken,
                 'thinking_break_pattern_size': self.pattern_size,
                 'thinking_break_token_index': self.token_index,
@@ -67,7 +60,7 @@ def validate_metrics(value):
             raise ValueError('Missing thinking loop breaker provenance')
         return
     config = value[KEY]
-    if config not in (CONFIG, ADATREE_CONFIG):
+    if config != ADATREE_CONFIG:
         raise ValueError('Invalid thinking loop breaker configuration')
     size, index = value.get('thinking_break_pattern_size'), value.get('thinking_break_token_index')
     if (type(value.get('thinking_broken')) is not bool

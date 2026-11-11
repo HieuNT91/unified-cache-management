@@ -460,8 +460,11 @@ class DiagnosticTests(unittest.TestCase):
     def test_multistep_coverage_rank_agreement_and_empty_layers(self):
         from runner.runtime.generation import verify_diagnostics
         prefix,end,length=64,33088,40000
-        event=dict(kind='prophetkv_selection',scores=[1.]*(end-prefix),selected_positions=[],
-                   scoring_layers=[63],fusion='mean_layers_fp32',alignment_count=64)
+        from test_adatree_runtime import RoutingEvidenceTests
+        _, fixture = RoutingEvidenceTests.fixture()
+        event = copy.deepcopy(fixture[0]['diagnostics'][1])
+        event.update(scores=[1.]*(end-prefix), selected_positions=[], scoring_layers=list(range(64)),
+                     f3_links=[1.]*(end-prefix), ratio=0.)
         events=[event]
         for start in range(prefix,length,16384):
             stop=min(start+16384,length)
@@ -473,22 +476,23 @@ class DiagnosticTests(unittest.TestCase):
                 projection_tokens=len(positions),attention_tokens=len(positions),ffn_tokens=len(positions)) for i in range(64))
         workers=[dict(rank=i,diagnostics=copy.deepcopy(events)) for i in range(2)]
         sample=dict(boundaries=[0,prefix,end,length])
-        verify_diagnostics(workers,sample,'selective_prophetkv',0.,2,[63])
+        with patch('runner.tree.prophetkv.validate_selection', return_value=[]):
+            verify_diagnostics(workers,sample,'tree-prophetkv',0.,2)
         for kind in ('duplicate','missing_empty','duplicate_selection','rank_mask'):
             broken=copy.deepcopy(workers)
             if kind=='duplicate':broken[1]['diagnostics'][-1]['selected_positions'].append(length-1)
             if kind=='missing_empty':broken[0]['diagnostics'].pop(2)
             if kind=='duplicate_selection':broken[1]['diagnostics'].append(copy.deepcopy(event))
             if kind=='rank_mask':broken[1]['diagnostics'][0]['selected_positions']=[64]
-            with self.subTest(kind=kind),self.assertRaises(RuntimeError):
-                verify_diagnostics(broken,sample,'selective_prophetkv',0.,2,[63])
+            with self.subTest(kind=kind), patch('runner.tree.prophetkv.validate_selection', return_value=[]), self.assertRaises(RuntimeError):
+                verify_diagnostics(broken,sample,'tree-prophetkv',0.,2)
 
     def test_baseline_reports_dense_16k_steps(self):
         from runner.runtime.generation import verify_diagnostics
         steps=[dict(kind='prefill_step',start=a,end=min(a+16384,32769),
                scheduled_tokens=min(16384,32769-a),recomputed_tokens=min(16384,32769-a),
                no_forward=False,prefill_complete=a==32768) for a in (0,16384,32768)]
-        verify_diagnostics([dict(rank=0,diagnostics=steps)],dict(boundaries=[0,64,128,32769]),'baseline',0.,1,[])
+        verify_diagnostics([dict(rank=0,diagnostics=steps)],dict(boundaries=[0,64,128,32769]),'baseline',0.,1)
 
 
 if __name__ == '__main__':

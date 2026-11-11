@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import runner.runtime.generation  # Keep mock targets stable across sys.modules fixtures.
-from runner.runtime import sweep
+from runner.runtime import prompt_cache
 from runner.inputs.identity import BlockHasher, block_keys, shard_name
 from runner.cache.setups import bytes_per_shard, atomic_json, file_hash
 from runner.cache.temporary import TemporaryStore, configure_sparse, request_phase
@@ -44,7 +44,7 @@ class PromptCacheTests(unittest.TestCase):
                 path.write_bytes(b'K'*bytes_per_shard(self.model,self.args.tp))
 
     def populated(self, sample=None):
-        cache=sweep.PromptCache(self.cache,self.model,self.args.tp,self.namespace,sample or self.sample)
+        cache=prompt_cache.PromptCache(self.cache,self.model,self.args.tp,self.namespace,sample or self.sample)
         for chunk in cache.chunks:
             self.write_chunk(self.namespace,chunk)
         return cache
@@ -105,7 +105,7 @@ class PromptCacheTests(unittest.TestCase):
         def publish(_):
             self.assertIsNone(cache.before)
             staged.replace(final)
-        with patch.object(sweep.time,'sleep',side_effect=publish) as sleep:
+        with patch.object(prompt_cache.time,'sleep',side_effect=publish) as sleep:
             self.assertEqual(cache.ready()['verified_shards'],4)
         sleep.assert_called_once()
         cache.unchanged()
@@ -132,7 +132,7 @@ class PromptCacheTests(unittest.TestCase):
         staged=self.cache/'kv'/'.temp'/final.name
         staged.parent.mkdir()
         staged.write_bytes(b'bad replacement')
-        with patch.object(sweep.time,'sleep',side_effect=lambda _: staged.replace(final)):
+        with patch.object(prompt_cache.time,'sleep',side_effect=lambda _: staged.replace(final)):
             with self.assertRaisesRegex(RuntimeError,'Cache incomplete'):
                 cache.ready()
         self.assertIsNone(cache.before)

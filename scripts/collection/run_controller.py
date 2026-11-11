@@ -17,9 +17,9 @@ from runner.corpus.records import accepted, NATIVE_ANSWER_VALIDATION
 from runner.cache.setups import atomic_json, file_hash, fingerprint
 from runner.tree.collection import SCHEMA, actions, inventory, collection_actions
 from runner.tree.prophetkv import PROTOCOL, budget
-from runner.router.profiles import validate
-from runner.runtime.thinking_budget import KEY
-from runner.runtime.output_budget import RULER_PROTOCOL, LONGBENCH_PROTOCOL, validate_sample_policy, validate_policy
+from runner.runtime.capacity import validate
+from runner.inputs.prepared_policy import KEY
+from runner.inputs.prepared_policy import RULER_PROTOCOL, LONGBENCH_PROTOCOL, validate_sample_policy, validate_policy
 from scripts.collection.collection_v3 import declaration, seeds, answer_metrics
 from scripts.collection import run_control as control
 from scripts.collection.run_metadata import read, freeze
@@ -89,7 +89,7 @@ def adopt(args):
     if type(number_gpus) is not int or number_gpus < tp or number_gpus % tp:
         raise ValueError('Number of GPUs must be a positive multiple of TP')
     groups = control.resolve_groups(args.devices, number_gpus, tp=tp, query_inventory=False)
-    from runner.router.profiles import allocation
+    from runner.runtime.capacity import allocation
     memory = getattr(args, 'gpu_memory_utilization', .95)
     if not 0 < memory < 1:
         raise ValueError('GPU memory utilization must be between 0 and 1')

@@ -90,13 +90,3 @@ def sample_provenance(sample):
         'evaluation_protocol','generator_revision','generator_config_sha256')}
     result.update({k:sample[k] for k in ('execution_profile','ruler_thinking_budget') if k in sample})
     return result
-
-
-def validate_policy_protocol(policy, sample):
-    if policy.get('schema')=='attention-coverage-tree-v1':
-        if (policy.get('prompt_protocol')!=PROMPT_PROTOCOL
-                or sample.get('evaluation_protocol') not in policy.get('compatible_evaluation_protocols', [])):
-            raise ValueError('Policy is incompatible with prompt/evaluation protocol')
-        return
-    if policy.get('prompt_protocol') != PROMPT_PROTOCOL or policy.get('evaluation_protocol') != sample.get('evaluation_protocol'):
-        raise ValueError('Policy is incompatible with prompt/evaluation protocol; no automatic refit')

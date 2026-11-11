@@ -141,7 +141,7 @@ class Chunk2048Tests(unittest.TestCase):
 
     def test_resume_and_generation_keep_chunk_and_original_budget_provenance(self):
         from runner.router.adatree import answer_generation, generation_policy, validate_record
-        from runner.runtime.output_budget import make_policy
+        from runner.inputs.prepared_policy import make_policy
         from test_ruler_thinking import Tokenizer
         protocol = dict(kv_chunk_size=2048, adaptive_routing=protocol_for(2048),
                         answer_generation=answer_generation())

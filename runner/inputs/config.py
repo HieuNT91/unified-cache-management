@@ -1,15 +1,13 @@
 """Shared clean method configuration; importable without CUDA."""
-from ucm.sparse.prophetkv.layers import resolve_layers
-
-METHODS = ('baseline', 'prophetkv', 'selective_prophetkv', 'router', 'tree-prophetkv', 'adatree-v1')
+METHODS = ('baseline', 'prophetkv', 'tree-prophetkv', 'adatree-v1')
 WINDOW = 131072
 PREFILL_BUDGET = 16384
 ROPE = dict(rope_type='yarn', factor=4.0, original_max_position_embeddings=32768)
 VERSIONS = {'vllm': '0.9.2', 'torch': '2.7.0', 'transformers': '4.53.2', 'uc-manager': '0.3.0'}
 
 
-def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
-                  memory=.9, cache_dir=None, end_token=None, persistent=None, router_policy=None, router_id="router1", router_profile=False,
+def engine_config(model, method, ratio=None, tp=4,
+                  memory=.9, cache_dir=None,
                   adatree_chunk_size=4096):
     if method not in METHODS:
         raise ValueError('Unknown method')
@@ -17,30 +15,12 @@ def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
     if adaptive:
         from ucm.sparse.prophetkv.adatree import feature_names
         feature_names(adatree_chunk_size)
-        if ratio is not None or layers is not None or count is not None or router_policy is not None or router_profile:
-            raise ValueError('AdaTreeV1 rejects manual ratio, layer and policy overrides')
-        if persistent is not None:
-            raise ValueError('AdaTreeV1 currently requires --input and a fresh output/cache directory')
+        if ratio is not None:
+            raise ValueError('AdaTreeV1 rejects manual ratio overrides')
         ratio = .05  # Minimum leaf budget; routing chooses the measured answer's ratio.
-    if method == 'router':
-        from runner.router.policy import load_policy
-        if ratio is not None or layers is not None or count is not None:
-            raise ValueError('Router requests reject manual ratio/layer overrides')
-        if router_policy is None or router_id not in ('router1','router2','router3'):
-            raise ValueError('Router requires --router-policy and a valid --router-id')
-        policy = load_policy(router_policy)
-        from runner.inputs.layout import PROMPT_PROTOCOL
-        if policy.get('prompt_protocol') != PROMPT_PROTOCOL:
-            raise ValueError('Policy belongs to an incompatible prompt protocol; no automatic refit')
-        router_profile = True
-        ratio = .01
-    elif router_policy is not None:
-        raise ValueError('--router-policy requires --method router')
     ratio = .2 if ratio is None else ratio
     if not 0 <= ratio <= 1 or tp not in (1, 2, 4, 8) or not 0 < memory < 1:
         raise ValueError('Invalid ratio, tensor parallel size or memory utilization')
-    if method == 'baseline' and (layers is not None or count is not None):
-        raise ValueError('Baseline has no scoring layers')
     cfg = dict(model=str(model), tokenizer=str(model), dtype='bfloat16',
                max_model_len=WINDOW, max_num_batched_tokens=PREFILL_BUDGET,
                enable_chunked_prefill=True, enable_prefix_caching=False,
@@ -50,20 +30,12 @@ def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
                generation_config='vllm', seed=0, quantization=None,
                cpu_offload_gb=0, swap_space=0, rope_scaling=dict(ROPE),
                worker_cls='runner.runtime.worker.Worker')
-    if router_profile:
-        if tp != 4:
-            raise ValueError('Frozen router profile requires TP4')
-        cfg.update(max_model_len=65920, num_gpu_blocks_override=1031,
-                   hf_overrides={'max_position_embeddings':32768})
     if method != 'baseline':
-        selected = resolve_layers(method, layers, count)
         if cache_dir is None:
             raise ValueError('Cached methods require a cache directory')
-        native_method = 'tree-prophetkv' if adaptive else ('prophetkv' if method == 'router' else method)
+        native_method = 'tree-prophetkv' if adaptive else method
         sparse = dict(method=native_method, ratio=ratio,
                       component_audit=False, compute_meta={})
-        if method == 'selective_prophetkv':
-            sparse['scoring_layers'] = list(selected)
         cfg['kv_transfer_config'] = dict(kv_connector='PersistentBlendConnector',
             kv_connector_module_path='ucm.integration.vllm.persistent_connector',
             kv_role='kv_both', kv_connector_extra_config=dict(
@@ -74,17 +46,12 @@ def engine_config(model, method, ratio=None, layers=None, count=None, tp=4,
     if method in ('tree-prophetkv', 'adatree-v1'):
         from pathlib import Path
         from runner.tree.prophetkv import PROTOCOL
-        if persistent is not None and persistent.get('tree_protocol') != PROTOCOL:
-            raise ValueError('tree-prophetkv requires a fresh setup built with --tree-prophetkv')
         cfg['kv_transfer_config']['kv_connector_extra_config']['tree_f3'] = dict(
             protocol=PROTOCOL, cache_dir=str(Path(cache_dir).resolve()),
-            namespace=persistent['fingerprint'] if persistent else str(Path(cache_dir).resolve()),
-            readonly=bool(persistent and persistent['readonly']))
+            namespace=str(Path(cache_dir).resolve()), readonly=False)
         if adaptive:
             cfg['kv_transfer_config']['kv_connector_extra_config']['adatree_v1'] = True
             cfg['kv_transfer_config']['kv_connector_extra_config']['adatree_chunk_size'] = adatree_chunk_size
-    if persistent is not None and method != 'baseline':
-        cfg['kv_transfer_config']['kv_connector_extra_config']['persistent_setup'] = persistent
     return cfg
 
 
@@ -107,9 +74,9 @@ def validate_sample(sample, kv_chunk_size=4096, context_length=WINDOW):
     if len(ids) > context_length:
         raise ValueError('Formatted prompt exceeds context-length; truncation is forbidden')
     budget = sample['max_output_tokens']
-    from runner.runtime.thinking_budget import PROTOCOL as THINKING_PROTOCOL, validate_sample_policy
-    from runner.runtime.output_budget import RULER_PROTOCOL, LONGBENCH_PROTOCOL
-    thinking_ruler = sample.get('evaluation_protocol') in (THINKING_PROTOCOL, RULER_PROTOCOL, LONGBENCH_PROTOCOL)
+    from runner.inputs.prepared_policy import validate_sample_policy
+    from runner.inputs.prepared_policy import RULER_PROTOCOL, LONGBENCH_PROTOCOL
+    thinking_ruler = sample.get('evaluation_protocol') in (RULER_PROTOCOL, LONGBENCH_PROTOCOL)
     if thinking_ruler:
         validate_sample_policy(sample)
     if type(budget) is not int or not 1 <= budget <= (WINDOW if thinking_ruler else 16384) or len(ids) + budget > WINDOW:

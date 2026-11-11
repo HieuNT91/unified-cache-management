@@ -8,8 +8,12 @@ import unittest
 from unittest.mock import patch
 import weakref
 
-from runner.runtime.thinking_budget import (KEY, PROTOCOL, THINKING_CAP, WINDOW,
-    BudgetState, make_policy, request_state)
+from runner.runtime.output_budget import KEY, THINKING_CAP, BudgetState
+from runner.runtime.thinking_budget import request_state
+from runner.runtime.thinking_loop import KEY as LOOP_KEY, ADATREE_CONFIG
+from runner.inputs.prepared_policy import RULER_PROTOCOL as PROTOCOL, WINDOW
+from run_fixtures import runtime_policy as make_policy
+from runner.router.adatree import generation_sample, answer_generation, SCHEMA
 from scripts.data.ruler import TASKS, format_thinking_sample, generator_command
 
 
@@ -35,7 +39,8 @@ def raw_row(task='qa_1', context=9000):
 
 
 def sample(task='qa_1'):
-    return format_thinking_sample(Tokenizer(),raw_row(task),task)
+    return generation_sample(format_thinking_sample(Tokenizer(),raw_row(task),task),
+        dict(adaptive_routing=SCHEMA, answer_generation=answer_generation()))
 
 
 def closed(p, thinking=None, answer=None):
@@ -46,7 +51,7 @@ class ThinkingTests(unittest.TestCase):
 
 
     def test_early_eos_empty_answer_illegal_controls_and_cleanup(self):
-        p=make_policy(Tokenizer(),' Answer:',32)
+        p=make_policy(Tokenizer(),' Answer:')
         for answer in ([3], [32,65,3]):
             state=BudgetState(p).consume(closed(p,answer=answer))
             self.assertEqual(state.phase,'done');self.assertTrue(state.answer_eos)
@@ -54,7 +59,7 @@ class ThinkingTests(unittest.TestCase):
         for tokens in ([3], [1,1], closed(p,answer=[1]), closed(p,answer=[2])):
             with self.assertRaises(ValueError):BudgetState(p).consume(tokens)
         with self.assertRaises(ValueError):BudgetState(p).consume([2,65])
-        req=NS(sampling_params=NS(extra_args={KEY:p}),output_token_ids=[])
+        req=NS(sampling_params=NS(extra_args={KEY:p, LOOP_KEY:ADATREE_CONFIG}),output_token_ids=[])
         state=request_state(req); ref=weakref.ref(state)
         self.assertIs(request_state(req),state)
         del state,req;gc.collect();self.assertIsNone(ref())
@@ -109,13 +114,14 @@ class ThinkingTests(unittest.TestCase):
 
 
     def test_initial_opener_is_control_and_no_second_block_can_start(self):
-        p=make_policy(Tokenizer(),' Answer:',32)
-        tokens=[p['open_id']]+closed(p,[32]*THINKING_CAP,[65]*32)
+        p=make_policy(Tokenizer(),' Answer:')
+        tokens=[p['open_id']]+closed(p,list(range(100,100+THINKING_CAP)))
+        tokens += [65]*(p['output_reserve']-len(tokens))
         state=BudgetState(p).consume(tokens)
         self.assertEqual(state.seen,p['output_reserve'])
         self.assertEqual(state.opening_tokens,1)
         self.assertEqual(state.thinking,THINKING_CAP)
         self.assertEqual(state.forced,1+len(p['transition_ids'])+len(p['prefix_ids']))
         with self.assertRaises(ValueError):BudgetState(p).consume([1,32,1])
-        p=make_policy(Tokenizer(),' Answer:',32,opening_in_prompt=True)
+        p=make_policy(Tokenizer(),' Answer:',opening_in_prompt=True)
         with self.assertRaises(ValueError):BudgetState(p).consume([1])

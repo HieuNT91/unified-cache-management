@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from runner.cache.setups import atomic_json, file_hash
 from runner.inputs.layout import boundaries_for, stamp_sample
 from runner.operations import check_hardware
-from runner.router.profiles import allocation, config, validate_initialization
+from runner.runtime.capacity import allocation, config, validate_initialization
 from scripts.collection import run_controller as collection
 from run_fixtures import fixture, GPUS
 

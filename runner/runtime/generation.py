@@ -2,36 +2,30 @@
 import time
 
 
-def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None, phase=None, seed=0, progress=None, loop_breaker=None):
+def generate(engine, tokens, request_id, *, sample=None, phase='read', seed=0, progress=None):
     from vllm import SamplingParams
     from vllm.inputs import TokensPrompt
     if engine.has_unfinished_requests():
         raise RuntimeError('Concurrent requests are unsupported')
     started = time.perf_counter()
     from runner.inputs.layout import request_metadata, METADATA_KEY
-    metadata = request_metadata(request_id, tokens, phase or 'read', sample) if (sample is not None or phase is not None) else None
-    from runner.runtime.thinking_budget import KEY, PROTOCOL, BudgetState, validate_sample_policy
-    policy = None
-    if sample is not None and (KEY in sample or sample.get('evaluation_protocol')==PROTOCOL) and budget != 1 and phase != 'populate':
-        policy = validate_sample_policy(sample)
-        if not thinking or budget != policy['output_reserve']:
-            raise ValueError('Thinking answer requires its complete frozen generation policy')
-    extra = {METADATA_KEY: metadata} if metadata is not None else {}
-    from runner.runtime.thinking_loop import KEY as LOOP_KEY, CONFIG as LOOP_CONFIG
-    if loop_breaker is not None and policy is None:
-        raise ValueError('Thinking loop breaker requires a thinking policy')
-    loop_breaker = dict(LOOP_CONFIG if loop_breaker is None else loop_breaker) if policy is not None else None
+    from runner.runtime.output_budget import KEY, SAMPLING, OUTPUT_CAP, BudgetState, validate_sample_policy
+    from runner.runtime.thinking_loop import KEY as LOOP_KEY, ADATREE_CONFIG
+    if phase not in ('read', 'populate') or (phase == 'populate' and sample is not None):
+        raise ValueError('Expected an answer sample or independent KV population')
+    metadata = request_metadata(request_id, tokens, phase, sample)
+    extra = {METADATA_KEY: metadata}
+    policy = validate_sample_policy(sample) if phase == 'read' else None
     if policy is not None:
-        extra[KEY] = policy
-        extra[LOOP_KEY] = loop_breaker
-    state = BudgetState(policy, loop_breaker) if policy is not None else None
+        extra.update({KEY: policy, LOOP_KEY: dict(ADATREE_CONFIG)})
+    state = BudgetState(policy) if policy is not None else None
     answer_first = None
-    params = SamplingParams(temperature=.6 if thinking else 0., top_p=.95 if thinking else 1.,
-                            top_k=20 if thinking else 32, min_p=0., seed=seed, max_tokens=budget,
-                            extra_args=extra or None, ignore_eos=policy is not None)
-    # vLLM normalizes greedy top_k to zero in __post_init__. Preserve the
-    # requested RULER parameter on the wire; temperature zero remains greedy.
-    if not thinking:
+    sampling = SAMPLING if policy is not None else dict(
+        temperature=0., top_p=1., top_k=32, min_p=0.)
+    params = SamplingParams(**sampling, seed=seed, max_tokens=OUTPUT_CAP if policy is not None else 1,
+                            extra_args=extra, ignore_eos=policy is not None)
+    # Preserve the existing one-token KV-population request on the wire.
+    if phase == 'populate':
         params.top_k = 32
     engine.add_request(request_id, TokensPrompt(prompt_token_ids=tokens), params)
     first, result = None, None
@@ -65,24 +59,13 @@ def generate(engine, tokens, budget, request_id, thinking=False, *, sample=None,
     return result, first, time.perf_counter() - started
 
 
-def thinking_loop_metrics(result):
-    """Intervention metadata for standalone/sweep result writers."""
-    state = getattr(result, 'ruler_thinking_state', None)
-    if state is None or state.loop.config is None:
-        return {}
-    return dict(thinking_closure=state.closure, **state.loop.metrics())
-
-
-def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, *, gpu_scores=False):
+def verify_diagnostics(workers, sample, method, ratio, tp):
     """Independent CPU replay of each TP rank's global scores and layer sets."""
     import math
-    from runner.inputs.config import METHODS
-    if method not in METHODS:
-        raise ValueError('Unsupported diagnostic method')
     if method == 'adatree-v1':
         raise ValueError('AdaTreeV1 requires validate_routing before native TreeKV validation')
-    if method == 'tree-prophetkv' and gpu_scores:
-        raise ValueError('Tree-prophetkv requires its native F3 evidence')
+    if method not in ('baseline', 'tree-prophetkv'):
+        raise ValueError('Only baseline and native TreeKV diagnostics are supported')
     if sorted(w['rank'] for w in workers) != list(range(tp)):
         raise RuntimeError('Missing tensor-parallel rank')
     common = None
@@ -110,35 +93,20 @@ def verify_diagnostics(workers, sample, method, ratio, tp, expected_layers, *, g
         if len(selections) != 1 or any(e['kind'] == 'cache_miss' for e in events):
             raise RuntimeError('Expected exactly one successful cache selection')
         event = selections[0]
-        if method != 'tree-prophetkv' and event.get('selection_method') not in (None, method):
-            raise RuntimeError('Unexpected selection method evidence')
         prefix, end = sample['boundaries'][1], sample['boundaries'][-2]
-        if gpu_scores:
-            reference = event['selected_positions']
-            if ('scores' in event or event.get('gpu_score_verification') != 'finite-stable-selection-tp-equal-v1'
-                    or event['ratio'] != ratio or event['eligible_count'] != end-prefix
-                    or len(reference) != math.floor((end-prefix)*ratio)
-                    or reference != sorted(set(reference))
-                    or any(p < prefix or p >= end for p in reference)):
-                raise RuntimeError('Invalid GPU score validation evidence')
-        else:
-            scores = event['scores']
-            if len(scores) != end - prefix or not all(math.isfinite(s) for s in scores):
-                raise RuntimeError('Invalid selection scores')
-            if common_scores is not None and scores != common_scores:
-                raise RuntimeError('TP ranks disagree on native attention scores')
-            common_scores = scores
-            count = math.floor(len(scores) * ratio)
-            if method == 'tree-prophetkv':
-                from runner.tree.prophetkv import validate_selection
-                reference = validate_selection(event, sample, ratio)
-                tree_evidence = event['f3_links']
-                if common_f3 is not None and tree_evidence != common_f3:
-                    raise RuntimeError('TP ranks disagree on F3 evidence')
-                common_f3 = tree_evidence
-            else:
-                reference = sorted(i + prefix for i in sorted(range(len(scores)), key=lambda i: (-scores[i], i))[:count])
-        if (event['selected_positions'] != reference or event['scoring_layers'] != list(expected_layers)
+        scores = event['scores']
+        if len(scores) != end - prefix or not all(math.isfinite(s) for s in scores):
+            raise RuntimeError('Invalid selection scores')
+        if common_scores is not None and scores != common_scores:
+            raise RuntimeError('TP ranks disagree on native attention scores')
+        common_scores = scores
+        from runner.tree.prophetkv import validate_selection
+        reference = validate_selection(event, sample, ratio)
+        tree_evidence = event['f3_links']
+        if common_f3 is not None and tree_evidence != common_f3:
+            raise RuntimeError('TP ranks disagree on F3 evidence')
+        common_f3 = tree_evidence
+        if (event['selected_positions'] != reference or event['scoring_layers'] != list(range(64))
                 or event['fusion'] != 'mean_layers_fp32' or event['alignment_count'] != 64):
             raise RuntimeError('Selection replay, mean or cache alignment mismatch')
         if common is not None and common != reference:

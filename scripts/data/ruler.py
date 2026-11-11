@@ -197,10 +197,10 @@ def format_sample(tokenizer, row, task, *, template=None):
     return sample
 
 
-def format_thinking_sample(tokenizer, row, task, *, template=None, collection_v3=False):
+def format_thinking_sample(tokenizer, row, task, *, template=None):
     """Keep the upstream row intact; replace only validated chat boundaries."""
     from runner.inputs.layout import boundaries_for, stamp_sample
-    from runner.runtime.thinking_budget import KEY, PROTOCOL, WINDOW, make_policy
+    from runner.inputs.prepared_policy import KEY, RULER_PROTOCOL as PROTOCOL, WINDOW, make_policy
     if task not in TASKS or not isinstance(row.get('answer_prefix'), str) or not row['answer_prefix']:
         raise ValueError('Expected original RULER answer_prefix')
     sentinel = 'RPKV_TEMPLATE_CONTENT_9fd17'
@@ -227,11 +227,7 @@ def format_thinking_sample(tokenizer, row, task, *, template=None, collection_v3
     positions = [i for i, (a, b) in enumerate(encoded['offset_mapping']) if b > begin and a < end]
     if not positions:
         raise ValueError('Missing complete question span')
-    if collection_v3:
-        from runner.runtime.output_budget import make_policy, RULER_PROTOCOL as PROTOCOL
-        policy = make_policy(tokenizer, row['answer_prefix'], thinking_tail.endswith('<think>\n'))
-    else:
-        policy = make_policy(tokenizer, row['answer_prefix'], CAPS[task], thinking_tail.endswith('<think>\n'))
+    policy = make_policy(tokenizer, row['answer_prefix'], thinking_tail.endswith('<think>\n'))
     sample = dict(token_ids=ids, boundaries=boundaries_for(len(ids), positions[0]),
         question_positions=positions, thinking=True, max_output_tokens=policy['output_reserve'],
         task=task, question=question, formatted_text=text, answer_prefix=row['answer_prefix'],
@@ -279,7 +275,7 @@ def prepare(args):
     asset_root = args.ruler/'scripts/data/synthetic/json'
     from importlib.metadata import version
     thinking = getattr(args, 'thinking', False)
-    from runner.runtime.thinking_budget import PROTOCOL, THINKING_CAP, WINDOW, SAMPLING
+    from runner.inputs.prepared_policy import RULER_PROTOCOL as PROTOCOL, THINKING_CAP, WINDOW, SAMPLING
     spec = dict(protocol=PROTOCOL if thinking else EVALUATION_PROTOCOL,revision=REVISION,tasks=list(TASKS),samples=args.samples,
         max_seq_length=INPUT,output_caps=CAPS,seed=getattr(args,'seed',42),
         task_parameters=custom,templates=templates,
@@ -294,13 +290,13 @@ def prepare(args):
     if thinking:
         spec.update(execution_profile='ruler-thinking', thinking_cap=THINKING_CAP, engine_window=WINDOW,
                     sampling=SAMPLING, phase_policies='per-sample ruler_thinking_budget; prefixes expanded by upstream',
-                    thinking_adapter=file_hash(ROOT/'runner/runtime/thinking_budget.py'))
+                    thinking_adapter=file_hash(ROOT/'runner/inputs/prepared_policy.py'))
     if getattr(args, 'collection_v3', False):
-        from runner.runtime.output_budget import RULER_PROTOCOL, THINKING_CAP as TOTAL_THINKING_CAP, OUTPUT_CAP
+        from runner.inputs.prepared_policy import RULER_PROTOCOL, THINKING_CAP as TOTAL_THINKING_CAP, OUTPUT_CAP
         spec['collection_protocol'] = 'tp2-data-v3'
         if thinking:
             spec.update(protocol=RULER_PROTOCOL, thinking_cap=TOTAL_THINKING_CAP, output_caps=None, output_limit=OUTPUT_CAP,
-                        thinking_adapter=file_hash(ROOT/'runner/runtime/output_budget.py'))
+                        thinking_adapter=file_hash(ROOT/'runner/inputs/prepared_policy.py'))
     spec = json.loads(json.dumps(spec))
     with setup_lock(args.output,build=True):
         sp = args.output/'spec.json'
@@ -338,8 +334,7 @@ def prepare(args):
             # Sharding occurs only downstream, after a complete task batch.
             for ordinal,row in enumerate(rows):
                 try:
-                    sample=(format_thinking_sample if thinking else format_sample)(tokenizer,row,task,template=templates[task],
-                        **({'collection_v3': True} if thinking and getattr(args, 'collection_v3', False) else {}))
+                    sample=(format_thinking_sample if thinking else format_sample)(tokenizer,row,task,template=templates[task])
                 except Exception as error:
                     atomic_json(args.output/'validation-error.json',dict(task=task,row=ordinal,
                         raw=str(raw),raw_sha256=file_hash(raw),error=str(error)))

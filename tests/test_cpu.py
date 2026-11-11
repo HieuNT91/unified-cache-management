@@ -9,7 +9,7 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_shared_model_settings_and_baseline_isolation(self):
         for method in ('baseline', 'adatree-v1'):
-            cfg = engine_config('/model', method, cache_dir='/cache', end_token=99)
+            cfg = engine_config('/model', method, cache_dir='/cache')
             self.assertEqual(cfg['rope_scaling'], dict(rope_type='yarn', factor=4., original_max_position_embeddings=32768))
             self.assertEqual(cfg['max_model_len'], 131072)
             self.assertTrue(cfg['enable_chunked_prefill'])

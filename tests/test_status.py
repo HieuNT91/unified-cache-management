@@ -175,7 +175,7 @@ class StatusTests(unittest.TestCase):
         from runner.inputs.layout import sample_provenance
         from runner.reporting.aggregate import OutputAnalyzer
         from runner.router.adatree import generation_policy
-        from runner.runtime.thinking_budget import KEY, BudgetState
+        from runner.runtime.output_budget import KEY, BudgetState
         from runner.runtime.thinking_loop import ADATREE_CONFIG
         from scripts.collection import run_controller as collection
         from run_fixtures import fixture
@@ -209,7 +209,7 @@ class StatusTests(unittest.TestCase):
                                       timings=dict(ttft_seconds=2. if case == 'adatree-v1' else 4.,
                                                    first_answer_content_seconds=5.))
                         record.update(OutputAnalyzer(Tokenizer()).analyze(tokens, [], True))
-                        record.update(BudgetState(policy, ADATREE_CONFIG).consume(tokens).metrics(Tokenizer()))
+                        record.update(BudgetState(policy).consume(tokens).metrics(Tokenizer()))
                         record[KEY] = policy
                         if case == 'adatree-v1':
                             features = ({'G5_mean': .3, 'S60_p90': .7} if chunk == 4096 else

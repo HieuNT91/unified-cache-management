@@ -6,7 +6,7 @@ from pathlib import Path
 from ucm.integration.vllm.blend_connector import (UCMBlendConnector,
     UCMBlendConnectorMetadata, BlendRequestDispatchMeta, ChunkMetaData, BlendStage)
 from ucm.sparse.prophetkv.lifecycle import namespace_from_id, seed_value, TrackedStore
-from runner.router.guard import is_dense_request
+from ucm.sparse.prophetkv.guard import is_dense_request
 
 
 class PersistentBlendConnector(UCMBlendConnector):

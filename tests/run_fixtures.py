@@ -4,8 +4,8 @@ from types import SimpleNamespace as NS
 
 from runner.cache.setups import atomic_json, file_hash, fingerprint
 from runner.inputs.layout import stamp_sample
-from runner.runtime.output_budget import make_policy, RULER_PROTOCOL, LONGBENCH_PROTOCOL
-from runner.runtime.thinking_budget import KEY
+from runner.inputs.prepared_policy import make_policy, RULER_PROTOCOL, LONGBENCH_PROTOCOL
+from runner.inputs.prepared_policy import KEY
 from scripts.collection.collection_v3 import VERSION, GENERATION_PROTOCOL
 from scripts.data.ruler import TASKS
 
@@ -55,3 +55,9 @@ def fixture(base, dataset, chunk, *, samples=500, seed=42):
               tp=4, number_gpus=4, devices=','.join(GPUS), gpu_memory_utilization=.95,
               samples_per_task=samples, seed=seed, answer_seeds=None if ruler else [0],
               kv_chunk_size=chunk, percentages=[5,20,40] if chunk==4096 else [5,20,60])
+
+
+def runtime_policy(tokenizer, prefix='', opening_in_prompt=False):
+    from runner.router.adatree import generation_policy, answer_generation, SCHEMA
+    return generation_policy(make_policy(tokenizer, prefix, opening_in_prompt),
+                             dict(adaptive_routing=SCHEMA, answer_generation=answer_generation()))

@@ -7,29 +7,30 @@ from types import SimpleNamespace as NS
 from unittest.mock import Mock, patch
 
 from runner.runtime import output_budget
-from runner.runtime.thinking_budget import (KEY, BudgetState, make_policy, request_state,
-                                    enforce_logits, stopping_hook, validate_thinking_outcome)
-from runner.runtime.thinking_loop import CONFIG, KEY as LOOP_KEY, ThinkingLoop, repetition_pattern_size
+from runner.runtime.output_budget import KEY, BudgetState, validate_outcome as validate_thinking_outcome
+from runner.runtime.thinking_budget import request_state, enforce_logits, stopping_hook
+from runner.runtime.thinking_loop import ADATREE_CONFIG as CONFIG, KEY as LOOP_KEY, ThinkingLoop, repetition_pattern_size
+from run_fixtures import runtime_policy as make_policy
 from runner.reporting.aggregate import OutputAnalyzer
 from test_ruler_thinking import Tokenizer, sample
 
 
 class DetectorTests(unittest.TestCase):
     def test_boundaries_exact_adjacent_tail_and_shorter_periods(self):
-        for size in (8, 9, 127, 128):
+        for size in (32, 33, 127, 128):
             block = list(range(100, 100 + size))
-            self.assertIsNone(repetition_pattern_size(block * 2 + block[:-1]))
-            self.assertEqual(repetition_pattern_size([999] + block * 3), size)
-            altered = block * 3
+            self.assertIsNone(repetition_pattern_size(block * 3 + block[:-1]))
+            self.assertEqual(repetition_pattern_size([999] + block * 4), size)
+            altered = block * 4
             altered[size + 2] = 999
             self.assertIsNone(repetition_pattern_size(altered))
-            self.assertIsNone(repetition_pattern_size(block * 3 + [999]))
-            self.assertIsNone(repetition_pattern_size(block + [999] + block * 2))
+            self.assertIsNone(repetition_pattern_size(block * 4 + [999]))
+            self.assertIsNone(repetition_pattern_size(block + [999] + block * 3))
         self.assertIsNone(repetition_pattern_size(list(range(100, 229)) * 3))
         # vLLM tests periods, not the primitive/minimal period: a single token
-        # repeated 24 times also consists of three identical 8-token blocks.
-        self.assertIsNone(repetition_pattern_size([100] * 23))
-        self.assertEqual(repetition_pattern_size([100] * 24), 8)
+        # repeated 128 times also consists of four identical 32-token blocks.
+        self.assertIsNone(repetition_pattern_size([100] * 127))
+        self.assertEqual(repetition_pattern_size([100] * 128), 32)
 
     def test_matches_independent_block_oracle(self):
         rng = random.Random(42)
@@ -38,30 +39,26 @@ class DetectorTests(unittest.TestCase):
             if rng.randrange(2):
                 block = [rng.randrange(5) for _ in range(rng.randrange(1, 140))]
                 tokens += block * rng.randrange(2, 5)
-            expected = next((n for n in range(8, 129) if len(tokens) >= 3*n
-                             and tokens[-n:] == tokens[-2*n:-n] == tokens[-3*n:-2*n]), None)
+            expected = next((n for n in range(32, 129) if len(tokens) >= 4*n
+                             and tokens[-n:] == tokens[-2*n:-n] == tokens[-3*n:-2*n] == tokens[-4*n:-3*n]), None)
             self.assertEqual(repetition_pattern_size(tokens), expected)
 
     def test_bounded_history_and_invalid_configuration(self):
-        loop = ThinkingLoop(CONFIG)
+        loop = ThinkingLoop()
         for i in range(2000):
             loop.observe(100 + i, i + 1)
         self.assertFalse(loop.broken)
-        self.assertEqual(len(loop.tail), 384)
-        for i, token in enumerate(list(range(100, 228)) * 3, 2001):
+        self.assertEqual(len(loop.tail), 512)
+        for i, token in enumerate(list(range(100, 228)) * 4, 2001):
             loop.observe(token, i)
         self.assertTrue(loop.broken)
         self.assertEqual(loop.pattern_size, 128)
-        self.assertEqual(loop.token_index, 2384)
-        with self.assertRaises(ValueError):
-            ThinkingLoop(dict(CONFIG, min_count=2))
+        self.assertEqual(loop.token_index, 2512)
 
 
 class ThinkingLoopTests(unittest.TestCase):
     def policies(self):
-        return [make_policy(Tokenizer(), ' Answer:', 32),
-                output_budget.make_policy(Tokenizer(), ' Answer:'),
-                output_budget.make_policy(Tokenizer())]
+        return [make_policy(Tokenizer(), ' Answer:'), make_policy(Tokenizer())]
 
     def outcome(self, state, tokens):
         values = OutputAnalyzer(Tokenizer()).analyze(tokens, [], True)
@@ -75,19 +72,17 @@ class ThinkingLoopTests(unittest.TestCase):
         for policy in self.policies():
             for opening in (False, True):
                 p = dict(policy, opening_in_prompt=opening)
-                if p['protocol'] != output_budget.PROTOCOL and opening:
-                    p['output_reserve'] -= 1
                 before = copy.deepcopy(p)
-                tokens = ([] if opening else [p['open_id']]) + list(range(100, 108)) * 3
-                state = BudgetState(p, CONFIG).consume(tokens)
+                tokens = ([] if opening else [p['open_id']]) + list(range(100, 132)) * 4
+                state = BudgetState(p).consume(tokens)
                 self.assertEqual(state.phase, 'thinking')
                 self.assertEqual(state.forced_next(), p['close_id'])
-                self.assertEqual(state.loop.token_index, 24)
+                self.assertEqual(state.loop.token_index, 128)
                 tokens += [p['close_id']] + p['transition_ids'] + p['prefix_ids']
                 state.consume(tokens)
                 self.assertEqual(state.phase, 'answer')
                 # A repeating answer must remain untouched and complete on EOS.
-                answer = [65] * 24
+                answer = [65] * 128
                 tokens += answer + [p['eos_ids'][0]]
                 state.consume(tokens)
                 self.assertEqual(state.phase, 'done')
@@ -148,7 +143,7 @@ class ThinkingLoopTests(unittest.TestCase):
         with patch.dict(sys.modules, {'vllm': NS(SamplingParams=lambda **kw: NS(**kw)),
                                      'vllm.inputs': NS(TokensPrompt=lambda **kw: kw)}):
             engine = Engine()
-            result, ttft, _ = generate(engine, s['token_ids'], p['output_reserve'], 'answer', True, sample=s)
+            result, ttft, _ = generate(engine, s['token_ids'], 'answer', sample=s)
         self.assertEqual(engine.prompt['prompt_token_ids'], s['token_ids'])
         self.assertEqual(engine.params.extra_args[KEY], p)
         self.assertEqual(engine.params.extra_args[LOOP_KEY], CONFIG)
@@ -163,22 +158,22 @@ class ThinkingLoopTests(unittest.TestCase):
     def test_request_config_is_immutable_and_state_does_not_leak(self):
         p = self.policies()[0]
         req = NS(sampling_params=NS(extra_args={KEY: p, LOOP_KEY: dict(CONFIG)}),
-                 output_token_ids=[65] * 24)
+                 output_token_ids=[65] * 128)
         self.assertTrue(request_state(req).loop.broken)
-        req.sampling_params.extra_args[LOOP_KEY]['min_count'] = 4
+        req.sampling_params.extra_args[LOOP_KEY]['min_count'] = 3
         with self.assertRaisesRegex(ValueError, 'changed'):
             request_state(req)
         fresh = NS(sampling_params=NS(extra_args={KEY: p, LOOP_KEY: CONFIG}), output_token_ids=[])
         self.assertFalse(request_state(fresh).loop.broken)
         with self.assertRaisesRegex(ValueError, 'forced token'):
-            BudgetState(p, CONFIG).consume([65] * 25)
+            BudgetState(p).consume([65] * 129)
 
 
     def test_repetition_at_thinking_cap_records_both_causes(self):
         for p in self.policies():
-            tokens = list(range(1000, 1000 + p['thinking_cap'] - 24)) + [65] * 24
+            tokens = list(range(1000, 1000 + p['thinking_cap'] - 128)) + [65] * 128
             tokens += [p['close_id']] + p['transition_ids'] + p['prefix_ids'] + [66, 3]
-            state = BudgetState(p, CONFIG).consume(tokens)
+            state = BudgetState(p).consume(tokens)
             values = self.outcome(state, tokens)
             self.assertTrue(values['thinking_cap_reached'])
             self.assertTrue(values['thinking_broken'])
@@ -187,9 +182,9 @@ class ThinkingLoopTests(unittest.TestCase):
     def test_report_keeps_successful_broken_answers(self):
         from scripts.collection.collection_v3 import answer_metrics
         from runner.reporting.aggregate import metrics
-        p = output_budget.make_policy(Tokenizer())
-        tokens = [65] * 24 + [p['close_id']] + p['transition_ids'] + [66, 3]
-        state = BudgetState(p, CONFIG).consume(tokens)
+        p = make_policy(Tokenizer())
+        tokens = [65] * 128 + [p['close_id']] + p['transition_ids'] + [66, 3]
+        state = BudgetState(p).consume(tokens)
         record = self.outcome(state, tokens)
         record.update(accuracy=1., finish_reason='stop', gpu_uuids=['a', 'b'],
                       timings=dict(ttft_seconds=.1, first_answer_content_seconds=.2))

@@ -1,40 +1,20 @@
-"""Versioned 15K thinking / 16K total output policy for collection v3."""
+"""Only generation policy: 8192 thinking / 10000 total output tokens."""
 import math
+from runner.inputs.prepared_policy import KEY, RULER_PROTOCOL, LONGBENCH_PROTOCOL
 
-PROTOCOL = 'qwen3-thinking-15000-total16384-v2'
-RULER_PROTOCOL = 'nvidia-ruler-c3f5e3b-qwen3-thinking-v2'
-LONGBENCH_PROTOCOL = 'longbench-v2-qwen3-thinking-v2'
-THINKING_CAP = 15000
-OUTPUT_CAP = 16384
-ADATREE_PROTOCOL = 'qwen3-thinking-8192-total10000-v1'
-BUDGETS = {PROTOCOL: (THINKING_CAP, OUTPUT_CAP), ADATREE_PROTOCOL: (8192, 10000)}
-
-
-def make_policy(tokenizer, prefix='', opening_in_prompt=False):
-    from runner.runtime.thinking_budget import SAMPLING
-    p = dict(protocol=PROTOCOL, thinking_cap=THINKING_CAP, output_reserve=OUTPUT_CAP,
-             opening_in_prompt=opening_in_prompt, sampling={k: v for k, v in SAMPLING.items() if k != 'seed'},
-             seed_source='answer-record-seed',
-             open_id=tokenizer.convert_tokens_to_ids('<think>'),
-             close_id=tokenizer.convert_tokens_to_ids('</think>'),
-             eos_ids=[tokenizer.eos_token_id],
-             transition_ids=tokenizer.encode('\n\n', add_special_tokens=False),
-             prefix_ids=tokenizer.encode(prefix, add_special_tokens=False))
-    for key, text in (('open_id', '<think>'), ('close_id', '</think>')):
-        if tokenizer.convert_ids_to_tokens(p[key]) != text:
-            raise ValueError('Expected native Qwen3 thinking delimiters')
-    p['control_ids'] = sorted(set(tokenizer.all_special_ids) | {p['open_id'], p['close_id']})
-    return validate_policy(p)
+PROTOCOL = 'qwen3-thinking-8192-total10000-v1'
+THINKING_CAP = 8192
+OUTPUT_CAP = 10000
+SAMPLING = dict(temperature=.6, top_p=.95, top_k=20, min_p=0.)
 
 
 def validate_policy(p):
-    from runner.runtime.thinking_budget import SAMPLING
-    thinking_cap, output_cap = BUDGETS.get(p.get('protocol'), (None, None))
-    if (thinking_cap is None or p.get('thinking_cap') != thinking_cap
+    thinking_cap, output_cap = THINKING_CAP, OUTPUT_CAP
+    if (p.get('protocol') != PROTOCOL or p.get('thinking_cap') != thinking_cap
             or type(p.get('thinking_cap')) is not int or p.get('output_reserve') != output_cap
             or type(p.get('output_reserve')) is not int or 'answer_cap' in p
             or type(p.get('opening_in_prompt')) is not bool
-            or p.get('sampling') != {k: v for k, v in SAMPLING.items() if k != 'seed'}
+            or p.get('sampling') != SAMPLING
             or p.get('seed_source') != 'answer-record-seed'):
         raise ValueError('Invalid total output budget protocol')
     for key in ('eos_ids', 'control_ids', 'transition_ids', 'prefix_ids'):
@@ -53,7 +33,6 @@ def validate_policy(p):
 
 
 def validate_sample_policy(sample):
-    from runner.runtime.thinking_budget import KEY
     p = validate_policy(sample[KEY])
     ruler = sample.get('evaluation_protocol') == RULER_PROTOCOL
     if (sample.get('evaluation_protocol') not in (RULER_PROTOCOL, LONGBENCH_PROTOCOL)
@@ -65,14 +44,14 @@ def validate_sample_policy(sample):
     return p
 
 
-class TotalBudgetState:
-    """Same logits/scheduler interface as the legacy separately capped decoder."""
-    def __init__(self, policy, loop_breaker=None):
+class BudgetState:
+    """Request-owned AdaTree thinking, forced transition and answer decoding."""
+    def __init__(self, policy):
         from copy import deepcopy
         self.policy = deepcopy(validate_policy(policy))
-        self.thinking_cap, self.output_cap = BUDGETS[self.policy['protocol']]
+        self.thinking_cap, self.output_cap = THINKING_CAP, OUTPUT_CAP
         from runner.runtime.thinking_loop import ThinkingLoop
-        self.loop = ThinkingLoop(loop_breaker)
+        self.loop = ThinkingLoop()
         self.seen = self.thinking = self.answer = self.forced = self.opening_tokens = 0
         self.phase = 'thinking'
         self.closure = self.first_answer_index = None
@@ -140,7 +119,7 @@ class TotalBudgetState:
 
 def validate_outcome(value, policy):
     validate_policy(policy)
-    thinking_cap, output_cap = BUDGETS[policy['protocol']]
+    thinking_cap, output_cap = THINKING_CAP, OUTPUT_CAP
     from runner.runtime.thinking_loop import validate_metrics
     validate_metrics(value)
     for key in ('generated_answer_tokens', 'generated_thinking_open_tokens', 'forced_tokens',
